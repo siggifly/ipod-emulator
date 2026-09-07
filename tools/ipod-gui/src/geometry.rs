@@ -351,14 +351,19 @@ geometry! {
     LINE_BODY:        Px = 20.0;
     /// §9.5's pane: the measure its two sentences are set at, and the width of its primary Row.
     ///
-    /// **Derived, never typed.** The narrowest well this window can produce is
-    /// `MIN_WIDTH − DRAWER_W` — the declared minimum width with the drawer open, which is the one
-    /// case §9.6 says *the drawer never widens the window* about — and §7.1 gives the well
-    /// [`WELL_AIR`] a side. So this is the widest measure that cannot overflow at any size the
-    /// window allows, and `the_short_pane_fits_the_narrowest_well_this_window_has` is what holds
-    /// it to that. It does not grow with the well: a sentence set across 1140 px is a sentence
-    /// nobody can read a second line of (§6.2).
-    SHORT_MEASURE:    Px = MIN_WIDTH - DRAWER_W - 2.0 * WELL_AIR;
+    /// **Derived, never typed.** The narrowest well this window can produce is [`MIN_WIDTH`] —
+    /// §21.2's drawer overlays, so the well never gives 420 px up and the narrowest it gets is
+    /// the narrowest the window gets — and §7.1 gives the well [`WELL_AIR`] a side. So this is
+    /// the widest measure that cannot overflow at any size the window allows, and
+    /// `the_short_pane_fits_the_narrowest_well_this_window_has` is what holds it to that. It does
+    /// not grow with the well: a sentence set across 1140 px is a sentence nobody can read a
+    /// second line of (§6.2).
+    ///
+    /// **The number did not move when the derivation did**, and that is worth writing down rather
+    /// than leaving as a coincidence to be re-discovered: the old form was `880 − 420 − 40` and
+    /// the new one is `460 − 40`, both 420. [`MIN_WIDTH`] lost the [`DRAWER_W`] term and gained
+    /// nothing, because the term it lost is exactly the one this measure was subtracting.
+    SHORT_MEASURE:    Px = MIN_WIDTH - 2.0 * WELL_AIR;
     /// §7.3's clamp marks: `3 × 28` at the body's mid-height, one on either side of the cradle.
     CLAMP_W:          Px = 3.0;
     CLAMP_H:          Px = 28.0;
@@ -478,7 +483,14 @@ geometry! {
 
     /// Derived in one line rather than in two disagreeing ones — see
     /// `the_min_width_derivation_sums_to_the_declared_minimum`.
-    MIN_WIDTH:        Px = 880.0;
+    ///
+    /// **§21.2: the device IS the window, so the width is the device's own** — its frame plus
+    /// [`WELL_AIR`] a side, and nothing else. It was 880, which carried a [`DRAWER_W`] term
+    /// because the drawer used to push the device sideways and the well had to stay wide enough
+    /// to hold it with the drawer open. The drawer overlays now, so the device never gives that
+    /// 420 px up and the window never has to reserve it: what the term bought was a field of
+    /// `bg-sunken` either side of the iPod at every size, which is the *bench* §21.2 retires.
+    MIN_WIDTH:        Px = 460.0;
     /// **A floor, not a fit.** A minimum tall enough to guarantee the 1:1 panel would have to vary
     /// with `k` and `sf`, and a window minimum is a constant. This is the height below which even
     /// §9.5's replacement pane cannot be laid out; everything above it is the too-short boolean's
@@ -494,7 +506,13 @@ geometry! {
     /// `main::the_short_pane_replaces_the_bench_below_the_threshold_and_not_above_it` is the
     /// drawing.
     MIN_HEIGHT:       Px = 400.0;
-    PREF_WIDTH:       Px = 1180.0;
+    /// **The same number as [`MIN_WIDTH`], and that is the point.** The window opens as the
+    /// device and cannot be made narrower than it; the height is the axis with slack in it,
+    /// because §9.5's pane stands below [`MIN_HEIGHT`] and there is no horizontal equivalent.
+    ///
+    /// It is the k = 1, sf = 1 case, exactly as [`PREF_HEIGHT`] is: a constant cannot vary with
+    /// `k`, and §16.1 is why neither of them may read `hero` to try.
+    PREF_WIDTH:       Px = MIN_WIDTH;
     /// The k = 1, sf = 1 case of body + [`CHROME_PREF`], rounded up. Not a round number.
     PREF_HEIGHT:      Px = 844.0;
 
@@ -701,7 +719,7 @@ pub const ACT_MEASURE: f64 = REFUSAL_MEASURE - 2.0 * PAGE_MARGIN;
 ///
 /// **Written as the expression rather than as 48**, so a re-measured [`BODY_ADVANCE`] or a
 /// re-measured body moves every sentence that has to fit rather than leaving a stale number here.
-/// The label is `width: frame.width` (`ui/bench.slint:829`), and the frame is the body plus one
+/// The label is `width: frame.width` (`ui/bench.slint:824`), and the frame is the body plus one
 /// [`CRADLE_BAND`] on each side:
 ///
 /// ```text
@@ -909,6 +927,10 @@ mod tests {
         "primitives.slint",
         "rail.slint",
         "tokens.slint",
+        // §21.3's root page — the drawer's own, which is why it is declared beside the drawer's
+        // children rather than inside `drawer.slint` where `MenuPage` used to live. Declared the
+        // day the file landed, per this list's own rule.
+        "verbs.slint",
         "window.slint",
         "work.slint",
     ];
@@ -954,14 +976,22 @@ mod tests {
     /// rule is that constants live in one place. So the derivation becomes the check.
     #[test]
     fn the_min_width_derivation_sums_to_the_declared_minimum() {
-        let needed = DRAWER_W
-            + BODY_ASPECT * HERO_PHYS_1X
+        let needed = BODY_ASPECT * HERO_PHYS_1X
             + 2.0 * CRADLE_OVERHANG
             + 2.0 * FOCUS_GAP
             + 2.0 * WELL_AIR;
         assert!(
             (needed - MIN_WIDTH).abs() < 0.05,
             "the well needs {needed:.1} px and the window declares {MIN_WIDTH:.1}"
+        );
+        // **And the window OPENS at exactly that**, which is §21.2's claim written as one line:
+        // there is no width left over for a field to be drawn in. `PREF_WIDTH` used to be 1180
+        // against a 420 px device, so 760 px of every launch was `bg-sunken` and nothing else.
+        assert_eq!(
+            PREF_WIDTH, MIN_WIDTH,
+            "the window opens {:.0} px wider than the device it is supposed to BE, and every one \
+             of those pixels is a field the iPod stands in",
+            PREF_WIDTH - MIN_WIDTH
         );
     }
 
@@ -1025,14 +1055,24 @@ mod tests {
 
     /// §9.5's measure never overflows the well, at any size this window allows.
     ///
-    /// The binding case is the declared minimum width **with the drawer open**, which §9.6 spends a
-    /// paragraph on: the drawer never widens the window, so the well gives up `DRAWER_W` and what
-    /// is left is all the pane will ever have. [`SHORT_MEASURE`] is that number less §7.1's air, so
-    /// this is the derivation checked rather than restated — the same shape as
+    /// The binding case is the declared minimum width, and it is the declared minimum **because**
+    /// §21.2's drawer overlays: a pushing drawer took `DRAWER_W` off the well, so the narrowest
+    /// well was `MIN_WIDTH − DRAWER_W`; an overlaying one takes nothing, so the narrowest well is
+    /// the narrowest window. [`SHORT_MEASURE`] is that number less §7.1's air, so this is the
+    /// derivation checked rather than restated — the same shape as
     /// `the_min_width_derivation_sums_to_the_declared_minimum` one screen up.
+    ///
+    /// **`DRAWER_W` appearing in the arithmetic would now be the defect**, so it is asserted
+    /// against rather than subtracted: a well that reserved 420 px it never gives up would set
+    /// this pane 420 px narrower than the surface it stands on, for a push that no longer happens.
     #[test]
     fn the_short_pane_fits_the_narrowest_well_this_window_has() {
-        let narrowest = MIN_WIDTH - DRAWER_W;
+        let narrowest = MIN_WIDTH;
+        assert!(
+            narrowest > DRAWER_W,
+            "the drawer overlays and is {DRAWER_W} wide, so a window narrower than that would \
+             clip it against its own edge; the minimum is {narrowest}"
+        );
         assert_eq!(
             SHORT_MEASURE + 2.0 * WELL_AIR,
             narrowest,
@@ -2734,75 +2774,71 @@ mod tests {
     /// **The drawer's ROOT page does not fit the drawer, and that is why it scrolls.**
     ///
     /// `the_drawer_fits_its_own_furniture_at_the_window_minimum` checks the *furniture* — header,
-    /// shelf, footer — and says nothing about what a page puts between them. `MenuPage` puts seven
-    /// rows there, six of them disabled, and a disabled `Pressable` is `ROW_H + FIELD_REASON` = 78
-    /// because §9.4's reason slot is reserved under it. That is 556 px inside a drawer that is 312
-    /// at the declared window minimum: Work cut in half, and Readout / Settings / Reference entirely
-    /// outside a `clip` that no `Flickable` can recover them from.
+    /// shelf, footer — and says nothing about what a page puts between them. §21.3's `VerbsPage`
+    /// puts thirteen rows there before the developer switch adds four more, and a disabled
+    /// `Pressable` is `ROW_H + FIELD_REASON` = 78 because §9.4's reason slot is reserved under it.
+    /// The drawer is 312 px at the declared window minimum, so the page overflows it in **every**
+    /// state — which is the claim, and it is stronger than the one this test made of `MenuPage`,
+    /// whose three-row form fitted.
     ///
-    /// So this asserts both halves of the answer: the page genuinely does not fit, and it declares a
-    /// `Scroll`. Dropping either — a shorter page or a lost Scroll — is a page whose bottom rows are
-    /// unreachable by pointer, by keyboard and by an assistive technology at once.
+    /// So this asserts both halves of the answer: the page genuinely does not fit, and it declares
+    /// a `Scroll`. Dropping either — a shorter page or a lost Scroll — is a page whose bottom rows
+    /// are unreachable by pointer, by keyboard and by an assistive technology at once.
+    ///
+    /// **The count comes out of `src/verbs.rs`'s own array length**, not out of the markup: the
+    /// page draws a repeater over rows Rust builds, so there is no row count in the `.slint` at
+    /// all. Reading the declared `[Verb; N]` is reading the one place that number lives.
     #[test]
     fn the_drawers_root_page_needs_more_room_than_it_has_and_therefore_scrolls() {
-        let text = read("drawer.slint");
-        // **Seven rows, of which four are hidden unless `Settings::developer` is on** — so the
-        // count is a conditional now rather than a literal, and this measures the page at its
-        // LARGEST. That is the state the claim is about: three rows fit comfortably, and the
-        // question this test asks is whether the page can outgrow the drawer at all.
-        let rows = text.matches("count: root.developer ? 7 : 3;").count();
-        assert_eq!(rows, 7, "`MenuPage` no longer declares seven rows of seven: {rows}");
-        let disabled = text.matches("enabled: false;").count();
-        // **One, and it was two, and three, and before that six.** iPods, Parts, Settings, the
-        // Readout and Games became live as `ui/drawer.slint` gained a child for each;
-        // `Reference` is the only row left with no page behind it, and it is now behind the
-        // developer switch as well, because a row that says *not built* is noise to somebody who
-        // came here to run a game.
-        //
-        // **Games was the slow one, and not because the page was slow to arrive.** The page had
-        // been composed into this drawer, with its callbacks registered and pressed by tests, for
-        // the whole time this count said two — the row above it simply went on refusing. That is
-        // what `every_drawer_row_that_names_a_page_can_open_it` is for; this number is a
-        // consequence of the fix rather than a check on it.
-        //
-        // The count is read out of the markup and the arithmetic below is derived from it, so the
-        // next page to land moves both — and the page still needs more room than it has, which is
-        // the claim this test is actually about.
-        assert_eq!(disabled, 1, "`MenuPage` no longer has one disabled row: {disabled}");
+        let verbs = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/verbs.rs"
+        ))
+        .expect("src/verbs.rs");
+        let rows: usize = verbs
+            .split_once("pub const ALL: [Verb; ")
+            .expect("verbs.rs declares Verb::ALL")
+            .1
+            .split_once(']')
+            .expect("the array length")
+            .0
+            .parse()
+            .expect("a number");
+        assert!(rows >= 13, "§21.3's page is thirteen rows before the developer switch: {rows}");
 
-        let needed = DRAWER_HEADER_H
-            + disabled as f64 * (ROW_H + FIELD_REASON)
-            + (rows - disabled) as f64 * ROW_H;
+        // **The floor, not the ceiling**: every row enabled, at a plain `ROW_H`, with the four
+        // developer rows not drawn. If even that does not fit, no state of this page does — and
+        // three of §21.6's five are refused whenever the machine is off, at 78 px each.
+        let smallest = DRAWER_HEADER_H + (rows - 4) as f64 * ROW_H;
         let have = MIN_HEIGHT - SHELF;
         assert!(
-            needed > have,
-            "the root page needs {needed:.0} px and has {have:.0} at the window minimum, so it \
-             fits and the Scroll below is unnecessary. Delete this test rather than the Scroll."
+            smallest > have,
+            "the root page needs {smallest:.0} px at its very smallest and has {have:.0} at the \
+             window minimum, so it fits and the Scroll below is unnecessary. Delete this test \
+             rather than the Scroll."
         );
 
-        // The whole page's own three cells, in the order they have to be in: a fixed header, then
-        // the Scroll. `WorkPage` had this right; the root page of the same drawer did not.
-        let menu = text
-            .split_once("export component MenuPage")
-            .expect("ui/drawer.slint declares MenuPage")
-            .1
-            .split_once("export component Drawer")
-            .map_or_else(|| text.clone(), |(a, _)| a.to_string());
+        let text = read("verbs.slint");
         assert!(
-            menu.contains("DrawerHeader"),
-            "`MenuPage` has no header, so there is no way out of it in the same place as every \
+            text.contains("DrawerHeader"),
+            "`VerbsPage` has no header, so there is no way out of it in the same place as every \
              other page"
         );
         assert!(
-            menu.contains("Scroll {"),
-            "`MenuPage` needs {needed:.0} px inside {have:.0} and declares no Scroll — its last \
-             three rows are outside the drawer's clip, which is not a Flickable, so they are out \
+            text.contains("Scroll {"),
+            "`VerbsPage` needs {smallest:.0} px inside {have:.0} and declares no Scroll — its \
+             bottom rows are outside the drawer's clip, which is not a Flickable, so they are out \
              of the tab order and out of the accessible tree with no indicator that they exist"
         );
-        assert!(
-            menu.matches("ensure-visible").count() == rows,
-            "not every row brings itself into view when the keyboard reaches it; Tab is the only \
-             keyboard scroll route this program has (§16.11)"
+        // **Two, and not one per row.** The rows are a repeater, so one `ensure-visible` inside it
+        // covers every verb; the second is `MadeOfLine`'s `reveal`, which is how §21.3's demoted
+        // fact table brings itself into view. `Tab` is the only keyboard scroll route this program
+        // has (§16.11), so a page with none of these is a page whose tail cannot be reached.
+        assert_eq!(
+            text.matches("ensure-visible").count(),
+            2,
+            "the verb repeater and the fact table each bring themselves into view when the \
+             keyboard reaches them, and that is two call sites"
         );
     }
 

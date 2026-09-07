@@ -14,9 +14,11 @@
 // is what the cradle is for and it is the whole reason it exists.
 //
 // **Nothing that animates may feed the Screen's geometry** (§8.2 rule 1). `hero` is pushed in from
-// Rust and is never the target of an `animate` block; the one property that animates on this
-// surface is the **x** of the frame that holds the device and its cradle, and it animates because
-// the well got narrower, not because the device changed size. The shipped carousel animated
+// Rust and is never the target of an `animate` block — and since §21.2 **nothing on this surface
+// animates at all**: the one property that used to was the **x** of the frame holding the device
+// and its cradle, and it moved because the well got narrower under a drawer that pushed. The
+// drawer overlays now, the well is always the full client width, and the device is at the same
+// place whether the drawer is open or shut. The shipped carousel animated
 // `body-height` from `hero × 0.55` to `hero` over 320 ms, and every dimension of the drawing is a
 // fraction of it — so a live framebuffer was drawn at a continuously varying non-integer scale for
 // the whole animation. That is deleted here rather than reproduced.
@@ -100,9 +102,9 @@ component Chevron inherits Rectangle {
 //
 // **`Metric.s4` between the three, `Geometry.well-air` around them**, and the measure is
 // `Geometry.short-measure` — the widest line that cannot overflow the narrowest well this window
-// has (§9.6: the drawer never widens the window, so the well gives up 420 px and what is left is
-// all this will ever have). It does not grow with the well; a sentence set across 1140 px is a
-// sentence nobody can read a second line of.
+// has, which since §21.2 is the narrowest *window*: the drawer overlays, so the well never gives
+// 420 px up and the two are the same number. It does not grow with the well; a sentence set
+// across 1140 px is a sentence nobody can read a second line of.
 component ShortPane inherits Rectangle {
     in property <string> headline;
     in property <string> body;
@@ -266,15 +268,6 @@ export component Bench inherits Rectangle {
     // animated, which is what keeps §6.6's arrow pointing one way.
     in property <length> hero: Geometry.hero-phys-1x;
 
-    // §7.5 and the contract's §9.5 decision: **the bench stays full width; the well and the
-    // shelf's three content rows narrow.** The shelf's band background and its 1 px top rule span
-    // the whole client, because a drawer that is full client height above an 88 px shelf otherwise
-    // leaves the bottom-right 420 × 88 belonging to nothing. Nothing is unpainted, the drawer
-    // covers no shelf content, and the bottom band stays continuous as §7's own drawing shows it.
-    //
-    // The animation lives in the window, on the property that feeds this one, so the value arrives
-    // here already eased and this file animates it a second time nowhere.
-    in property <length> drawer-inset: 0px;
 
     // ── The device ──
     //
@@ -455,7 +448,10 @@ export component Bench inherits Rectangle {
 
     background: Ink.bg-sunken;
     accessible-role: AccessibleRole.main;
-    accessible-label: "the bench";
+    // **The one place *bench* was a word a person met**, and §21.2 retires that framing: the
+    // window is the device, so the main region an assistive technology announces is the iPod
+    // rather than a workbench holding machines you have parked.
+    accessible-label: "the iPod";
 
     // ── §7.1 The well ──
     //
@@ -466,7 +462,7 @@ export component Bench inherits Rectangle {
     well := Rectangle {
         x: 0;
         y: 0;
-        width: parent.width - root.drawer-inset;
+        width: parent.width;
         height: parent.height - Geometry.shelf;
         // See the header: this is not §9.5's pane, and it is not to be mistaken for one. What it
         // buys is that the shelf's write-target row survives a window too short for the device —
@@ -526,12 +522,11 @@ export component Bench inherits Rectangle {
             y: root.body-y - Geometry.cradle-band;
             width: root.body-w + 2 * Geometry.cradle-band;
             height: root.hero + 2 * Geometry.cradle-band;
-            // **No `animate x` here, and that is a correction.** §8.1 item 1 specifies ONE `gentle`
-            // for the drawer transition, and the window already spends it: `drawer-inset` is the
-            // animated property, `well.width` reads it, `body-x` reads that, and this reads `body-x`.
-            // A second `animate` on this binding would chase an already-moving target and the device
-            // would arrive measurably after the well edge had stopped — which is the exact mechanism
-            // the cradle label thirty lines below cites when it refuses to animate its own `x`.
+            // **No `animate x` here, and there is now nothing left for one to chase.** §8.1 item 1
+            // spends its ONE `gentle` on the drawer's own `x`, and §21.2 stopped that `x` from
+            // reaching this one: `well.width` is `parent.width`, `body-x` is derived from it, and
+            // opening the drawer moves neither. The device is at the same place open or shut,
+            // which is the whole of *the drawer overlays instead of pushing*.
 
             // §6.4: the cradle's focus ring is `fg`, and it is the one exception to *the focus
             // ring is `accent`*. Everywhere else the ring sits on `bg` or `bg-raised` where the
@@ -897,8 +892,11 @@ export component Bench inherits Rectangle {
 
     // ── §7.5 The shelf — 88 px, three rows, flush to the bottom, full width ──
     //
-    // The band and the rule span the whole client; only the three content rows narrow with the
-    // drawer. See `drawer-inset` above for why.
+    // The band, the rule and the content rows all span the whole client now. The rows used to
+    // narrow with the drawer, and §9.5's reason for that was real: a drawer running the full
+    // client height above the shelf otherwise left the bottom-right 420 × 88 belonging to
+    // nothing. §21.2's drawer overlays and still stops above the shelf, so that corner belongs to
+    // the shelf and is drawn by it — the band is continuous and nothing covers it.
     shelf := Rectangle {
         x: 0;
         y: parent.height - Geometry.shelf;
@@ -958,7 +956,7 @@ export component Bench inherits Rectangle {
         VerticalLayout {
             x: 0;
             y: 0;
-            width: parent.width - root.drawer-inset;
+            width: parent.width;
             height: 100%;
             padding-left: Metric.s5;
             padding-right: Metric.s5;
@@ -1043,7 +1041,7 @@ export component Bench inherits Rectangle {
     // Top-trailing, over the well rather than inside it, so it survives the well being hidden at
     // a window too short to draw the device — the one state where you most need a way out.
     Act {
-        x: parent.width - root.drawer-inset - self.width - Metric.s3;
+        x: parent.width - self.width - Metric.s3;
         y: Metric.s3;
         icon: "menu";
         label: "Menu";

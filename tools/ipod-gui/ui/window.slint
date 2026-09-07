@@ -13,8 +13,8 @@
 // **What this file is now.** It owns three things and composes the rest:
 //
 //   1. the four window size constants, which are plain `Geometry` reads and must never see `hero`;
-//   2. the push — one animated `drawer-inset` that the well, the handle and the drawer all read, so
-//      the drawer cannot slide at one speed while the well narrows at another;
+//   2. the overlay — one animated `drawer-out` that the drawer and its handle both read, so the
+//      handle cannot arrive at an edge the drawer has not reached (§21.2);
 //   3. the keyboard, whose `Esc` has exactly ONE definition and it lives in Rust (`nav::Stack`).
 //
 // Everything drawn is `Bench` (§7) or `Drawer` (§4, §11); everything decided is `nav.rs`, `rail.rs`
@@ -50,6 +50,7 @@ import {
     Pressable,
     RefusalRow,
     TickRow,
+    VerbRow,
 } from "primitives.slint";
 
 // **LOAD-BEARING, and it is easy to miss.** A global reaches the generated Rust only if it appears
@@ -306,6 +307,18 @@ export component MainWindow inherits Window {
     // reachable from two depth-1 pages, so its header cannot carry a literal.
     in property <DrawerPage> drawer-under: DrawerPage.none;
 
+    // ── §21.3's root page ──
+    //
+    // `verbs::view`'s rows and `devices::facts`'s table, pushed. The heading is empty where there
+    // is no device, which is how the page knows not to draw six blank facts under an `About`.
+    in property <[VerbRow]> verbs;
+    in property <[DetailRow]> verbs-about;
+    in property <string> verbs-about-heading;
+    // The ordinal off the row — `verbs::Verb::from_i32` reads it back. One callback for seventeen
+    // rows, and Rust decides what each one does, which is the same split `setting-toggled` and
+    // `readout-act` already have.
+    callback verb-act(int);
+
     // ── The Rail and the Work page (§9.2, §9.3, §10.1) ──
     in property <[RailRow]> rail;
     in property <int> rail-failures: 0;
@@ -516,14 +529,21 @@ export component MainWindow inherits Window {
     property <bool> has-devices: root.devices.length > 0;
     property <DeviceRow> current: root.has-devices ? root.devices[root.selected] : root.empty-device;
 
-    // ── The push (§4, §7.5, §8.1 item 1) ──
+    // ── The overlay (§4, §7.5, §8.1 item 1, §21.2) ──
     //
-    // **One animated number, read by three things.** The well narrows, the handle rides the well's
-    // trailing edge, the drawer slides in — and because all three read the same property they cannot
-    // disagree about where the edge is mid-animation. The drawer's own **width never animates**, so
-    // its text never reflows; only its `x` moves, and the device moves because the well did.
-    property <length> drawer-inset: root.drawer-open ? Geometry.drawer-w : 0;
-    animate drawer-inset {
+    // **How far the drawer is out, and nothing else reads it as a width it has to give up.** The
+    // drawer slides in over the device and the handle rides its leading edge; because both read
+    // the same property they cannot disagree about where that edge is mid-animation. The drawer's
+    // own **width never animates**, so its text never reflows; only its `x` moves.
+    //
+    // **The device does not move, and that is the change.** This was `drawer-inset` and the well
+    // read it as `parent.width - inset`, so opening the drawer narrowed the surface the iPod is
+    // drawn on and the iPod slid left to stay centred in it. §3's pushed `hero` bought that the
+    // device was never occluded, which was worth buying while the device shared the window with a
+    // field of nothing; §21.2 retires the field, and a device that shrinks every time the drawer
+    // opens is the window fidgeting.
+    property <length> drawer-out: root.drawer-open ? Geometry.drawer-w : 0;
+    animate drawer-out {
         duration: Motion.gentle;
         easing: ease-out-quart;
     }
@@ -531,7 +551,7 @@ export component MainWindow inherits Window {
     // close animation has finished. The drawer gates its pages' `visible` on it, so a closed drawer
     // is out of the tab order and out of the accessible tree instead of sitting 420 px off screen
     // being announced — and a closing one still draws its contents while it leaves.
-    property <bool> drawer-on-stage: root.drawer-open || root.drawer-inset > 0;
+    property <bool> drawer-on-stage: root.drawer-open || root.drawer-out > 0;
 
     public function move(delta: int) {
         if (root.devices.length == 0) {
@@ -804,7 +824,6 @@ export component MainWindow inherits Window {
                 width: 100%;
                 height: 100%;
 
-                drawer-inset: root.drawer-inset;
                 drawer-open: root.drawer-open;
 
                 hero: root.hero;
@@ -935,11 +954,14 @@ export component MainWindow inherits Window {
                 hold-released => { root.hold-released(); }
             }
 
-            // §7.5, and it rides the well rather than the window edge — which is what makes it read
-            // as the drawer's own handle rather than as a tab stuck to the frame.
+            // §7.5, and it rides the **drawer's** leading edge rather than the window edge — which
+            // is what makes it read as the drawer's own handle rather than as a tab stuck to the
+            // frame. It used to ride the well's trailing edge, which was the same line of
+            // arithmetic while the two edges were the same edge; §21.2 separated them, and the
+            // handle went with the drawer because that is whose handle it is.
             handle := DrawerHandle {
                 open: root.drawer-open;
-                x: client.width - root.drawer-inset - Geometry.handle-w;
+                x: client.width - root.drawer-out - Geometry.handle-w;
                 y: (client.height - Geometry.shelf - Geometry.handle-h) / 2;
                 toggled => {
                     root.drawer-toggled();
@@ -948,8 +970,12 @@ export component MainWindow inherits Window {
 
             // §4: 420 px, right-anchored, full client height **above the shelf**. Parked one full
             // width off the right edge when closed, so `x` is the only thing that ever moves.
+            //
+            // **Declared after the bench, so it draws over it** (§21.2). Slint paints siblings in
+            // declaration order and it always did; what changed is that the bench no longer gets
+            // out of the way first.
             drawer := Drawer {
-                x: client.width - root.drawer-inset;
+                x: client.width - root.drawer-out;
                 y: 0;
                 client-height: client.height;
 
@@ -958,6 +984,13 @@ export component MainWindow inherits Window {
                 page: root.drawer-page;
                 under: root.drawer-under;
                 rail-failures: root.rail-failures;
+
+                verbs: root.verbs;
+                verbs-about: root.verbs-about;
+                verbs-about-heading: root.verbs-about-heading;
+                verb-act(v) => {
+                    root.verb-act(v);
+                }
 
                 rail: root.rail;
                 rail-announce: root.rail-announce;

@@ -7,16 +7,20 @@
 // `visible: … && root.page == DrawerPage.<name>` block and this one did not, so pressing the word
 // opened a blank drawer and nothing said why.
 //
-// **It is a project state, not a stub**, per §13.4: *"Before 0.6, the `Games` root row is a project
-// state"*. §13 designs the real page — a title on the bench, a binding matrix, `61 of 98` in `warn`
-// — and schedules it for 0.6 because *"the framework work is not done and the keystore is in a
-// private repository."* Saying that plainly is the whole content until then. What must NOT appear
-// here is a title list this program cannot open, or a control that files a `.ipg` nothing reads.
+// **It was a project state and it is not one any more, and this header said otherwise for as long
+// as nobody read it against the page under it.** The two paragraphs that stood here described a
+// page whose whole content was §13.4's sentence about 0.6 — *what must NOT appear here is a title
+// list this program cannot open* — and what is below is a title list this program opens: the rows
+// fire `play(i)`, `main::on_games_play` reaches `start_title`, and a title runs on the bench with
+// the drawn wheel driving it. A comment describing a mechanism that is not there is the next
+// drift, so it is corrected rather than deleted (AGENTS.md §7).
 //
-// **The sentence is §13.4's, verbatim**, and it is two facts rather than an apology: what already
-// works (`bind_native`, `eapp-inspect`) and what does not (the surface that runs one). §9.4's
-// second kind — *this is not finished, by us* — so `machine-rule: false`, and no escape hatch,
-// because there is no command that runs a title either.
+// **What §13 still designs and this page still does not have** is the binding matrix — `61 of 98`
+// in `warn`, per-import resolution — because that is the framework work §15 puts in 0.6, and the
+// keystore is in a private repository. The shelf, the list and the press arrived ahead of it.
+//
+// §9.1 is what the empty state below obeys: an empty page and a page that has not been pointed
+// anywhere look identical, and only one of them is the operator's to fix.
 
 import { Ink, Metric } from "tokens.slint";
 import { DrawerHeader, Row, Scroll, TitleRow } from "primitives.slint";

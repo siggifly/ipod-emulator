@@ -156,6 +156,12 @@ mod devices;
 mod parts;
 mod settings_page;
 
+// §21.3 and §21.6: the drawer's root page, which is a list of things to do rather than a list of
+// nouns with inventories behind them. It is declared after the three above because it calls two of
+// them — `devices::install_row` for Rockbox, `devices::facts` for §21.3's demoted fact table — and
+// words nothing either of them already words.
+mod verbs;
+
 // The two routes a file takes into this program from outside — docs/GUI.md §11.4 and §16.4, and
 // §17 Q3 answered. It owns `rfd` and the coalescing window winit's event stream does not provide,
 // and it is what `caps()`'s `file_picker`, `drop_target` and `reveal` are now read from rather
@@ -796,6 +802,16 @@ fn wire(
     // machine (see `Live::drop`), and handed back on it so a test drives what the timer drives.
     let live: Rc<RefCell<Option<Live>>> = Rc::new(RefCell::new(None));
 
+    // §12.5's boot target, for the **next** press and no other — `emu::BootTarget::Os` unless
+    // §21.3's `Diagnostics` row has just been pressed.
+    //
+    // **One-shot, and `std::mem::take` is what makes it so.** Every route that starts a machine
+    // goes through `on_start_device`, including §7.3's centre button; a cell that stayed set after
+    // a Diagnostics press would make the next press of the drawn button boot diagnostics too, and
+    // the caption under it promises a cold boot of the operating system. `BootTarget::Os` is the
+    // `Default`, so taking it is both the read and the reset.
+    let next_boot: Rc<RefCell<emu::BootTarget>> = Rc::new(RefCell::new(emu::BootTarget::Os));
+
     let repaint: Rc<RefCell<Vec<Repaint>>> = Rc::new(RefCell::new(Vec::new()));
     let repaint_all: Repaint = {
         let repaint = repaint.clone();
@@ -1098,6 +1114,7 @@ fn wire(
         let ticking = ticking.clone();
         let ticking_machine = ticking_machine.clone();
         let live = live.clone();
+        let next_boot = next_boot.clone();
         let repaint_all = repaint_all.clone();
         let weak = window.as_weak();
         window.on_start_device(move |index| {
@@ -1262,7 +1279,11 @@ fn wire(
                     // escape hatch; the escape hatch is still there and is no longer the only
                     // route. `run_device` has already made this the live device, so the config is
                     // built from the fields it resolved rather than from a second lookup.
-                    let started = start_machine(&live, &settings.borrow(), index as usize, launch);
+                    // **Taken rather than read**, so §12.5's target is one press's and not a mode
+                    // the window has been left in — see `next_boot`.
+                    let boot = std::mem::take(&mut *next_boot.borrow_mut());
+                    let started =
+                        start_machine(&live, &settings.borrow(), index as usize, launch, boot);
                     match started {
                         Ok(()) => ticking_machine(),
                         Err(f) => {
@@ -2237,6 +2258,173 @@ fn wire(
                 cost,
                 live.borrow().as_ref(),
             );
+            repaint_all();
+        });
+    }
+
+    // ── §21.3 and §21.6's root page ─────────────────────────────────────────────────────────────
+    //
+    // **Guarded on `Page::None` rather than on a page of its own**, because that is what depth 0
+    // is: `nav::Page::None` is *no page*, which is what the drawer's root slot shows. Every other
+    // registration below asks `on_screen` for a named page; this one asks for the absence of one,
+    // which is the same question the strip is already answering with `slot: depth + 1`.
+    //
+    // It re-pushes on every press and every library change like the rest of the registry, and it
+    // has to move faster than that as well: §21.6's five machine controls are a function of the
+    // phase, so `pump_machine`'s tick runs the registry and they follow the machine rather than
+    // waiting for somebody to press something.
+    let verb_rows: Rc<VecModel<VerbRow>> = Rc::new(VecModel::default());
+    let verb_about: Rc<VecModel<DetailRow>> = Rc::new(VecModel::default());
+    window.set_verbs(ModelRc::from(verb_rows.clone()));
+    window.set_verbs_about(ModelRc::from(verb_about.clone()));
+    let repaint_verbs: Repaint = {
+        let rows = verb_rows.clone();
+        let about = verb_about.clone();
+        let settings = settings.clone();
+        let stack = stack.clone();
+        let live = live.clone();
+        let weak = window.as_weak();
+        Rc::new(move || {
+            let Some(w) = weak.upgrade() else { return };
+            if !on_screen(&stack.borrow(), nav::Page::None) {
+                return;
+            }
+            push_verbs(&w, &settings.borrow(), &rows, &about, caps, live.borrow().as_ref());
+        })
+    };
+    repaint.borrow_mut().push(repaint_verbs.clone());
+
+    // §21.3 and §21.6: one callback, seventeen rows, and Rust decides what each one does.
+    {
+        let settings = settings.clone();
+        let rail = rail.clone();
+        let rows = rows.clone();
+        let work = work.clone();
+        let live = live.clone();
+        let next_boot = next_boot.clone();
+        let ticking_machine = ticking_machine.clone();
+        let repaint_all = repaint_all.clone();
+        let weak = window.as_weak();
+        window.on_verb_act(move |ordinal| {
+            let Some(w) = weak.upgrade() else { return };
+            // An ordinal nothing answers to is the same no-op an unknown `RowAction` gets: the row
+            // went away between the push and the press.
+            let Some(verb) = verbs::Verb::from_i32(ordinal) else { return };
+            // **Navigation is `on_open_page`'s, invoked rather than repeated.** That handler moves
+            // the stack, pushes the nav properties and runs the registry, and the registry's whole
+            // point is that arriving at a page pushes it — a second `stack.go()` here would move
+            // the drawer to a page that had been told nothing since it left.
+            let open = |p: nav::Page| w.invoke_open_page(to_markup(p), 1);
+            match verb {
+                // ── The six that are a drawer page ──
+                verbs::Verb::Games => open(nav::Page::Games),
+                verbs::Verb::ThisIpod => open(nav::Page::Devices),
+                verbs::Verb::Settings => open(nav::Page::Settings),
+                verbs::Verb::Parts => open(nav::Page::Parts),
+                verbs::Verb::Readout => open(nav::Page::Readout),
+                verbs::Verb::Work => open(nav::Page::Work),
+
+                // ── The three that start a machine, and they are ONE press ──
+                //
+                // **`invoke_start_device` rather than a second start path.** §7.3's centre button,
+                // §7.2's `Start` row and these all mean the same thing, and `on_start_device` is
+                // where the first run, a half-made device, a composed one and every refusal are
+                // told apart. A second resolver here is how two of them come to disagree about
+                // whether a press may start anything.
+                //
+                // Diagnostics differs by exactly one field — §12.5's `Nor("diag")`, reached by
+                // power-cycling *because that is how the hardware reaches it* — so it is written
+                // into the one-shot cell the start path reads and cleared as it is taken. A cell
+                // that stayed set would make the next centre-button press boot diagnostics.
+                verbs::Verb::Apple | verbs::Verb::Diagnostics => {
+                    if verb == verbs::Verb::Diagnostics {
+                        *next_boot.borrow_mut() = emu::BootTarget::Nor("diag".into());
+                    }
+                    w.invoke_start_device(w.get_selected());
+                }
+                // Installed, this is a start; not installed, it is the install the Devices page
+                // already offers, on the queue that owns the plan. `verbs::rockbox_row` decides
+                // which the row IS, and this asks the same question rather than a second one.
+                verbs::Verb::Rockbox => {
+                    let installed = {
+                        let s = settings.borrow();
+                        let index = usize::try_from(w.get_selected()).unwrap_or(0);
+                        s.devices
+                            .get(index)
+                            .is_some_and(|d| s.recipe_of(d).oses.contains(&compose::Os::Rockbox))
+                    };
+                    if installed {
+                        w.invoke_start_device(w.get_selected());
+                    } else {
+                        w.invoke_device_row_action(
+                            parts::RowAction::InstallRockbox.as_i32(),
+                            w.get_selected(),
+                        );
+                    }
+                }
+
+                // ── §21.6's five, and every one of them already existed ──
+                //
+                // `Start` and `Resume` are one press for the reason §12.4 states: `Cmd::PowerOn` is
+                // a cold boot by construction and the only code that restores is `emu::run`'s
+                // entry, so what tells the two apart is whether a whole pair is on disk — which
+                // `machine::Launch` already decides and `on_start_device` already asks.
+                verbs::Verb::Start | verbs::Verb::Resume => {
+                    w.invoke_start_device(w.get_selected());
+                }
+                verbs::Verb::Suspend => {
+                    // The same act `Esc` performs from `Running`, reached from a labelled row —
+                    // which is the whole of §21.6: *all five exist, none of them is discoverable*.
+                    let room = {
+                        let held = live.borrow();
+                        held.as_ref().map(Live::ask_to_park)
+                    };
+                    if let Some(room) = room {
+                        if room.short() {
+                            rail.borrow_mut().failed(
+                                "parking",
+                                "the machine",
+                                rail::Failure::saying(
+                                    rail::Class::SpacePreflight,
+                                    "writing the restore point",
+                                    format!(
+                                        "there is not room for it — {}. The machine stopped \
+                                         without parking, so the next start is a cold boot.",
+                                        room.sentence()
+                                    ),
+                                ),
+                            );
+                            sync_rail(&w, &rows, &rail.borrow(), caps, work.borrow().shape());
+                        }
+                        ticking_machine();
+                    }
+                }
+                verbs::Verb::Kill | verbs::Verb::Restart => {
+                    let cmd = if verb == verbs::Verb::Kill {
+                        emu::Cmd::PowerOff
+                    } else {
+                        emu::Cmd::PowerCycle
+                    };
+                    let held = live.borrow();
+                    if let Some(l) = held.as_ref() {
+                        // §12.5: every refusal in `permits` is a physical statement rather than a
+                        // policy — you cannot power off a machine that is off — so it is asked on
+                        // the press as well as on the row, because the row was drawn at the last
+                        // push and the machine may have stopped since.
+                        let life = l.life();
+                        if machine::permits(&life, &cmd) {
+                            l.link.command(cmd);
+                        }
+                    }
+                    drop(held);
+                    ticking_machine();
+                }
+
+                // Drawn, refused, and it says why — §14.1. A press reaches here only through an
+                // `activated` on a `Pressable` that is `enabled: false`, which §16.5 keeps alive so
+                // it can be focused and announced. Nothing to do is the honest answer.
+                verbs::Verb::Doom | verbs::Verb::Files | verbs::Verb::Reference => {}
+            }
             repaint_all();
         });
     }
@@ -3813,6 +4001,11 @@ fn start_machine(
     // a plain launch, and every one of them is a property of THIS launch rather than of the device
     // — which is the test `args::Machine`'s own doc applies to decide what may be a flag at all.
     launch: args::Machine,
+    // §12.5's target, and §21.3's `Diagnostics` row is the only thing that ever sets it to
+    // anything but `Os`. **It is reached by power-cycling** — a machine built here is entered at
+    // the reset vector either way, and `emu::build` is what decides where the first instruction
+    // comes from, so this is one field on the config rather than a second start path.
+    boot: emu::BootTarget,
 ) -> Result<(), rail::Failure> {
     *live.borrow_mut() = None;
 
@@ -3842,6 +4035,10 @@ fn start_machine(
     // narrow by construction: `Machine::apply` writes four fields and nothing else can reach the
     // config from a command line at all.
     launch.apply(&mut cfg);
+    // …and §12.5's target over both, because it is the only one of the three that a press just
+    // made. `machine_config` writes `BootTarget::Os` and `Machine::apply` does not touch the
+    // field, so this is the one writer of it.
+    cfg.boot = boot;
 
     let link = emu::Link::new();
     // What the control socket is looking at. Ordered after the `*live.borrow_mut() = None` at the
@@ -3873,15 +4070,19 @@ fn start_machine(
         // it got here. Kept as a slice rather than as a `()` because `machine::Stand` wants the
         // parts a device is missing, and the honest answer for this one is *none*.
         absent: Vec::new(),
-        cfg,
-        denominator: settings.expected_boot(),
         // What `Link::new` published, read through the model's only constructor rather than typed.
         // Not `Life::Off`: a window holding a `Live` has asked for a machine, and a frame that said
         // `off` would be the bench claiming the press had done nothing.
+        //
+        // **The target is the config's**, which since §21.3's `Diagnostics` row is no longer
+        // always `Os`. It was a literal, and a literal here would have `Life::Booting` naming the
+        // operating system for a machine entering `diag` — one press, two answers.
         life: RefCell::new(machine::Life::Booting {
-            target: emu::BootTarget::Os,
+            target: cfg.boot.clone(),
             progress: machine::Progress::read(0, settings.expected_boot()),
         }),
+        cfg,
+        denominator: settings.expected_boot(),
         seq: Cell::new(0),
         booted: Cell::new(None),
         learned: Cell::new(false),
@@ -4091,7 +4292,10 @@ fn hand_off(
         ));
         return;
     };
-    let outcome = start_machine(live, &settings.borrow(), index, launch);
+    // **`Os`, and never the one-shot cell.** This is the first run's own handoff — a device the
+    // plan has just finished making — so what it boots is the operating system it was just given,
+    // whatever row somebody pressed before the build started.
+    let outcome = start_machine(live, &settings.borrow(), index, launch, emu::BootTarget::Os);
     if let Err(f) = outcome {
         rail.borrow_mut().failed("start", name, f);
     }
@@ -7087,6 +7291,86 @@ fn push_devices_detail(
     // empty label and empty reason reach no pixel. A default `FixRow` on a *drawn* control would
     // be §9.4's forbidden construction: disabled, with nothing said.
     window.set_devices_start(to_fix(&v.start.unwrap_or_default()));
+}
+
+/// §21.3's heading over the demoted fact table. Empty where there is no device, which is how
+/// `verbs.slint` knows not to draw an `About` over six blank rows.
+const ABOUT: &str = "About this iPod";
+
+/// §21.3 and §21.6's root page — **the rows, and the fact table under them.**
+///
+/// Everything it needs about the machine is read off the one `Live` the window holds, and
+/// everything it needs about the shelf is read back off the window's own properties rather than
+/// re-derived: `refresh_titles` walks the folder and pushes `titles` and `games-folder-gone`
+/// already, and walking it a second time here would be two answers to *what is on the shelf*, one
+/// of them taken at a different instant.
+fn push_verbs(
+    window: &MainWindow,
+    settings: &Settings,
+    rows: &Rc<VecModel<VerbRow>>,
+    about: &Rc<VecModel<DetailRow>>,
+    caps: rail::Caps,
+    live: Option<&Live>,
+) {
+    let mut seen = Presence::new();
+    // **The bench's own selection**, two-way from `MainWindow::selected`, so this page and the
+    // drawn iPod are about the same device. A second cursor here is how the drawer comes to
+    // describe the iPod you are not looking at.
+    let index = usize::try_from(window.get_selected()).unwrap_or(0);
+    let d = settings.devices.get(index);
+    let life = live.map(Live::life).unwrap_or(machine::Life::Off);
+    let machine = running_machine(live);
+    let now = verbs::Now {
+        settings,
+        life: &life,
+        machine: machine.as_deref(),
+        // §21.6's `Suspend` says what a park costs, and this is the machine's own answer rather
+        // than a figure typed out of §12.4 — `emu::run` publishes it before a park can be asked
+        // for. `None` with no machine, and the row then makes no claim.
+        park_bytes: live.map(|l| l.link.snapshot_bytes.load(std::sync::atomic::Ordering::Relaxed)),
+        thread: live.is_some(),
+        titles: window.get_titles().row_count(),
+        games_gone: window.get_games_folder_gone(),
+        developer: settings.developer,
+    };
+    let view = verbs::view(settings, d, &mut seen, caps, now);
+    in_place(rows, &view.iter().map(to_verb).collect::<Vec<_>>());
+
+    // §21.3: *the facts are demoted, not deleted*. `devices::facts` is the Devices page's own
+    // producer, so the two surfaces cannot describe one iPod two ways.
+    match d {
+        Some(d) => {
+            in_place(
+                about,
+                &devices::facts(settings, d, &mut seen)
+                    .iter()
+                    .map(to_detail)
+                    .collect::<Vec<_>>(),
+            );
+            window.set_verbs_about_heading(ABOUT.into());
+        }
+        None => {
+            in_place(about, &[]);
+            window.set_verbs_about_heading("".into());
+        }
+    }
+}
+
+/// One `verbs::Row`, flattened. **Every string on it is the model's** — the same rule `to_detail`
+/// and `to_fix` follow one screen up, and the reason `verbs.slint` words nothing.
+fn to_verb(r: &verbs::Row) -> VerbRow {
+    VerbRow {
+        verb: r.verb.ordinal(),
+        label: r.label.clone().into(),
+        value: r.value.clone().into(),
+        sub: r.sub.clone().into(),
+        enabled: r.enabled,
+        reason: r.reason.clone().into(),
+        machine_rule: r.machine_rule,
+        escape_hatch: r.escape.clone().into(),
+        chevron: r.chevron,
+        rule_above: r.rule_above,
+    }
 }
 
 /// Whether `p` is the page the drawer is actually showing.
@@ -12191,31 +12475,63 @@ pub(crate) mod tests {
         assert!(!w.get_too_short(), "the flip back did not reach the window");
     }
 
-    /// **The push arithmetic: the drawer takes 420 px from the well and the device still fits.**
+    /// **§21.2: the window IS the device, and opening the drawer does not move it.**
     ///
-    /// §9.6's `min-width` derivation is `DRAWER_W + the device + its fixture + the well's air`, and
-    /// `the_min_width_derivation_sums_to_the_declared_minimum` checks that sum. What that one cannot
-    /// see is the consequence: at the narrowest window the program allows, **with the drawer open**,
-    /// there has to be room left for the device at `k = 1`. If there is not, opening the drawer at
-    /// the minimum width clips the thing the program is for.
+    /// This replaces `opening_the_drawer_at_the_narrowest_window_still_leaves_room_for_the_device`,
+    /// which asserted the *push* arithmetic — `MIN_WIDTH − DRAWER_W` still holds the device — and
+    /// was the right test for a drawer that narrowed the well. It is the wrong question now, and
+    /// leaving it would have been a test agreeing with a mechanism that had been deleted.
+    ///
+    /// Two halves, because the arithmetic alone would pass over a markup that still pushed:
+    ///
+    ///   1. **the window is the device's own width, to the pixel.** Any surplus is a field of
+    ///      `bg-sunken` the iPod stands in, which is the bench §21.2 retires. `>=` would pass at
+    ///      1180 with 760 px of it, so this is an equality with §7.1's air as the only slack.
+    ///   2. **nothing in `ui/bench.slint` reads the drawer's width.** That is the mechanism: the
+    ///      well was `parent.width - root.drawer-inset`, `body-x` was derived from `well.width`,
+    ///      and so the device slid left every time the drawer opened. A sweep rather than a
+    ///      geometric claim, because the geometry cannot see a subtraction.
+    // The relationship between two declared constants IS the thing under test, so clippy's
+    // "this assertion has a constant value" is describing the point rather than a defect — the
+    // same carve-out `geometry::the_minimum_height_is_a_floor_not_a_fit` already states. Not a
+    // `const` block on purpose: a failure should name both numbers at test time rather than stop
+    // the build with a const-eval panic.
+    #[allow(clippy::assertions_on_constants)]
     #[test]
-    fn opening_the_drawer_at_the_narrowest_window_still_leaves_room_for_the_device() {
-        let well = geometry::MIN_WIDTH - geometry::DRAWER_W;
+    fn the_window_is_the_device_and_the_drawer_does_not_move_it() {
         let device = geometry::BODY_ASPECT * geometry::HERO_PHYS_1X;
         let fixture = 2.0 * (geometry::CRADLE_OVERHANG + geometry::FOCUS_GAP);
-        let needed = device + fixture;
+        let air = geometry::MIN_WIDTH - device - fixture;
         assert!(
-            well >= needed,
-            "with the drawer open the well is {well:.1} px wide and the device and its cradle need \
-             {needed:.1}"
+            (air - 2.0 * geometry::WELL_AIR).abs() < 0.05,
+            "the narrowest window is {:.1} px and the device with its fixture is {:.1}, leaving \
+             {air:.1} px — §7.1 gives it {} a side and everything past that is a field",
+            geometry::MIN_WIDTH,
+            device + fixture,
+            2.0 * geometry::WELL_AIR
         );
-        // And the air §9.6 puts round it is what is left, not something borrowed from the device.
-        let air = (well - needed) / 2.0;
+
+        // The drawer still has to fit inside the window it covers, which is the one thing the
+        // push arithmetic bought that an overlay still needs.
         assert!(
-            air >= geometry::WELL_AIR - 0.05,
-            "the well has {air:.1} px of air on each side and §9.6 declares {}",
-            geometry::WELL_AIR
+            geometry::MIN_WIDTH > geometry::DRAWER_W,
+            "the drawer is {} px and the narrowest window is {}",
+            geometry::DRAWER_W,
+            geometry::MIN_WIDTH
         );
+
+        let bench = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/ui/bench.slint"
+        ))
+        .expect("ui/bench.slint");
+        for pushing in ["drawer-inset", "Geometry.drawer-w"] {
+            assert!(
+                !bench.contains(pushing),
+                "ui/bench.slint reads `{pushing}`, so the surface the device is drawn on still \
+                 gives way to the drawer and the device moves when it opens"
+            );
+        }
     }
 
     /// **The centre button is reachable with the keyboard alone, and the pointer is never touched.**
@@ -12694,6 +13010,9 @@ pub(crate) mod tests {
         /// §12.8's two retained models, for the same reason every other page here has its own.
         r_rows: Rc<VecModel<GaugeRow>>,
         r_headings: Rc<VecModel<slint::SharedString>>,
+        /// §21.3's root page — its rows and its demoted fact table.
+        v_rows: Rc<VecModel<VerbRow>>,
+        v_about: Rc<VecModel<DetailRow>>,
     }
 
     impl Furniture {
@@ -12710,6 +13029,8 @@ pub(crate) mod tests {
                 c_refusals: Rc::new(VecModel::default()),
                 r_rows: Rc::new(VecModel::default()),
                 r_headings: Rc::new(VecModel::default()),
+                v_rows: Rc::new(VecModel::default()),
+                v_about: Rc::new(VecModel::default()),
                 parts: RefCell::new(parts::Parts::new()),
                 p_groups: Rc::new(VecModel::default()),
                 p_rows: Rc::new(VecModel::default()),
@@ -12760,6 +13081,8 @@ pub(crate) mod tests {
             w.set_devices(ModelRc::from(self.shelf.clone()));
             w.set_readout_rows(ModelRc::from(self.r_rows.clone()));
             w.set_readout_headings(ModelRc::from(self.r_headings.clone()));
+            w.set_verbs(ModelRc::from(self.v_rows.clone()));
+            w.set_verbs_about(ModelRc::from(self.v_about.clone()));
 
             // The shelf, the cradle, the ghost, and the Devices page's own empty line and its
             // pinned `+ New device` row — which is the control that shipped in the old shot as a
@@ -12806,6 +13129,19 @@ pub(crate) mod tests {
             }
             if on_screen(at, nav::Page::Settings) {
                 push_settings(w, &self.prefs, &self.settings, caps());
+            }
+            // §21.3's root page. `Page::None` is *no page*, which is what depth 0 shows — the same
+            // question `wire`'s own registration asks, so the shot goes through the shipped
+            // producer rather than round it.
+            if on_screen(at, nav::Page::None) {
+                push_verbs(
+                    w,
+                    &self.settings,
+                    &self.v_rows,
+                    &self.v_about,
+                    caps(),
+                    self.live.borrow().as_ref(),
+                );
             }
 
             // **The Composer's six models are set every push, and pushed through the shipped
@@ -13326,6 +13662,50 @@ pub(crate) mod tests {
     /// neighbour, so every one of them passed over a Parts page with nothing on it. The assertion
     /// that can see that is not about pixels at all — it is
     /// `every_page_this_window_shoots_is_drawn_with_what_is_on_it`, one function down.
+    /// **The root page is taller than the window, so one shot of it is a shot of its top half.**
+    ///
+    /// §21.3's page is thirteen rows before the developer switch and most of them are refused when
+    /// there is no machine, which makes them 78 px each — about 1 400 px against a window that
+    /// opens at 844. `every_page_this_window_draws_can_be_shot_with_no_window` therefore
+    /// photographs the verbs and never the fact table under them, and a page nothing photographs
+    /// is a page nobody looks at: §21.3's *demoted, not deleted* would have been unverifiable from
+    /// the shots, which is how the Devices page's clipped `Writes to` value survived.
+    ///
+    /// So this takes the same page in a window tall enough to hold it, and asserts what is only
+    /// visible there. `_out/gui/menu-bottom.png` is the picture.
+    #[test]
+    fn the_root_pages_lower_half_is_photographed_too() {
+        let _held = use_a_scratch_data_dir();
+        let w = a_window();
+        dress_the_bench(&w);
+        // Tall enough for the whole page at its longest — derived from the row count rather than
+        // typed, so a fourteenth verb moves it.
+        let tall = geometry::DRAWER_HEADER_H
+            + verbs::Verb::ALL.len() as f64 * (geometry::ROW_H + geometry::FIELD_REASON)
+            + geometry::SHELF;
+        w.window()
+            .set_size(slint::LogicalSize::new(geometry::PREF_WIDTH as f32, tall as f32));
+        let full = Furniture::new(a_furnished_library(&temp_dir("root-page-bottom")));
+        full.open_the_first_device();
+        let at = a_stack(nav::Page::None);
+        let shot = shoot(&w, &at, &full, "menu-bottom");
+        assert!(
+            shot.h as f64 > geometry::PREF_HEIGHT,
+            "the shot is {} px tall, which is no taller than the window this page already \
+             overflows — it photographs the same half again",
+            shot.h
+        );
+        // §21.3's table is under the verbs and it is the device's own six facts, from
+        // `devices::facts`. A heading with nothing under it would pass a `!is_empty()` on the
+        // heading alone, so the rows are counted.
+        assert_eq!(w.get_verbs_about_heading(), ABOUT);
+        assert!(
+            w.get_verbs_about().row_count() >= 6,
+            "`About this iPod` draws {} rows and §7.2's table is six",
+            w.get_verbs_about().row_count()
+        );
+    }
+
     #[test]
     fn every_page_this_window_draws_can_be_shot_with_no_window() {
         // Held for the length of the test rather than for the length of `a_window`: `push_settings`
@@ -14638,102 +15018,87 @@ pub(crate) mod tests {
         ))
         .expect("ui/drawer.slint");
 
-        // ── The rows of the root menu, and whether each navigates ────────────────────────────
+        // ── Where §21.3's rows go, read out of the handler that sends them ───────────────────
         //
-        // Parsed by walking `MenuPage`'s body: a `label:` opens a row, and the next `root.go(`
-        // before the following `label:` belongs to it. Crude, and that is why the controls below
-        // assert what it found rather than trusting it.
-        let menu = {
-            let at = drawer.find("component MenuPage").expect("MenuPage");
-            let end = drawer[at..].find("\n// ").map(|e| at + e).unwrap_or(drawer.len());
-            &drawer[at..end]
-        };
-        // **Line-based, and the line must START with `label:`.** Splitting on the substring also
-        // matched `accessible-label: "Menu"`, which reported the region's own name as a row and
-        // then failed it for not opening `MenuPage`. A property is a line, not a substring.
-        let mut rows: Vec<(String, bool)> = Vec::new();
-        let mut pending: Option<(String, bool)> = None;
-        for line in menu.lines() {
-            let t = line.trim();
-            if let Some(rest) = t.strip_prefix("label: \"") {
-                if let Some(prev) = pending.take() {
-                    rows.push(prev);
-                }
-                if let Some(name) = rest.split('"').next() {
-                    pending = Some((name.to_string(), false));
-                }
-            } else if t.contains("root.go(DrawerPage.") {
-                if let Some(row) = pending.as_mut() {
-                    row.1 = true;
-                }
+        // **The menu is Rust now, so the parse moved with it.** `MenuPage` carried its rows as
+        // markup — a `label:` and a `root.go(DrawerPage.…)` a few lines under it — and this test
+        // walked that. `VerbsPage` draws a repeater over rows `verbs::view` builds, so there is no
+        // label in the markup at all and nothing to walk there; what decides where a row goes is
+        // `on_verb_act`'s `open(nav::Page::…)` arms, and that is what is read.
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/main.rs"))
+            .expect("src/main.rs");
+        let mut opens: Vec<String> = Vec::new();
+        for (i, _) in src.match_indices("open(nav::Page::") {
+            let name: String =
+                src[i + "open(nav::Page::".len()..].chars().take_while(|c| c.is_alphanumeric()).collect();
+            if !name.is_empty() && !opens.contains(&name) {
+                opens.push(name);
             }
         }
-        if let Some(prev) = pending {
-            rows.push(prev);
-        }
+        opens.sort();
 
-        // **The label is a human word; the page is an identifier, and they are not the same
-        // string.** This used to concatenate — `format!("{label}Page")` — which was true only for
-        // as long as every row happened to be named after its component. Renaming `Devices` to
-        // `iPods` broke it into asking whether `iPodsPage` exists, which nothing does, and the
-        // control below is what said so instead of the gate quietly passing everything.
-        let page_of = |label: &str| match label {
-            "iPods" => Some("Devices"),
-            "Games" => Some("Games"),
-            "Settings" => Some("Settings"),
-            "Parts" => Some("Parts"),
-            "Readout" => Some("Readout"),
-            "Work" => Some("Work"),
-            // Named by no component. That is the honest disabled row this gate allows.
-            "Reference" => None,
-            _ => None,
-        };
-        let has_page = |label: &str| {
-            page_of(label).is_some_and(|c| drawer.contains(&format!("{c}Page {{")))
-        };
+        let has_page = |page: &str| drawer.contains(&format!("{page}Page {{"));
 
         // ── Controls, before any verdict ─────────────────────────────────────────────────────
         assert!(
-            rows.len() >= 6,
-            "the menu parser read {} rows, which is not this menu",
-            rows.len()
-        );
-        assert!(
-            rows.iter().any(|(n, go)| n == "iPods" && *go),
-            "the parser cannot see a row that certainly navigates, so every verdict below is `false`"
+            opens.len() >= 3,
+            "the handler parser read {opens:?}, which cannot be §21.3's page list at all — a \
+             parser that finds nothing makes every verdict below vacuous"
         );
         assert!(
             has_page("Games") && !has_page("Nonexistent") && !has_page("Reference"),
             "the page-body matcher answers the same for a page that is there, one that is not, and \
-             the row this gate exists to permit"
+             the page this gate exists to permit having no row"
         );
 
-        let dead: Vec<&str> = rows
-            .iter()
-            .filter(|(name, goes)| !goes && has_page(name))
-            .map(|(name, _)| name.as_str())
-            .collect();
-        assert!(
-            dead.is_empty(),
-            "{dead:?}: the drawer's menu names {} page(s) that exist and that this row will not \
-             open. A row with a page behind it and no `activated` is a refusal that has outlived \
-             what it refused — which is how `Games` shipped disabled over a working page",
-            dead.len()
-        );
+        // A row that navigates must have somewhere to go: a `nav::Page` with the slot the press
+        // asks for, and a body in the drawer's strip. Either missing is a press that opens a blank
+        // 420 px panel with no header and therefore no visible way out.
+        for name in &opens {
+            assert!(
+                has_page(name),
+                "§21.3's page list sends a press to `nav::Page::{name}`, which has no \
+                 `{name}Page {{` body in ui/drawer.slint — pressing it opens a blank drawer"
+            );
+            let page = from_markup(match name.as_str() {
+                "Devices" => DrawerPage::Devices,
+                "Parts" => DrawerPage::Parts,
+                "Games" => DrawerPage::Games,
+                "Work" => DrawerPage::Work,
+                "Readout" => DrawerPage::Readout,
+                "Settings" => DrawerPage::Settings,
+                other => panic!("`open(nav::Page::{other})` is new; say which markup page draws it"),
+            });
+            assert_eq!(
+                page.slot(),
+                Some(1),
+                "{name} is opened at depth 1 and `nav::Page::slot()` says otherwise, so \
+                 `Stack::go` refuses it and the press lands back on the menu"
+            );
+        }
 
-        // And the converse, so the rule stays a rule: a row that DOES navigate must have somewhere
-        // to go. Without this the fix for the above is to add `root.go` to everything.
-        let nowhere: Vec<&str> = rows
-            .iter()
-            .filter(|(name, goes)| *goes && !has_page(name))
-            .map(|(name, _)| name.as_str())
-            .collect();
+        // ── And the converse, which is the half this gate exists for ─────────────────────────
+        //
+        // **A row is allowed to be permanently disabled only when there is nothing behind it.**
+        // `Games` shipped disabled over a working page for exactly as long as nobody checked, and
+        // the operator found it by pressing it. So: every page the drawer draws at depth 1 has a
+        // verb that opens it, and a page with a body and no row is the same defect from the other
+        // side — a surface that is in the source and reachable from nothing.
+        for page in ["Devices", "Parts", "Games", "Work", "Readout", "Settings"] {
+            assert!(
+                opens.iter().any(|o| o == page),
+                "ui/drawer.slint draws a {page}Page and no row on §21.3's list opens it — the \
+                 page is reachable from nothing"
+            );
+        }
+        // `Reference` is the honest disabled row: no component draws it, `nav::Page::slot()`
+        // answers `None`, and `verbs::view` refuses it with a reason naming the gap.
         assert!(
-            nowhere.is_empty(),
-            "{nowhere:?}: this row navigates to a page with no body, so pressing it opens a blank \
-             drawer — the defect the Games page itself was fixed for"
+            !opens.iter().any(|o| o == "Reference"),
+            "a row navigates to Reference, which no markup file draws"
         );
     }
+
 
     // `every_word_of_the_menu_strip_opens_the_drawer_at_the_page_it_names` stood here, and it went
     // with the strip it was about. It had caught a real defect — five destinations drawn as one
@@ -18060,8 +18425,8 @@ pub(crate) mod tests {
     /// five `Made of` lines were undrawn and so was the one control §7.2 puts on this page.
     ///
     /// It also pins the four bindings that were reading the **bench's** two fields: `enabled` and
-    /// `reason` came from `DeviceRow.startable` / `.cradle-label`, which `window.slint:841` and
-    /// `:874` read for the drawn iPod, and `machine-rule` was a literal `true`.
+    /// `reason` came from `DeviceRow.startable` / `.cradle-label`, which `window.slint:860` and
+    /// `:893` read for the drawn iPod, and `machine-rule` was a literal `true`.
     #[test]
     fn the_devices_page_opens_a_row_and_reaches_its_start() {
         let dir = temp_dir("devices-wired");
@@ -18161,7 +18526,7 @@ pub(crate) mod tests {
         assert!(!w.get_setting_copy_enabled());
         assert!(!w.get_setting_copy_reason().is_empty(), "`Copy path` is disabled and says nothing");
 
-        // The one live control. `drawer.slint:649` fires this ordinal as
+        // The one live control. `drawer.slint:475` fires this ordinal as
         // `root.setting-toggled(1)`; `Row::CheckUpdates` is 1.
         let before = settings.borrow().check_updates_on_start;
         assert_eq!(w.get_setting_check_updates(), before, "the box does not reflect the library");
@@ -18184,6 +18549,184 @@ pub(crate) mod tests {
         assert!(
             w.get_rail().row_count() > quiet,
             "a refused `Copy path` said nothing anywhere"
+        );
+    }
+
+    /// **§21.3's root page is verbs, and every one of them either does something or says why.**
+    ///
+    /// Three claims, and each one is a defect this window has actually shipped:
+    ///
+    ///   1. **The first row is a thing to do.** The page it replaces opened on `iPods`, a noun,
+    ///      over a key/value inspector — six facts stated before one verb was offered.
+    ///   2. **`Start` is never below `Remove`.** On the device page it was: the single verb
+    ///      anybody came for sat at the bottom of the stack, under the destructive one. Here there
+    ///      is no `Remove` on the page at all and the machine controls are above the facts.
+    ///   3. **Every refused row says why, in place** (§14.1, §9.4). A disabled control with an
+    ///      empty `reason` is the construction `primitives.slint` declares against, and it is what
+    ///      a hidden option looks like once it has been drawn.
+    #[test]
+    fn the_drawers_root_page_is_verbs_and_every_refusal_states_itself() {
+        let (settings, _held) = a_fresh_installation();
+        let w = a_window();
+        let _wiring =
+            wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
+        // Depth 0 is the root page, and `Page::None` is what the drawer's own guard reads.
+        w.invoke_open_page(DrawerPage::None, 0);
+
+        let rows: Vec<VerbRow> = w.get_verbs().iter().collect();
+        assert!(
+            rows.len() >= 13,
+            "§21.3's list is thirteen rows before the developer switch and the page pushed {}",
+            rows.len()
+        );
+
+        // (1) The first row is a verb, and it is the one the operator named first.
+        assert_eq!(
+            rows[0].label, "Apple's software",
+            "the page opens on {:?} rather than on the first thing a person would do",
+            rows[0].label
+        );
+
+        // (2) The machine controls are on the page and above the facts. §21.6: *all five exist,
+        // none of them is discoverable* — this is the half that makes them discoverable.
+        for name in ["Start", "Suspend", "Resume", "Kill", "Restart"] {
+            assert!(
+                rows.iter().any(|r| r.label == name),
+                "§21.6's `{name}` is not a row, so the only way to reach it is a key nobody has \
+                 been told about"
+            );
+        }
+        assert!(
+            !rows.iter().any(|r| r.label == "Remove"),
+            "a destructive control is on the root page"
+        );
+
+        // (3) §9.4, on every row this build refuses.
+        for r in &rows {
+            if !r.enabled {
+                assert!(
+                    !r.reason.is_empty(),
+                    "`{}` is drawn disabled with nothing under it, which is a hidden option that \
+                     happens to be visible",
+                    r.label
+                );
+            }
+        }
+
+        // §21.3: *the facts are demoted, not deleted* — and on a fresh installation there is no
+        // device, so there is nothing to describe and the heading says so by being empty.
+        assert!(
+            w.get_verbs_about_heading().is_empty(),
+            "an empty library draws an `About this iPod` over six blank rows"
+        );
+    }
+
+    /// **`Start` is never below `Remove`, and the facts are under both** — §21.1's second failure,
+    /// on the page where the operator met it.
+    ///
+    /// §21.1: *facts outrank actions. The device page states six things before it offers one, and
+    /// the single verb anybody came for is at the bottom of the stack, below the destructive
+    /// `Remove`.* Two halves, and both are checked because fixing one alone leaves the complaint
+    /// standing: the ORDER within `devices::made_of`, which is Rust, and where `devices.slint`
+    /// draws the `Start` control, which is markup and was the reason `Start` was last.
+    #[test]
+    fn the_device_page_offers_before_it_states_and_start_is_never_below_remove() {
+        let at = temp_dir("device-page-order");
+        let s = a_furnished_library(&at);
+        let mut seen = Presence::new();
+        let mut page = devices::Devices::new();
+        page.open_row(&s, 0, true);
+        let v = page.view(&s, &mut seen, caps(), None);
+
+        let acts: Vec<parts::RowAction> =
+            v.detail.iter().filter_map(|d| d.action.as_ref().map(|(a, _)| *a)).collect();
+        assert!(
+            acts.contains(&parts::RowAction::Remove),
+            "the open device draws no `Remove`, so this test is measuring a page that is not there"
+        );
+        let first_fact = v
+            .detail
+            .iter()
+            .position(|d| d.action.is_none() && !d.label.is_empty())
+            .expect("§7.2's six facts");
+        let last_act = v
+            .detail
+            .iter()
+            .rposition(|d| d.action.is_some())
+            .expect("the four acts");
+        assert!(
+            last_act < first_fact,
+            "the device page states a fact at row {first_fact} and is still offering acts at \
+             {last_act} — facts outrank actions again"
+        );
+
+        // …and `Start`, which is not in `detail` at all: `devices.slint` draws it from
+        // `View::start`. It was declared after the `for` over `detail`, which is what put it under
+        // `Remove` — the ordering that made a bill of materials out of a device.
+        let markup = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/ui/devices.slint"
+        ))
+        .expect("ui/devices.slint");
+        let start = markup.find("label: root.start-row.label;").expect("the Start control");
+        let list = markup.find("for line in mine: MadeOfLine {").expect("the detail list");
+        assert!(
+            start < list,
+            "ui/devices.slint draws `Start` after the acts and the facts, so it is the last thing \
+             on the page and `Remove` is above it"
+        );
+    }
+
+    /// **A row that navigates actually navigates**, pressed through the callback the markup fires.
+    ///
+    /// `every_window_property_is_pushed_and_every_callback_registered` counts `verb-act` as
+    /// unpressed without this, which is the point it makes about every handler: one that no test
+    /// has ever run can have its body deleted and the suite stays green.
+    #[test]
+    fn pressing_a_verb_that_names_a_page_opens_that_page() {
+        let (settings, _held) = a_fresh_installation();
+        let w = a_window();
+        let _wiring =
+            wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
+        w.invoke_open_page(DrawerPage::None, 0);
+
+        let at = |label: &str| {
+            w.get_verbs()
+                .iter()
+                .find(|r: &VerbRow| r.label == label)
+                .unwrap_or_else(|| panic!("§21.3's page has no `{label}` row"))
+        };
+
+        // `Settings` is the one with no state of its own to disturb, and it is live in every
+        // build — which is what makes it the control as well as the case.
+        let row = at("Settings");
+        assert!(row.enabled, "the Settings row is refused, so this test proves nothing");
+        w.invoke_verb_act(row.verb);
+        assert_eq!(
+            w.get_drawer_page(),
+            DrawerPage::Settings,
+            "pressing `Settings` left the drawer on {:?}",
+            w.get_drawer_page()
+        );
+        assert_eq!(w.get_drawer_depth(), 1, "it did not go one level down");
+
+        // …and the page it opened was told it was on screen, which is the registry's whole job:
+        // `on_open_page` runs it after the stack moves.
+        assert!(
+            !w.get_setting_file_name().is_empty(),
+            "the Settings page was navigated to and never pushed, so it draws its type's defaults"
+        );
+
+        // Back to the root, and a second verb, so the ordinal is read off the row rather than
+        // being right by accident for one of them.
+        w.invoke_open_page(DrawerPage::None, 0);
+        let row = at("This iPod");
+        w.invoke_verb_act(row.verb);
+        assert_eq!(
+            w.get_drawer_page(),
+            DrawerPage::Devices,
+            "§21.3's `This iPod` is where the default is changed, and it opened {:?}",
+            w.get_drawer_page()
         );
     }
 
@@ -18936,7 +19479,7 @@ pub(crate) mod tests {
     /// `Action::unwired` is asked of all six verbs whether or not a group offers them.
     ///
     /// **`consequence` is in it now, and it is the half that was missing.**
-    /// `primitives.slint:663` is `text: root.enabled ? root.consequence : root.reason` — one slot,
+    /// `primitives.slint:686` is `text: root.enabled ? root.consequence : root.reason` — one slot,
     /// two producers — and only one of them was ever measured. So `removal_consequence` shipped at
     /// **880 px** in a 324 px slot and `devices.png` drew *The entry goes. Its iPod A446, seed
     /// 6182160 and its drive …*, cut off before the clause that says nothing is deleted, which is
@@ -19036,6 +19579,47 @@ pub(crate) mod tests {
         // cannot reach is an instrument reporting an absence it could not have observed
         // (AGENTS.md §6), so it is listed here by name and the constant is `pub` for this.
         say(Slot::Page, "settings_page.rs: NO_PATH", settings_page::NO_PATH);
+
+        // ── verbs.rs's three arms no fixture reaches, named rather than skipped ───────────────
+        //
+        // §21.3's `Apple's software` and `Rockbox` refuse where the **bootloader** would not reach
+        // what the row promises, and that is a fact about a composed recipe: `a_furnished_library`
+        // gives both its devices Apple's bootloader, so three of the five arms are unreachable
+        // from any fixture in this file. A sentence no fixture reaches is a sentence no gate
+        // measures (AGENTS.md §6), so `loader_refusal` is asked directly for every pairing.
+        {
+            let at = temp_dir("verb-loaders");
+            let mut lib = a_furnished_library(&at);
+            for (i, d) in lib.devices.iter_mut().enumerate() {
+                d.name = char::from(b'X' + u8::try_from(i).unwrap_or(0)).to_string();
+            }
+            let Some(d) = lib.devices.first().cloned() else {
+                panic!("the fixture library has no device to ask about")
+            };
+            for loader in compose::Loader::ALL {
+                // **The shape goes on the DEVICE that is asked about**, which is the bug this
+                // sweep had for as long as it took to read its own output: `Settings::recipe_of`
+                // reads `Device::boot_shape`, so writing it into a clone of the library and then
+                // passing the untouched device measured `Loader::Apple` three times under three
+                // different names. The first arm was over budget, which is what made the other two
+                // worth looking at.
+                let mut under = d.clone();
+                under.boot_shape = Some(
+                    compose::BootShape {
+                        loader,
+                        oses: [compose::Os::Apple, compose::Os::Rockbox].into_iter().collect(),
+                    }
+                    .render(),
+                );
+                for verb in [verbs::Verb::Apple, verbs::Verb::Rockbox] {
+                    say(
+                        Slot::Page,
+                        &format!("verbs.rs: `{}` under {loader:?}", verb.label()),
+                        &verbs::loader_refusal(&lib, &under, verb).unwrap_or_default(),
+                    );
+                }
+            }
+        }
 
         // ── main.rs's own, for the same reason ────────────────────────────────────────────────
         //
@@ -19164,6 +19748,43 @@ pub(crate) mod tests {
                             "parts.rs: the reserved iPod row's fact",
                             &reserved.fact,
                         );
+                    }
+
+                    // ── verbs.rs: §21.3's root page, over the same two libraries ──────────────
+                    //
+                    // **Every reason on that page is a `Slot::Page` one**: `verbs.slint` lays its
+                    // rows out in a body with no inset of its own, so each `Row`'s own
+                    // `pad: Geometry.page-margin` is the only inset and the slot is the drawer
+                    // less two of them — the same measure Settings' three rows get.
+                    //
+                    // Swept over both libraries, both `Caps` and both machine states, because the
+                    // refusals split on all three: an empty library refuses `Rockbox` for having no
+                    // iPod, a furnished one refuses it for what is on the drive, and a machine in
+                    // the way refuses four rows with `devices::running_rule`.
+                    for lib in [&empty, &s] {
+                        let mut vseen = ipod_machine::settings::Presence::new();
+                        let off = machine::Life::Off;
+                        let now = verbs::Now {
+                            settings: lib,
+                            life: &off,
+                            machine: running,
+                            // No machine in this sweep, so `Suspend` makes no size claim — which
+                            // is the arm the row draws whenever it is refused, and it is refused
+                            // whenever there is nothing to put down.
+                            park_bytes: None,
+                            thread: false,
+                            titles: 0,
+                            games_gone: false,
+                            // On, so the four rows the switch reveals are swept too.
+                            developer: true,
+                        };
+                        for r in verbs::view(lib, lib.devices.first(), &mut vseen, caps, now) {
+                            say(
+                                Slot::Page,
+                                &format!("verbs.rs: `{}`'s reason", r.verb.label()),
+                                &r.reason,
+                            );
+                        }
                     }
 
                     let mut dp = devices::Devices::new();

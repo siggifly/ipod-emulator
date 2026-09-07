@@ -1,0 +1,148 @@
+// The drawer's root page — docs/GUI.md §21.3, §21.6, §14.1, §9.4.
+//
+// **It replaces `MenuPage`, which was three nouns over four inventories.** `iPods`, `Games` and
+// `Settings` were destinations; behind the first was a key/value inspector that stated six facts
+// before it offered one verb, with `Start` at the bottom of the stack under the destructive
+// `Remove`. Nobody arrives at this program wanting a bootloader.
+//
+// **This file words nothing.** Every label, every value, every refusal and every escape hatch on
+// this page is `src/verbs.rs`'s, pushed as a `VerbRow` — including the ones that page fetches from
+// somewhere else rather than writing itself. A sentence typed here would be a second wording for
+// an iPod the bench is already describing, which is the drift §16.9 exists to delete.
+//
+// **The rule between the bands is a row property, not a count.** `rule-above` comes off
+// `verbs::Verb::group()`, so §21.3's horizontal line moves when the groups move and no markup file
+// knows how many rows are above it — which matters because the developer switch removes four.
+//
+// **`About this iPod` is last and it is not a control.** §21.3 demotes the six-row fact table under
+// the verbs rather than deleting it: it is honest and this project values that over tidiness. It is
+// drawn with `MadeOfLine`, the same component the Devices page uses, from `devices::facts`, the
+// same producer — one table, one wording, two surfaces.
+
+// **One `@geometry` read and no literal beside it** — the fact table's own inset, because
+// `MadeOfLine` carries no padding of its own while every `Row` on this page does.
+// `no_geometry_literal_survives_in_the_markup` is what stops that becoming a typed 24.
+import { Ink } from "tokens.slint";
+import { Geometry } from "@geometry";
+import { DetailRow, DrawerHeader, Row, Scroll, VerbRow } from "primitives.slint";
+import { MadeOfLine } from "devices.slint";
+
+export component VerbsPage inherits Rectangle {
+    /// §21.3's list, in order, already filtered by the developer switch.
+    in property <[VerbRow]> rows;
+    /// §21.3's demoted facts — `devices::facts`, the Devices page's own six.
+    in property <[DetailRow]> about;
+    /// The heading over them. A string rather than a literal for this file's own rule: the page
+    /// words nothing, and `About this iPod` is a name for a device the model knows about.
+    in property <string> about-heading;
+
+    callback close();
+    /// The ordinal off the row, never the repeater index — see `VerbRow.verb`.
+    callback act(int);
+
+    background: Ink.bg;
+
+    VerticalLayout {
+        spacing: 0px;
+
+        DrawerHeader {
+            back: "Close";
+            title: "Menu";
+            back-pressed => {
+                root.close();
+            }
+        }
+
+        // **It scrolls, and at this length it has to.** Thirteen verb rows with the developer
+        // switch off, seventeen with it on, plus a heading and six facts — and a disabled
+        // `Pressable` is `ROW_H + FIELD_REASON` tall because §9.4's reason slot is reserved under
+        // it, so a page where the machine is off draws four of §21.6's five at 78 px. Without a
+        // Scroll the tail is not merely invisible: a clipped item is out of the accessible tree
+        // and `WindowInner::move_focus` cannot recover it, because the drawer clips with a
+        // Rectangle rather than a Flickable.
+        scroll := Scroll {
+            vertical-stretch: 1;
+            min-height: 0px;
+            preferred-height: 0px;
+            viewport-height: body.preferred-height;
+
+            body := VerticalLayout {
+                width: scroll.width;
+                alignment: start;
+                spacing: 0px;
+                accessible-role: AccessibleRole.list;
+                accessible-label: "Menu";
+
+                for r[i] in root.rows: VerticalLayout {
+                    spacing: 0px;
+
+                    // §21.3's one horizontal rule, drawn wherever the band changes. `if` rather
+                    // than `visible`, because this element holds no state to throw away — §16.3's
+                    // rule is about subtrees with focus, hover or a scroll offset in them, and a
+                    // 1 px line has none.
+                    if r.rule-above: Rectangle {
+                        height: 1px;
+                        background: Ink.line;
+                    }
+
+                    Row {
+                        index: i;
+                        count: root.rows.length;
+                        label: r.label;
+                        value: r.value;
+                        sub: r.sub;
+                        chevron: r.chevron;
+                        enabled: r.enabled;
+                        reason: r.reason;
+                        machine-rule: r.machine-rule;
+                        escape-hatch: r.escape-hatch;
+                        activated => {
+                            root.act(r.verb);
+                        }
+                        gained-focus => {
+                            scroll.ensure-visible(self.absolute-position.y, self.height);
+                        }
+                    }
+                }
+
+                // ── §21.3: the facts, demoted ────────────────────────────────────────────────
+                //
+                // Drawn only where there is a device to describe. §9.1 forbids a bare *nothing
+                // here*, and an empty library already has its sentence on the row above — the
+                // heading and six blank facts under it would be that sentence contradicted.
+                if root.about-heading != "": Rectangle {
+                    height: 1px;
+                    background: Ink.line;
+                }
+
+                if root.about-heading != "": Row {
+                    index: root.rows.length;
+                    count: root.rows.length + 1;
+                    label: root.about-heading;
+                    heading: true;
+                }
+
+                // **Inset by the page margin, because `MadeOfLine` has none of its own.** Every
+                // `Row` above carries `pad: Geometry.page-margin` inside itself; a `MadeOfLine`
+                // relies on the body it is laid out in, which on the Devices page is padded and
+                // here is not. Without this the fact labels start 24 px to the left of every row
+                // above them — read it off `_out/gui/menu-tall.png`, where `iPod` and `Drive` sat
+                // outside the column `Apple's software` and `Settings` stand in.
+                for d[i] in root.about: MadeOfLine {
+                    d: d;
+                    index: i;
+                    x: Geometry.page-margin;
+                    width: parent.width - 2 * Geometry.page-margin;
+                    // **Nothing is bound to `act`**, and that is §21.3's *demoted, not deleted*
+                    // as a wiring decision: `devices::facts` returns the six facts and the machine
+                    // rules and no acts at all, so `d.has-action` is false on every row here and
+                    // the branch that would fire this is not drawn. Binding it would be a route
+                    // into `RowAction` from a page whose subject is a description.
+                    reveal(y, h) => {
+                        scroll.ensure-visible(y, h);
+                    }
+                }
+            }
+        }
+    }
+}
