@@ -242,7 +242,7 @@ export component MainWindow inherits Window {
     // **The third probe, and the one that takes a string in.** The two above measure a literal
     // this file names; §9.4's refusals are worded in Rust and there are dozens of them, so what
     // this measures is whatever `reason-probe` is set to — at `Metric.label-size` and
-    // `Metric.weight-label`, which is `ReasonSlot`'s own `Text` (`primitives.slint:332-333`) and
+    // `Metric.weight-label`, which is `ReasonSlot`'s own `Text` (`primitives.slint:481-482`) and
     // not the body face the two above use.
     //
     // `every_reason_this_window_draws_fits_the_slot_it_is_drawn_in` sets it once per reason and
@@ -606,8 +606,22 @@ export component MainWindow inherits Window {
         // §21.7's second view. **The same act the drawer's row performs**, invoked rather than
         // repeated: `on_verb_act`'s `Panel` arm is where opening and closing are decided, and a
         // second decision here is how a key and a row come to disagree about which one is a toggle.
+        //
+        // **`Control + Meta`, because ⌃⌘P is two modifiers and `@keys` is exact** — issue #37. This
+        // shipped as `@keys(Control + "p")`, which the swap two comments up makes **⌘P**, while the
+        // row prints `Ctrl-Cmd-P` and §21.7 documents `⌃⌘P`. `Keys::matches` ends
+        // `key_event.modifiers == expected_modifiers` (`i-slint-core-1.17.1/input.rs:780`), so a
+        // chord carrying `{control, meta}` never fired a binding declaring `{control}` and the
+        // documented keystroke did nothing at all. §16.8 states the rule for `⌃⌘F` in exactly these
+        // words — *"needs both modifiers, so on Apple platforms it is `@keys(Control + Meta + …)`"*
+        // — and this is the same key on the same platform.
+        //
+        // **Off Apple platforms this is Win+Ctrl+P and is never delivered**, which §16.8 records for
+        // the fullscreen row: the shell and most compositors reserve it. The drawer's own row is the
+        // route there, and it is the route on macOS too — the chord is the shortcut for it, not the
+        // only way in.
         KeyBinding {
-            keys: @keys(Control + "p");
+            keys: @keys(Control + Meta + "p");
             activated => {
                 root.verb-act(root.panel-verb);
             }

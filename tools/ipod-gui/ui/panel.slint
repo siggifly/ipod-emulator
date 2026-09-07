@@ -95,8 +95,20 @@ export component PanelWindow inherits Window {
         //
         // **Inside the `FocusScope`, because the compiler requires it** — *KeyBinding can only be
         // within a FocusScope element*. `window.slint` has the same arrangement for `⌘\` and `⌘,`.
+        //
+        // **Both modifiers are named, because ⌃⌘F is two of them and `@keys` matches exactly** —
+        // issue #37. This shipped as `@keys(Control + "f")`, which with the swap above is **⌘F**;
+        // `Keys::matches` ends `key_event.modifiers == expected_modifiers`
+        // (`i-slint-core-1.17.1/input.rs:780`), so the chord this window documents — carrying
+        // `{control, meta}` — never fired a binding declaring `{control}`, and ⌘F did something
+        // this program never meant to offer. §16.8 writes the rule out for this exact key:
+        // *"`⌃⌘F` needs both modifiers, so on Apple platforms it is `@keys(Control + Meta + "F")`"*.
+        //
+        // Off Apple platforms the same binding is Win+Ctrl+F, which §16.8 records as reserved by the
+        // Windows shell and by most compositors and therefore never delivered. That is why `F11`
+        // below is not a nicety: it is the whole fullscreen key everywhere but macOS.
         KeyBinding {
-            keys: @keys(Control + "f");
+            keys: @keys(Control + Meta + "f");
             activated => {
                 root.toggle-fullscreen();
             }

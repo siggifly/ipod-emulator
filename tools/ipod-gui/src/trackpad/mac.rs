@@ -302,12 +302,7 @@ impl Plumbing {
             return;
         };
 
-        let want = self.tracked.get();
-        let primary = live
-            .iter()
-            .find(|t| ident(t) == want)
-            .or_else(|| live.iter().min_by_key(|t| ident(t)));
-        let Some(primary) = primary else {
+        let Some(primary) = owner(&live, self.tracked.get(), |t| ident(t)) else {
             self.tracked.set(0);
             self.mode.frame(Frame { surface, contact: None });
             return;
@@ -318,10 +313,15 @@ impl Plumbing {
         let Some(contact) = contact_of(np.x, np.y, surface, phase_of(primary.phase())) else {
             return;
         };
+        // **`owner` is what makes `n=2` readable** — issue #38. The log said how many fingers were
+        // down and never which one the wheel was following, so a report of two contacts could not
+        // be told apart from a mark alternating between them. It is the low half of the identity
+        // pointer, which is nothing but a tag: what it is for is being the **same** every frame.
         if verbose() {
             eprintln!(
-                "[trackpad] n={} norm=({:.4},{:.4}) dev={:.2}x{:.2}mm mm=({:+.2},{:+.2})",
+                "[trackpad] n={} owner={:04x} norm=({:.4},{:.4}) dev={:.2}x{:.2}mm mm=({:+.2},{:+.2})",
                 live.len(),
+                self.tracked.get() & 0xffff,
                 np.x,
                 np.y,
                 surface.w,
@@ -580,6 +580,39 @@ fn ident(t: &NSTouch) -> usize {
     Retained::as_ptr(&id) as usize
 }
 
+/// **Which finger owns the wheel when more than one is on the pad.** Issue #38.
+///
+/// `Frame::contact` is one contact and the pad reports as many as the hand puts down — the
+/// operator's own log reads `n=2` throughout, because a second finger resting near the first is an
+/// ordinary way to hold a laptop. So a choice is made, and this is it, in one function so that it
+/// is one rule:
+///
+/// **The finger already being followed keeps the wheel for as long as it is down. When it goes, the
+/// lowest identity takes over.**
+///
+/// # Why the first half is the whole point
+///
+/// A rule that picked afresh each frame would hand the wheel back and forth between two fingers
+/// that are both resting, and the mark drawn at [`crate::wheel::ghost_path`] would jump between
+/// them — as would the wheel, because a contact's angle is absolute. The tracked identity is what
+/// stops that: it is set from whatever this returns and consulted on the next frame, so a contact
+/// that persists is followed and nothing else can take it.
+///
+/// # Why the tie-break is `min` and not `first`
+///
+/// `allTouches` is an `NSSet` and a set has no order — the sequence `iter()` hands back is not
+/// promised to be the same twice, so `first()` would be a fresh coin toss every frame, which is
+/// exactly what the first half exists to prevent. `NSTouch.identity` is documented to be one object
+/// for the life of a touch, so the smallest of them is arbitrary **and the same every frame**,
+/// which is the property this needs. It decides only who starts; after that the first half holds.
+///
+/// `tracked` is `0` for *nobody yet*, which no live identity can be — it is an object pointer.
+fn owner<T>(live: &[T], tracked: usize, id: impl Fn(&T) -> usize) -> Option<&T> {
+    live.iter()
+        .find(|t| id(t) == tracked)
+        .or_else(|| live.iter().min_by_key(|t| id(t)))
+}
+
 /// ⌃⌘ exactly — not ⌃⌥⌘, not ⇧⌃⌘. A chord this program has not defined must not engage a mode.
 fn is_chord(flags: NSEventModifierFlags) -> bool {
     let f = flags & NSEventModifierFlags::DeviceIndependentFlagsMask;
@@ -596,6 +629,42 @@ mod tests {
     /// This machine's pad, as the spike measured it: `device size (points): NSSize { width: 342.99,
     /// height: 209.76 }`, across 891 touch events.
     const PAD: NSSize = NSSize { width: 342.99, height: 209.76 };
+
+    /// **Two fingers on the pad, and the wheel follows one of them — the same one every frame.**
+    /// Issue #38.
+    ///
+    /// The operator's log reads `n=2` throughout and `Frame::contact` is singular, so a choice is
+    /// being made; this is the assertion that it is a *rule* rather than whatever order an `NSSet`
+    /// happened to hand back. [`owner`] is exercised over plain integers because what is being
+    /// tested is the rule and not AppKit: an `NSTouch` cannot be constructed here, and a rule that
+    /// needed one in order to be checked is a rule nothing would ever check.
+    ///
+    /// **How to make it go red:** drop the `find` and leave the `min_by_key`. Case 2 fails —
+    /// a finger that lands with a lower identity steals the wheel mid-gesture, which is the mark
+    /// jumping across the ring while the hand has not moved.
+    #[test]
+    fn two_fingers_on_the_pad_and_the_wheel_follows_the_same_one_every_frame() {
+        let id = |t: &usize| *t;
+
+        // 1. Nobody yet: the lowest identity starts, and asking again is the same answer.
+        let both = [0x9000usize, 0x4000];
+        assert_eq!(owner(&both, 0, id), Some(&0x4000), "the first frame picked no finger");
+        assert_eq!(owner(&both, 0, id), Some(&0x4000), "one set gave two answers");
+
+        // 2. …and once it is being followed, nothing takes it — not a finger with a lower
+        //    identity, and not the two arriving in the other order.
+        assert_eq!(owner(&both, 0x9000, id), Some(&0x9000), "a lower identity stole the wheel");
+        let swapped = [0x4000usize, 0x9000];
+        assert_eq!(owner(&swapped, 0x9000, id), Some(&0x9000), "the set's order decided it");
+
+        // 3. The tracked finger lifts and the one still down takes over, rather than the wheel
+        //    going dead under a hand that is still on the pad.
+        assert_eq!(owner(&[0x4000usize], 0x9000, id), Some(&0x4000));
+
+        // 4. The hand leaves. `touches` reads this as `contact: None` and clears the tracking, so
+        //    the next gesture starts the rule again rather than resuming a finger that is gone.
+        assert_eq!(owner::<usize>(&[], 0x9000, id), None);
+    }
 
     /// **Points at 72 to the inch are millimetres you can measure.** 342.99 pt is 12.1 cm, which is
     /// the pad on this machine, and it is what makes the core's unit honest rather than a name.

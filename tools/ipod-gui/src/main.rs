@@ -934,46 +934,6 @@ fn wire(
     // dropped, so one started in this function and dropped at its closing brace never fires.
     let machine_timer = Rc::new(slint::Timer::default());
 
-    // **One tick, and the timer is one caller of it.** [`pump_once`]'s own doc says *a test drives
-    // exactly what the timer drives*, and that was only half true: the closure below was reachable
-    // from nothing but the timer, and under `i-slint-backend-testing` the timer never fires. So
-    // everything after the press — the download, the build, the install, the handoff — was
-    // unreachable from any test that went through `wire`, which is §20 item 12 one layer out.
-    // `Wiring` hands this back, so the same closure the timer runs is the one a caller runs.
-    let tick: Rc<dyn Fn()> = {
-        let timer = timer.clone();
-        let live = live.clone();
-        let work = work.clone();
-        let rail = rail.clone();
-        let rows = rows.clone();
-        let devices = devices.clone();
-        let settings = settings.clone();
-        let showing_welcome = showing_welcome.clone();
-        let composer = composer.clone();
-        let reads = reads.clone();
-        let repaint_all = repaint_all.clone();
-        let weak = window.as_weak();
-        Rc::new(move || {
-            let Some(w) = weak.upgrade() else { return };
-            pump_once(
-                &w,
-                &work,
-                &rail,
-                &rows,
-                &devices,
-                &settings,
-                &showing_welcome,
-                &composer,
-                &reads,
-                &repaint_all,
-                &timer,
-                caps,
-                cost,
-                &live,
-                launch,
-            );
-        })
-    };
     // ── §12's own tick, and it is not the build's ───────────────────────────────────────────────
     //
     // **Two timers because they watch two things at two rates.** The build tick above is 10 Hz and
@@ -1043,6 +1003,50 @@ fn wire(
         })
     };
 
+    // **One tick, and the timer is one caller of it.** [`pump_once`]'s own doc says *a test drives
+    // exactly what the timer drives*, and that was only half true: the closure below was reachable
+    // from nothing but the timer, and under `i-slint-backend-testing` the timer never fires. So
+    // everything after the press — the download, the build, the install, the handoff — was
+    // unreachable from any test that went through `wire`, which is §20 item 12 one layer out.
+    // `Wiring` hands this back, so the same closure the timer runs is the one a caller runs.
+    let tick: Rc<dyn Fn()> = {
+        let timer = timer.clone();
+        // **§12.2's handoff starts a machine, so this tick has to be able to start its clock** —
+        // issue #35. See `hand_off`, which is where the two are now one act.
+        let ticking_machine = ticking_machine.clone();
+        let live = live.clone();
+        let work = work.clone();
+        let rail = rail.clone();
+        let rows = rows.clone();
+        let devices = devices.clone();
+        let settings = settings.clone();
+        let showing_welcome = showing_welcome.clone();
+        let composer = composer.clone();
+        let reads = reads.clone();
+        let repaint_all = repaint_all.clone();
+        let weak = window.as_weak();
+        Rc::new(move || {
+            let Some(w) = weak.upgrade() else { return };
+            pump_once(
+                &w,
+                &work,
+                &rail,
+                &rows,
+                &devices,
+                &settings,
+                &showing_welcome,
+                &composer,
+                &reads,
+                &repaint_all,
+                &timer,
+                &ticking_machine,
+                caps,
+                cost,
+                &live,
+                launch,
+            );
+        })
+    };
     let ticking: Rc<dyn Fn()> = {
         let timer = timer.clone();
         let tick = tick.clone();
@@ -1362,8 +1366,11 @@ fn wire(
                     // §12.2's handoff. Everything but the boot was done and the boot was Phase 7;
                     // this is Phase 7, so the plan hands the finished iPod to the machine rather
                     // than naming a terminal command that would do it for us.
-                    hand_off(&live, &settings, &rail, &name, launch);
-                    ticking_machine();
+                    //
+                    // **The clock is `hand_off`'s now** — issue #35. It used to be a
+                    // `ticking_machine()` on the line below, and the tick's copy of this handoff
+                    // did not have one.
+                    hand_off(&live, &settings, &rail, &name, launch, &ticking_machine);
                 }
                 Route::Existing(Ok(name)) => {
                     // **The press starts the machine.** It filed a note saying running was not
@@ -3352,7 +3359,7 @@ fn wire(
 
     Wiring {
         _tick: timer,
-        _machine_timer: machine_timer,
+        machine_timer,
         _settle: settle,
         _lift: lift,
         live,
@@ -3361,6 +3368,7 @@ fn wire(
         tick,
         lifted,
         files,
+        panel,
         _trackpad: trackpad,
         _watch: watch,
     }
@@ -3402,7 +3410,12 @@ struct Wiring {
     /// §12's own timer, held for the same reason as the build's: a `slint::Timer` stops the moment
     /// it is dropped. Stopping the *machine* is the `Drop` impl below, and it is a separate act —
     /// the timer is this struct's alone, and the machine is shared with every registered callback.
-    _machine_timer: Rc<slint::Timer>,
+    ///
+    /// **Named rather than `_`-prefixed because whether it is RUNNING is the observable issue #35
+    /// turns on**: a handoff that starts a machine and not this is a booting iPod nobody is
+    /// looking at, and the operator presses again.
+    #[allow(dead_code)]  // retired when: something outside the tests reads it — `wire`'s own closures hold their own clone, and this field exists to keep the timer alive
+    machine_timer: Rc<slint::Timer>,
     /// §16.4's coalescing window, and it is the third timer for the first reason: dropped, it never
     /// fires, and a drop of eight files would sit in `drops::Landing` for ever with nothing coming
     /// back to close it. Single-shot and restarted per `DroppedFile`, so it costs nothing while
@@ -3455,6 +3468,14 @@ struct Wiring {
     /// It is the same arrangement `tick` is under and for the same reason: everything past the
     /// decode is drivable with no display, and everything before it is three lines of `match`.
     files: Rc<dyn Fn(drops::Event)>,
+    /// **§21.7's second view, so a test can ask whether `⌃⌘P` opened one** — issue #37.
+    ///
+    /// It is handed back for the reason `work` is: the pop-out is reachable only through
+    /// `on_verb_act`, and whether that call produced a window is a fact about the holder rather
+    /// than about anything on the main window. Without it the only observable of the whole feature
+    /// was that pressing it did not panic, which is what shipped it broken.
+    #[allow(dead_code)]  // retired when: something outside the tests reads the holder — nothing does, `wire`'s own closures capture their own clone
+    panel: Rc<RefCell<Option<PanelWindow>>>,
     /// **§21.8's trackpad mode, held so that dropping this gives the cursor back.**
     ///
     /// It is the same arrangement the four timers above are under, one step sharper: a timer that
@@ -3637,6 +3658,11 @@ fn pump_once(
     // Every page that has registered a re-push, run as one. The registry is built in `wire`.
     repaint: &Repaint,
     timer: &slint::Timer,
+    // **§12's clock, because the handoff below starts a machine and a machine nobody looks at is
+    // the whole of issue #35.** It is the window's own `ticking_machine`, handed in rather than
+    // rebuilt: `Timer::start` restarts a running timer, so a second caller would push the next
+    // frame out instead of making one arrive sooner.
+    ticking_machine: &Rc<dyn Fn()>,
     caps: rail::Caps,
     cost: compose::Cost,
     // §7.2's one machine. The build tick does not drive it — [`pump_machine`] does — but a library
@@ -3716,7 +3742,7 @@ fn pump_once(
     // §12.2's handoff. Every step but the boot is done, and the boot is what this tick hands over:
     // the plan made an iPod and the machine starts it, which is what the plan was for.
     if let Some(name) = tick.ready {
-        hand_off(live, settings, rail, &name, launch);
+        hand_off(live, settings, rail, &name, launch, ticking_machine);
         sync_rail(window, rows, &rail.borrow(), caps, work.borrow().shape());
     }
 
@@ -4506,6 +4532,8 @@ fn hand_off(
     rail: &Rc<RefCell<rail::Rail>>,
     name: &str,
     launch: args::Machine,
+    // **§12's 60 Hz clock, and it is a parameter so that it cannot be forgotten** — issue #35.
+    ticking_machine: &Rc<dyn Fn()>,
 ) {
     let resolved = {
         let mut s = settings.borrow_mut();
@@ -4524,8 +4552,12 @@ fn hand_off(
     // plan has just finished making — so what it boots is the operating system it was just given,
     // whatever row somebody pressed before the build started.
     let outcome = start_machine(live, &settings.borrow(), index, launch, emu::BootTarget::Os);
-    if let Err(f) = outcome {
-        rail.borrow_mut().failed("start", name, f);
+    match outcome {
+        // **And the window starts looking at it**, which is the half that was missing — issue #35.
+        Ok(()) => ticking_machine(),
+        Err(f) => {
+            rail.borrow_mut().failed("start", name, f);
+        }
     }
 }
 
@@ -10822,17 +10854,22 @@ pub(crate) mod tests {
     /// are:
     ///
     /// ```text
-    /// pressed vs hovered   8963 px   2870 inside the wheel disc
+    /// pressed vs hovered   9708 px   3615 inside the wheel disc
     ///                                6093 outside it — the cradle's focus ring going out,
     ///                                a 421 x 687 outline around body-plus-cradle-band
-    /// after   vs pressed   2870 px   ALL of them inside the disc — the ghost, exactly
+    /// after   vs pressed   3615 px   ALL of them inside the disc — the ghost, exactly
     /// after   vs hovered   6093 px   NONE of them inside the disc
     /// ```
+    ///
+    /// **The mark's own figure was 2870 until issue #38.** Widening the band from the hit test's
+    /// inner radius to the drawn ring's — `the_mark_on_the_wheel_covers_the_ring_it_is_drawn_on` is
+    /// the section that says why — moved it to 3615, re-measured here rather than scaled. The
+    /// focus ring's 6093 is untouched by that change and is the same reading it always was.
     ///
     /// Two things follow, and the second is the one that matters. The final control was never sound
     /// once modality is tracked: focus is deliberately sticky, so lifting a pointer cannot restore
     /// a ring that a pointer put out, and *"the window came back"* asks for something the design
-    /// forbids. **And `changed > 200` had stopped measuring the ghost** — 6093 of those 8963 pixels
+    /// forbids. **And `changed > 200` had stopped measuring the ghost** — 6093 of those 9708 pixels
     /// were the focus ring, so it would have passed with the ghost drawing nothing at all. An
     /// assertion that cannot fail for the reason it names is `AGENTS.md` §6's shape, and it is a
     /// worse defect than the red one above it.
@@ -10919,7 +10956,7 @@ pub(crate) mod tests {
             drew > 200,
             "only {drew} pixels changed INSIDE THE WHEEL when a finger went down on it, so the \
              path Slint was handed drew nothing — which no assertion about the string could have \
-             seen. (Counting the whole window instead answers 8963 here, of which 6093 are the \
+             seen. (Counting the whole window instead answers 9708 here, of which 6093 are the \
              focus ring going out, so it would pass over a ghost that drew nothing.)"
         );
 
@@ -10947,6 +10984,249 @@ pub(crate) mod tests {
             left, 0,
             "{left} pixels of the wheel did not come back after the finger lifted, so the mark \
              left something behind"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **The mark covers the ring it claims — the whole band, at the whole angle.** Issue #38.
+    ///
+    /// `where_the_wheel_is_being_touched_is_drawn_on_it` above counts the mark's pixels and their
+    /// bounding box and **asserts nothing about its shape**: 2 870 px in a 72 x 72 box is equally
+    /// true of a wedge, a dot and a smear, and it was true of a mark that stopped a third of the
+    /// band short of the centre button. The operator's words for that gap were *"it partially fills
+    /// out the angle, it's missing some closer to the center"*, and no assertion in this file could
+    /// see it. So this one is about the shape.
+    ///
+    /// **Two properties, and they fail independently**, which is why they are not one assertion:
+    ///
+    /// 1. **Reach.** The mark's innermost lit pixel sits `INSET` outside the drawn centre button and
+    ///    its outermost sits `INSET` inside the wheel's edge — so it covers the ring surface *as
+    ///    drawn*, from the moulding to the rim. This is the one the operator reported: before the
+    ///    fix the inner edge was at 0.55 of the wheel's radius against a button drawn at 0.334.
+    /// 2. **Squareness.** The angular span at the inner end equals the span at the outer end, and
+    ///    both are `PATCH_DEG`. An annular sector has parallel arcs; a wedge converges to a point,
+    ///    and its inner span would be a fraction of its outer one. `ghost_path` builds a sector
+    ///    today and this is what keeps it one.
+    ///
+    /// **How to make each one go red:**
+    ///
+    /// - reach — put `ring.inner + INSET` back in `ghost_path`, which is `WheelRing`'s hit-test
+    ///   radius and not the drawing's. The inner edge goes to 0.55 and property 1 fails by 0.19 of
+    ///   the wheel's radius.
+    /// - squareness — give the inner arc the mid angle at both ends (`at(ri, mid)` twice). The mark
+    ///   becomes a wedge, the outer span is unchanged, and the inner span collapses.
+    ///
+    /// It is measured in **polar coordinates about the drawn wheel's own centre**, which is the
+    /// space the claim is in: a bounding box cannot distinguish any of these shapes and that is how
+    /// this shipped.
+    #[test]
+    fn the_mark_on_the_wheel_covers_the_ring_it_is_drawn_on() {
+        let (w, wiring, dir) = a_wired_bench_with_a_machine("wheel-ghost-shape");
+        let on = on_the_drawn_ring(12);
+        let shot = |w: &MainWindow| {
+            let px = w.window().take_snapshot().expect("the testing backend rasterizes");
+            let wide = px.width() as usize;
+            (px.as_slice().iter().map(|p| [p.r, p.g, p.b]).collect::<Vec<_>>(), wide)
+        };
+
+        drag_to(&w, on);
+        (wiring.machine_tick)();
+        let (hovered, wide) = shot(&w);
+        press_at(&w, on);
+        (wiring.machine_tick)();
+        assert!(!w.get_wheel_ghost().is_empty(), "a press on the ring drew no ghost at all");
+        let (pressed, _) = shot(&w);
+
+        // Every pixel the press changed inside the wheel's disc, as (radius, bearing) — radius as a
+        // fraction of the drawn wheel's own radius, bearing in `point_at`'s convention: twelve
+        // o'clock is zero and it grows clockwise in a y-down space.
+        let (cx, cy) = drawn_wheel_centre();
+        let radius = geometry::WHEEL_D as f32 * dressed_fit().hero_logical as f32 / 2.0;
+        let scale = w.window().scale_factor();
+        let mut polar: Vec<(f32, f32)> = Vec::new();
+        for (i, (a, b)) in hovered.iter().zip(pressed.iter()).enumerate() {
+            if a == b {
+                continue;
+            }
+            let (x, y) = ((i % wide) as f32 / scale, (i / wide) as f32 / scale);
+            let (dx, dy) = (x - cx, y - cy);
+            let r = (dx * dx + dy * dy).sqrt() / radius;
+            if r <= 1.0 {
+                polar.push((r, dx.atan2(-dy).to_degrees().rem_euclid(360.0)));
+            }
+        }
+        assert!(polar.len() > 200, "only {} pixels of the wheel changed", polar.len());
+
+        // ── 1. Reach: the band it covers is the band that is DRAWN ──────────────────────────────
+        let r_min = polar.iter().map(|p| p.0).fold(f32::INFINITY, f32::min);
+        let r_max = polar.iter().map(|p| p.0).fold(0.0f32, f32::max);
+        let inset = wheel::INSET / (wheel::VIEW / 2.0);
+        let want_in = wheel::DRAWN_BUTTON + inset;
+        let want_out = 1.0 - inset;
+        // A pixel is sampled at its centre and the edge is anti-aliased, so half a pixel of the
+        // 120 px radius — 0.004 — is the floor on the tolerance rather than the tolerance.
+        assert!(
+            (r_min - want_in).abs() < 0.03,
+            "the mark's inner edge is at {r_min:.3} of the wheel's radius and the centre button is \
+             drawn out to {:.3}, so it leaves {:.3} of drawn ring uncovered. It belongs at \
+             {want_in:.3} — the button's edge plus the inset",
+            wheel::DRAWN_BUTTON,
+            r_min - wheel::DRAWN_BUTTON,
+        );
+        assert!(
+            (r_max - want_out).abs() < 0.03,
+            "the mark's outer edge is at {r_max:.3} and belongs at {want_out:.3}",
+        );
+
+        // ── 2. Squareness: an annular sector, not a wedge ───────────────────────────────────────
+        //
+        // The span is measured in a band at each end rather than on one row of pixels, because a
+        // single radius can be clipped by the rasterizer at either corner. Bearings are taken
+        // relative to the patch's own mid angle so that a mark straddling twelve o'clock does not
+        // read as 340 degrees wide; position 12 does not, and doing it anyway is what stops this
+        // test being about the position it happens to use.
+        let mid = 12.0 / 96.0 * 360.0;
+        let span = |lo: f32, hi: f32| -> f32 {
+            let mut off: Vec<f32> = polar
+                .iter()
+                .filter(|(r, _)| *r >= lo && *r <= hi)
+                .map(|(_, d)| (d - mid + 180.0).rem_euclid(360.0) - 180.0)
+                .collect();
+            off.sort_by(f32::total_cmp);
+            match (off.first(), off.last()) {
+                (Some(a), Some(b)) => b - a,
+                _ => 0.0,
+            }
+        };
+        let band = 0.08;
+        let inner = span(r_min, r_min + band);
+        let outer = span(r_max - band, r_max);
+        assert!(
+            (outer - wheel::PATCH_DEG).abs() < 3.0,
+            "the mark is {outer:.1} degrees wide at its outer edge, and a fingertip is {}",
+            wheel::PATCH_DEG
+        );
+        assert!(
+            (inner - outer).abs() < 3.0,
+            "the mark spans {outer:.1} degrees at the rim and {inner:.1} at the centre button, so \
+             its sides converge — it is a wedge rather than an annular sector, and it does not \
+             cover the angle it claims all the way across the ring"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **A booting iPod shows the boot screen its ROM carries** — issue #36.
+    ///
+    /// The operator's report is *"no logo visible when booting up"*, and the issue asks which of
+    /// three things is true. This is the one nothing in this window could answer: **the machine
+    /// draws it and the window does not show it.** §12.2 gives `Booting` the ROM's boot screen,
+    /// `Glass::Boot` and `Glass::Live` both resolve to the live frame because *"the ROM draws it
+    /// into the same co-processor surface everything else lands in"*, and no test had ever put a
+    /// boot screen into that surface and looked at the glass.
+    ///
+    /// **The picture is the shipped one and the route is the shipped one.** `nor::boot_screen` is
+    /// what `emu::build` seeds a synthesised iPod's co-processor with before its first instruction;
+    /// `emu::read_framebuffer` is the RGB565 → RGB888 conversion the run loop uses; `pump_machine`
+    /// is what the 60 Hz timer calls. Nothing here is a hand-filled `Out.fb`.
+    ///
+    /// **The control is the second half and it is what makes the first half mean anything.** A
+    /// machine that has published a black frame draws a uniformly black panel — so *some pixels
+    /// are lit* is a claim that can fail, and it fails on exactly the fault the operator described.
+    #[test]
+    fn a_booting_ipod_shows_the_boot_screen_its_rom_carries() {
+        let dir = temp_dir("boot-screen");
+        let (mut s, d) = a_composed_device(&dir);
+        s.devices.push(d.clone());
+        let w = a_window();
+        let wiring =
+            wire(&w, Rc::new(RefCell::new(s)), args::Machine::default(), Rc::new(drops::Shell::Native));
+        w.show().expect("the headless backend shows a window");
+        w.window().set_size(slint::LogicalSize::new(
+            geometry::PREF_WIDTH as f32,
+            geometry::PREF_HEIGHT as f32,
+        ));
+
+        // **The panel's own rectangle on the drawn body**, derived from §6.6's ratios the same way
+        // `drawn_wheel_centre` derives the wheel's and for the same reason: `ElementHandle` needs
+        // debug info `build.rs` emits in debug profiles only, and both CI workflows are `--release`.
+        let hero = dressed_fit().hero_logical;
+        let body_y = geometry::PREF_HEIGHT
+            - geometry::GAP_2
+            - geometry::CRADLE_LABEL
+            - geometry::GAP_1
+            - geometry::CRADLE_BAND
+            - hero;
+        let body_w = geometry::BODY_ASPECT * hero;
+        let body_x = (geometry::PREF_WIDTH - body_w) / 2.0;
+        let (sw, sh) = (geometry::SCREEN_W * hero, geometry::SCREEN_H * hero);
+        let (sx, sy) = (body_x + (body_w - sw) / 2.0, body_y + geometry::SCREEN_TOP * hero);
+
+        // How many pixels of the drawn glass are lit — the mark is white ink on black, so this is
+        // the count the picture is about. Inset by two logical pixels so the bezel's own edge and
+        // its anti-aliasing are outside the window being counted.
+        let lit_on_the_glass = |w: &MainWindow| -> usize {
+            let px = w.window().take_snapshot().expect("the testing backend rasterizes");
+            let wide = px.width() as usize;
+            let scale = w.window().scale_factor();
+            px.as_slice()
+                .iter()
+                .enumerate()
+                .filter(|(i, p)| {
+                    let (x, y) = ((i % wide) as f32 / scale, (i / wide) as f32 / scale);
+                    x > sx as f32 + 2.0
+                        && x < (sx + sw) as f32 - 2.0
+                        && y > sy as f32 + 2.0
+                        && y < (sy + sh) as f32 - 2.0
+                        && p.r > 0x60
+                        && p.g > 0x60
+                        && p.b > 0x60
+                })
+                .count()
+        };
+
+        // A machine that is booting and has drawn nothing: the panel is lit and black, which is
+        // exactly what the operator saw. This is the control, and it runs first so that the
+        // assertion below is known to be one that can fail.
+        let boot = |fb: Vec<u16>| -> Live {
+            let mut bcm = ipod_machine::Bcm::new(ipod_machine::Bcm::HOST_BASE);
+            for (i, v) in fb.iter().enumerate() {
+                bcm.mem.insert(emu::FB_FRONT + (i as u32) * 2, *v);
+            }
+            let mut out_fb = vec![0u8; emu::FB_W * emu::FB_H * 3];
+            let nonzero = emu::read_framebuffer(&bcm, emu::FB_FRONT, &mut out_fb);
+            let live = a_machine_with_no_thread(&d);
+            {
+                let mut out = live.link.out.lock().unwrap();
+                out.phase = emu::Phase::Booting { target: 1_600_000_000 };
+                out.fb = out_fb;
+                out.fb_nonzero = nonzero;
+                out.fb_seq = 1;
+                out.stats.wall_secs = 1.0;
+                out.stats.executed = 1_000_000;
+            }
+            live
+        };
+
+        *wiring.live.borrow_mut() = Some(boot(vec![0u16; emu::FB_W * emu::FB_H]));
+        (wiring.machine_tick)();
+        assert!(w.get_panel_lit(), "a booting machine's panel is not lit, so nothing can show");
+        let dark = lit_on_the_glass(&w);
+        assert_eq!(dark, 0, "{dark} pixels of a panel showing a black frame are lit");
+
+        // …and the same machine with its ROM's own boot screen in the same surface. `boot_screen`
+        // is 62 x 78 of mark centred on 320 x 240, drawn at `k = 2`, so the count is in the
+        // thousands rather than the hundreds — but what is asserted is that it is *there*, because
+        // an exact figure would be an assertion about the anti-aliaser.
+        *wiring.live.borrow_mut() =
+            Some(boot(ipod_machine::nor::boot_screen(emu::FB_W, emu::FB_H)));
+        (wiring.machine_tick)();
+        let shown = lit_on_the_glass(&w);
+        assert!(
+            shown > 500,
+            "{shown} pixels of the drawn glass are lit while the machine is booting with its ROM's \
+             boot screen in the co-processor's surface — so the picture the machine is holding is \
+             not reaching the panel, which is issue #36's first candidate"
         );
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -12047,6 +12327,9 @@ pub(crate) mod tests {
             &Rc::new(RefCell::new(work::Reads::new())),
             &repaint,
             &timer,
+            // §12's clock — never called on an idle tick, and a required argument so that
+            // `hand_off` cannot be reached without one. Issue #35.
+            &(Rc::new(|| {}) as Rc<dyn Fn()>),
             caps(),
             a_cost(),
             &Rc::new(RefCell::new(None)),
@@ -12112,6 +12395,10 @@ pub(crate) mod tests {
                 &reads,
                 &repaint,
                 &timer,
+                // §12's clock. Nothing is handed off on this tick — there is no queue running —
+                // so it is never called; it is here because `hand_off` cannot be reached without
+                // one, which is issue #35's fix.
+                &(Rc::new(|| {}) as Rc<dyn Fn()>),
                 caps(),
                 a_cost(),
                 &Rc::new(RefCell::new(None)),
@@ -15276,22 +15563,43 @@ pub(crate) mod tests {
         // It is what makes §8.1 item 7's 1.6 s visible in a still: a real press depresses its
         // button for as long as the machine takes to see the release, and a picture of that is a
         // picture of a fact about this emulator.
+        //
+        // **The finger on the ring is a real contact now, and it was the one thing this comment
+        // claimed and the shot did not do** — issue #38. `Stats::touched` is the *machine's*
+        // membrane bit; §21.8.3's mark is drawn from the **window's** `wheel::Finger`, for the
+        // reason `Finger::at` gives, so setting the first left the wheel unmarked and the picture
+        // showing everything the paragraph above names except the mark itself. Nothing in `_out/`
+        // had ever photographed it, which is how the band came to be a third short of the drawn
+        // ring without anybody seeing it.
         {
             let l = running.live.borrow();
-            let mut out = l.as_ref().expect("the machine").link.out.lock().unwrap();
+            let live = l.as_ref().expect("the machine");
+            let mut out = live.link.out.lock().unwrap();
             out.stats.buttons = ipod_machine::WHEEL_MENU;
             out.stats.hold = true;
             out.stats.touched = true;
+            drop(out);
+            // Half past one on the unit ring — clear of all four printed labels, so what appears is
+            // the mark and not a label lighting up. Through `Finger::touched` and `unit_ring`,
+            // which are the shipped route a press on the drawn wheel takes.
+            let theta = 12.0 / 96.0 * std::f32::consts::TAU;
+            live.finger.borrow_mut().touched(&unit_ring(), 0.76 * theta.sin(), -0.76 * theta.cos());
         }
         shots.push(("bench-touched", shoot(&w, &nav::Stack::new(), &running, "bench-touched")));
         // …and back to a machine nobody is holding, so `readout` and the two shots after it stand
         // where `bench-running` did. A texture stays where it was put and so does a pushed boolean.
         {
             let l = running.live.borrow();
-            let mut out = l.as_ref().expect("the machine").link.out.lock().unwrap();
+            let live = l.as_ref().expect("the machine");
+            let mut out = live.link.out.lock().unwrap();
             out.stats.buttons = 0;
             out.stats.hold = false;
             out.stats.touched = false;
+            drop(out);
+            // The finger comes off with them, and it is a `Release` rather than a cleared field:
+            // §7.4's rule is that a press with no release is a stuck finger, and a fixture that
+            // left one on would put the mark in every shot taken after this one.
+            live.finger.borrow_mut().released();
         }
 
         // **§12.8's Readout, on the machine that is on the bench above it.** Seven groups, every
@@ -18335,6 +18643,53 @@ pub(crate) mod tests {
         println!("  firmware  {state:?}");
         assert!(state.has_os, "the drive has no OS image on it");
         assert!(!state.aupd_armed, "Apple's flash updater is still armed on the drive");
+        drop(s);
+
+        // ── §12.2's handoff, which is the whole of issue #17 and which nothing here asserted ─────
+        //
+        // **The press is over when the iPod is booting, not when the drive is finished.** #17's
+        // stated goal is *"a clean install with an empty data directory can reach a booting iPod in
+        // one press"*, and every assertion above this line is about the drive — so this test would
+        // pass over a run that built a perfect 8 GiB image and then sat there waiting to be asked
+        // again, which is exactly what the operator reported in #35: *"i had to press two times or
+        // three times for it to start retailos"*.
+        //
+        // `invoke_start_device` was called **once**, at the top. If a second press were needed the
+        // holder would be empty here, and the sentence below names the state it is in instead.
+        let held = wiring.live.borrow();
+        let l = held.as_ref().unwrap_or_else(|| {
+            panic!(
+                "one press on an empty data directory built the drive and started no machine, so \
+                 the iPod needs a second press — issue #35. The Rail is above."
+            )
+        });
+        let life = l.life();
+        println!("\n  machine   {life:?}");
+        assert!(
+            life.alive(),
+            "the handoff started a machine and it is {life:?} — a press that ends in a machine \
+             nothing is executing on has not reached a booting iPod either"
+        );
+        drop(held);
+
+        // **…and the window is LOOKING at it, which is the half issue #35 turned on.**
+        //
+        // `hand_off` started a thread; §12's 60 Hz timer is what reads `Out`, puts the frame on the
+        // glass, pushes §12.3's progress and — the half a person acts on — tells the drawn wheel
+        // and the centre button that they are the machine's (`machine_controls`). Without it the
+        // iPod boots invisibly: the panel stays as it was, the caption still reads *Press the
+        // centre button*, and `machine-takes-input` is still false, so the next press routes to
+        // `Route::Existing` and **starts the machine over**. That is two presses to reach RetailOS,
+        // and a third if the person presses again while the second boot is also invisible.
+        //
+        // It cost nothing to have and nothing could see it: every assertion in this test was about
+        // the drive, and the two presses were the operator's to find.
+        assert!(
+            wiring.machine_timer.running(),
+            "the machine is booting and §12's 60 Hz tick is not running, so the window is not \
+             looking at it — the panel, the caption and the wheel all stand where they were, and \
+             the next press starts the boot over. Issue #35."
+        );
     }
 
     /// **A retry resumes: it does not re-mint, and it does not download 6.5 MB again.**
@@ -20008,8 +20363,11 @@ pub(crate) mod tests {
     /// five `Made of` lines were undrawn and so was the one control §7.2 puts on this page.
     ///
     /// It also pins the four bindings that were reading the **bench's** two fields: `enabled` and
-    /// `reason` came from `DeviceRow.startable` / `.cradle-label`, which `window.slint:895` and
-    /// `:890` read for the drawn iPod, and `machine-rule` was a literal `true`.
+    /// `reason` came from `DeviceRow.startable` and `.cradle-label`, which the drawn iPod reads as
+    /// `root.current.startable` (`window.slint:942`) and `root.current.cradle-label`
+    /// (`window.slint:909`); `machine-rule` was a literal `true`. **Each number is written beside
+    /// the binding it names**, because the pair used to be two fields followed by two line numbers
+    /// in the opposite order, and one of the two numbers was a blank line.
     #[test]
     fn the_devices_page_opens_a_row_and_reaches_its_start() {
         let dir = temp_dir("devices-wired");
@@ -20310,6 +20668,151 @@ pub(crate) mod tests {
             DrawerPage::Devices,
             "§21.3's `This iPod` is where the default is changed, and it opened {:?}",
             w.get_drawer_page()
+        );
+    }
+
+    /// **§21.7's second view opens a real window and the machine's frame reaches it** — issue #37.
+    ///
+    /// The operator's report is that `⌃⌘P` does nothing, and #21 predicted exactly this shape: the
+    /// mechanism was proved by reading arithmetic and markup, and the one thing nothing exercised
+    /// was **a second `slint::Window` existing at the same time as the first**. So this opens one.
+    ///
+    /// **It is two claims and they are separated on purpose**, because the issue asks which of the
+    /// two failed: the holder is `Some` (a window was created and shown), and a snapshot of that
+    /// window carries the frame the drawn iPod is carrying (it is drawing rather than sitting at
+    /// `bg-sunken`). A test that only asserted the first would pass over a blank window.
+    #[test]
+    fn the_popped_out_panel_is_a_second_window_and_the_frame_reaches_it() {
+        let dir = temp_dir("pop-out");
+        let s = a_furnished_library(&dir);
+        let first = s.devices.first().expect("the fixture's iPod").clone();
+        let settings = Rc::new(RefCell::new(s));
+        let w = a_window();
+        let wiring =
+            wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
+        // A machine on the bench, because §21.7 refuses the row when there is nothing on the panel
+        // — and because a window opened onto a dark rectangle could not tell the two failures apart.
+        *wiring.live.borrow_mut() = Some(a_running_machine(&first));
+        (wiring.machine_tick)();
+        assert!(w.get_panel_lit(), "the bench has no lit panel, so this proves nothing");
+
+        // The registered handler, at the ordinal the `KeyBinding` pushes — this is `⌃⌘P`.
+        w.invoke_verb_act(verbs::Verb::Panel.ordinal());
+        let held = wiring.panel.borrow();
+        let p = held.as_ref().expect(
+            "pressing §21.7's Panel verb left the holder empty, so no second window was created",
+        );
+        assert!(p.window().is_visible(), "the second window was created and never shown");
+
+        // …and it is drawing the frame. `a_running_machine`'s fixture has a one-pixel white border
+        // and a red-green ramp, so a window that is drawing it is not uniform and a window that is
+        // still `bg-sunken` is.
+        let shot = p.window().take_snapshot().expect("the testing backend rasterizes");
+        let px: Vec<[u8; 3]> = shot.as_slice().iter().map(|q| [q.r, q.g, q.b]).collect();
+        let corner = px[0];
+        let different = px.iter().filter(|q| **q != corner).count();
+        assert!(
+            different > 10_000,
+            "{different} of {} pixels in the popped-out window differ from its corner, so it is a \
+             flat rectangle — the window opened and the framebuffer never reached it",
+            px.len()
+        );
+        // ── §12.6's fullscreen, on the window that has it ───────────────────────────────────────
+        //
+        // **`⌃⌘F`, dispatched to the popped-out window's own `FocusScope`**, which is where the
+        // binding lives — §21.7 puts it there rather than on the main window because it is this
+        // window's own state. `is_fullscreen` reads the `WindowItem`'s own property
+        // (`i-slint-core-1.17.1/window.rs:2131`), so it answers under the testing backend even
+        // though no compositor is listening; what cannot be reached from here is a real display,
+        // and that is the half of issue #37 no test can close.
+        let cmd: slint::SharedString = slint::platform::Key::Control.into(); // ⌘ on macOS
+        let ctrl: slint::SharedString = slint::platform::Key::Meta.into(); // ⌃ on macOS
+        let chord = |key: &str| {
+            for t in [ctrl.clone(), cmd.clone(), key.into()] {
+                p.window().dispatch_event(slint::platform::WindowEvent::KeyPressed { text: t });
+            }
+            for t in [key.into(), cmd.clone(), ctrl.clone()] {
+                p.window().dispatch_event(slint::platform::WindowEvent::KeyReleased { text: t });
+            }
+        };
+        assert!(!p.window().is_fullscreen(), "the second view opened fullscreen");
+        chord("f");
+        assert!(p.window().is_fullscreen(), "⌃⌘F on the popped-out window did not fullscreen it");
+        chord("f");
+        assert!(!p.window().is_fullscreen(), "⌃⌘F is not a toggle");
+        drop(held);
+
+        // A second press puts it away, which is the row's own toggle and the window's close button.
+        w.invoke_verb_act(verbs::Verb::Panel.ordinal());
+        assert!(wiring.panel.borrow().is_none(), "pressing it again did not put the window away");
+    }
+
+    /// **The chord this program prints is the chord that opens the panel** — issue #37.
+    ///
+    /// `verbs::panel_row` draws `Ctrl-Cmd-P` on the row, `docs/GUI.md` §21.7 writes it `⌃⌘P`, and
+    /// the operator pressed that and nothing happened. This dispatches the two modifiers and the
+    /// key as real events, through Slint's own modifier state and its own `Keys::matches`, and asks
+    /// whether the window opened.
+    ///
+    /// **Why a key test and not another `invoke_verb_act`**, which
+    /// `the_popped_out_panel_is_a_second_window_and_the_frame_reaches_it` already does: that one
+    /// proves everything *downstream* of the binding and can say nothing about the binding itself.
+    /// `Keys::matches` is `key_event.modifiers == expected_modifiers` — **exact equality**
+    /// (`i-slint-core-1.17.1/input.rs:780`) — so a binding that names one modifier is not fired by
+    /// a chord that carries two, and no amount of pressing the verb would ever have found it.
+    ///
+    /// **The two characters are the modifiers macOS actually delivers.** The winit backend swaps
+    /// the two on Apple platforms — *"Match Qt's behavior of mapping command to control and control
+    /// to meta"*, `i-slint-backend-winit-1.17.1/event_loop.rs:258-274` — so **⌘ arrives as
+    /// `Key::Control` and ⌃ arrives as `Key::Meta`**, and a chord of both is `{control, meta}`.
+    /// Dispatching those two characters is therefore not a translation of the operator's keystroke,
+    /// it is the keystroke.
+    ///
+    /// **How to make it go red:** put `@keys(Control + "p")` back in `window.slint`. That binding is
+    /// ⌘P — one modifier — and this test is ⌃⌘P.
+    #[test]
+    fn the_chord_the_row_prints_is_the_chord_that_pops_the_panel_out() {
+        let dir = temp_dir("pop-out-chord");
+        let s = a_furnished_library(&dir);
+        let first = s.devices.first().expect("the fixture's iPod").clone();
+        let settings = Rc::new(RefCell::new(s));
+        let w = a_window();
+        let wiring =
+            wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
+        *wiring.live.borrow_mut() = Some(a_running_machine(&first));
+        (wiring.machine_tick)();
+
+        // The row's own label, read off the shipped verb rather than typed here — if the printed
+        // chord ever changes, this test is about the new one or it fails saying so.
+        w.invoke_open_page(DrawerPage::None, 0);
+        let printed = w
+            .get_verbs()
+            .iter()
+            .find(|r: &VerbRow| r.verb == verbs::Verb::Panel.ordinal())
+            .expect("§21.3's page has no Panel row")
+            .value
+            .to_string();
+        assert_eq!(printed, "Ctrl-Cmd-P", "the row prints a chord this test does not press");
+        w.invoke_open_page(DrawerPage::None, 0);
+
+        let cmd: slint::SharedString = slint::platform::Key::Control.into(); // ⌘ on macOS
+        let ctrl: slint::SharedString = slint::platform::Key::Meta.into(); // ⌃ on macOS
+        let press = |t: &slint::SharedString| {
+            w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed { text: t.clone() });
+        };
+        let release = |t: &slint::SharedString| {
+            w.window().dispatch_event(slint::platform::WindowEvent::KeyReleased { text: t.clone() });
+        };
+        press(&ctrl);
+        press(&cmd);
+        press(&"p".into());
+        release(&"p".into());
+        release(&cmd);
+        release(&ctrl);
+
+        assert!(
+            wiring.panel.borrow().is_some(),
+            "⌃⌘P — the chord the row prints and §21.7 documents — opened no window"
         );
     }
 
@@ -21062,7 +21565,7 @@ pub(crate) mod tests {
     /// `Action::unwired` is asked of all six verbs whether or not a group offers them.
     ///
     /// **`consequence` is in it now, and it is the half that was missing.**
-    /// `primitives.slint:697` is `text: root.enabled ? root.consequence : root.reason` — one slot,
+    /// `primitives.slint:703` is `text: root.enabled ? root.consequence : root.reason` — one slot,
     /// two producers — and only one of them was ever measured. So `removal_consequence` shipped at
     /// **880 px** in a 324 px slot and `devices.png` drew *The entry goes. Its iPod A446, seed
     /// 6182160 and its drive …*, cut off before the clause that says nothing is deleted, which is

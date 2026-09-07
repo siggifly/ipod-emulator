@@ -270,7 +270,7 @@ impl RowAction {
 /// **The eight properties an act needs are one field**, so they cannot disagree — `has-action`,
 /// `action`, `act-label`, `enabled`, `reason`, `escape-hatch`, `presses` and `consequence` are
 /// derived from this one `Option` and from the `FixRow` inside it. A row that is disabled therefore
-/// cannot lose its reason on the way across, which `primitives.slint:520` states as the
+/// cannot lose its reason on the way across, which `primitives.slint:526` states as the
 /// invariant: *non-empty whenever `!enabled`*.
 ///
 /// **`machine_rule` is the line's, and the `FixRow`'s copy of it is deliberately not read.**

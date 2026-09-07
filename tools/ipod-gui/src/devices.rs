@@ -91,8 +91,8 @@
 // beside a running ARM7 draws a live `Start` on every other device in the library.
 //
 // The obvious repair is to teach `device_rows` the machine, and it is wrong: **those two fields
-// are the bench's cradle as well.** `window.slint:895` reads `root.current.cradle-label` and
-// `window.slint:928` reads `root.current.startable`, so the sentence that refuses this page's
+// are the bench's cradle as well.** `window.slint:909` reads `root.current.cradle-label` and
+// `window.slint:942` reads `root.current.startable`, so the sentence that refuses this page's
 // `Start` would be printed under the drawn iPod — the machine's own cradle telling the operator
 // that the machine is running and to stop it first. One field, two surfaces, and only one of them
 // is asking §7.2's question.
@@ -804,8 +804,8 @@ fn removal_consequence(s: &Settings, d: &Device) -> String {
 ///
 /// 3. **And `reason` is empty when the control is live**, which `blocked_label` is not — every one
 ///    of its arms is a refusal, and `Pressable.reason` is the
-///    refusal slot: `primitives.slint:697` is `text: root.enabled ? root.consequence : root.reason`,
-///    so a live control draws its consequence there and its reason nowhere. (Not `:534`, which this
+///    refusal slot: `primitives.slint:703` is `text: root.enabled ? root.consequence : root.reason`,
+///    so a live control draws its consequence there and its reason nowhere. (Not `:606`, which this
 ///    used to cite — that is `tells`, and it reserves the slot for **three** reasons: disabled, two
 ///    presses, or a consequence. The reservation is not the binding.) Handing a live control a
 ///    reason it will never draw is the kind of field that is true for a while and then quietly
