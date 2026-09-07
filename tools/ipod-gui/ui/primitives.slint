@@ -152,6 +152,29 @@ export struct GroupRow {
     b-action: int,
 }
 
+// One row of §21.3's root page, flattened from `verbs::Row`.
+//
+// **`verb` is the ordinal and not a slot index**, which is the lesson `GroupRow.a-action` above
+// records one struct along: the page draws only the rows `verbs::view` returned, and the developer
+// switch removes four of them, so a repeater index is not a verb. The ordinal travels with the row
+// that draws it and `verbs::Verb::from_i32` reads it back.
+//
+// **There is no `heading` and no `separator` variant.** `rule-above` is a boolean on the row that
+// follows the gap, so the page's bands come out of `verbs::Verb::group()` in Rust and no markup
+// file counts rows to decide where §21.3's one horizontal line goes.
+export struct VerbRow {
+    verb: int,
+    label: string,
+    value: string,
+    sub: string,
+    enabled: bool,
+    reason: string,
+    machine-rule: bool,
+    escape-hatch: string,
+    chevron: bool,
+    rule-above: bool,
+}
+
 // One part. `fact` is `Provenance::line()` and nothing in the window may construct the word
 // *verified*; `used-by` is the reference-not-copy property made visible; `locked-by` is §11.4's one
 // machine rule — *`My 5.5G` is running.*

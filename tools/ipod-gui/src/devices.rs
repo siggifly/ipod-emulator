@@ -32,7 +32,7 @@
 // was pressed, silently, having been handed a valid index for a device nobody asked about. The
 // name is already held and it is the answer, so the acts read it and take no index at all.
 //
-// **This page pins no ordinal.** `devices.slint:336` fires `root.row-action(a, n)` where `a` is
+// **This page pins no ordinal.** `devices.slint:387` fires `root.row-action(a, n)` where `a` is
 // `root.d.action` — a number Rust put on the line — and nothing else. The one ordinal that is
 // pinned anywhere, `RowAction::Remove == 2`, is pinned by `ui/parts.slint`'s own `Remove` control
 // and is written down in `parts.rs` beside the enum.
@@ -91,8 +91,8 @@
 // beside a running ARM7 draws a live `Start` on every other device in the library.
 //
 // The obvious repair is to teach `device_rows` the machine, and it is wrong: **those two fields
-// are the bench's cradle as well.** `window.slint:841` reads `root.current.cradle-label` and
-// `window.slint:874` reads `root.current.startable`, so the sentence that refuses this page's
+// are the bench's cradle as well.** `window.slint:860` reads `root.current.cradle-label` and
+// `window.slint:893` reads `root.current.startable`, so the sentence that refuses this page's
 // `Start` would be printed under the drawn iPod — the machine's own cradle telling the operator
 // that the machine is running and to stop it first. One field, two surfaces, and only one of them
 // is asking §7.2's question.
@@ -359,6 +359,37 @@ fn made_of(
     caps: Caps,
     machine: Option<&str>,
 ) -> Vec<Detail> {
+    // **Acts first, facts under them, and that inverts what this page shipped as** — §21.1's
+    // second failure, which is the one the operator met: *facts outrank actions. The device page
+    // states six things before it offers one, and the single verb anybody came for is at the
+    // bottom of the stack.* `Start` is drawn above this list by `devices.slint`, so the column now
+    // reads `Start · Install Rockbox · Start fresh · Edit… · Remove`, then the six facts — and
+    // `Start` is no longer below the destructive `Remove`, which is issue #16's own criterion.
+    //
+    // The facts are demoted rather than deleted, exactly as §21.3 demotes them on the root page,
+    // and by the same call: [`facts`] is the one producer for both surfaces.
+    let mut out: Vec<Detail> = vec![
+        device_act(RowAction::InstallRockbox, install_row(s, d, caps, machine)),
+        device_act(RowAction::StartCold, cold_row(d, machine)),
+        device_act(RowAction::Edit, edit_row(s, d, caps, machine)),
+        device_act(RowAction::Remove, remove_row(s, d, machine)),
+    ];
+    out.extend(facts(s, d, seen));
+    out
+}
+
+/// **The six facts and the machine rules, without the four acts** — §21.3's `About this iPod`.
+///
+/// Split out of [`made_of`] rather than copied, and that is the whole reason it exists: §21.3
+/// demotes this table under the verbs on the drawer's root page and keeps it on the Devices page,
+/// so it is drawn twice and two producers would be two answers about one iPod. `made_of` is this
+/// plus the acts, in that order, which is why the acts are appended by the caller above.
+///
+/// **Facts, not verbs, and that is why the acts are not in here.** §21.3 moves the table *below*
+/// the verbs because facts outranking actions is what made the old device page a spreadsheet;
+/// re-attaching `Remove` to the bottom of an About section would put a destructive control under a
+/// heading that promises to describe rather than to do.
+pub(crate) fn facts(s: &Settings, d: &Device, seen: &mut Presence) -> Vec<Detail> {
     let mut out: Vec<Detail> = Vec::new();
 
     // **Which iPod, in the words a person would use, plus the name it is filed under.** The two
@@ -499,11 +530,6 @@ fn made_of(
     for a in &s.missing_with(d, seen) {
         out.push(device_rule(crate::gone_sentence(d, std::slice::from_ref(a))));
     }
-
-    out.push(device_act(RowAction::InstallRockbox, install_row(s, d, caps, machine)));
-    out.push(device_act(RowAction::StartCold, cold_row(d, machine)));
-    out.push(device_act(RowAction::Edit, edit_row(s, d, caps, machine)));
-    out.push(device_act(RowAction::Remove, remove_row(s, d, machine)));
     out
 }
 
@@ -552,7 +578,7 @@ fn cold_row(d: &Device, machine: Option<&str>) -> FixRow {
     }
 }
 
-fn install_row(s: &Settings, d: &Device, caps: Caps, machine: Option<&str>) -> FixRow {
+pub(crate) fn install_row(s: &Settings, d: &Device, caps: Caps, machine: Option<&str>) -> FixRow {
     let refuse = |why: String, machine_rule: bool| FixRow {
         label: "Install Rockbox".to_string(),
         enabled: false,
@@ -778,14 +804,14 @@ fn removal_consequence(s: &Settings, d: &Device) -> String {
 ///
 /// 3. **And `reason` is empty when the control is live**, which `blocked_label` is not — every one
 ///    of its arms is a refusal, and `Pressable.reason` is the
-///    refusal slot: `primitives.slint:663` is `text: root.enabled ? root.consequence : root.reason`,
+///    refusal slot: `primitives.slint:686` is `text: root.enabled ? root.consequence : root.reason`,
 ///    so a live control draws its consequence there and its reason nowhere. (Not `:534`, which this
 ///    used to cite — that is `tells`, and it reserves the slot for **three** reasons: disabled, two
 ///    presses, or a consequence. The reservation is not the binding.) Handing a live control a
 ///    reason it will never draw is the kind of field that is true for a while and then quietly
 ///    becomes a second producer.
 ///
-/// `machine_rule` is computed rather than assumed, and `devices.slint:358` binds it as
+/// `machine_rule` is computed rather than assumed, and `devices.slint:347` binds it as
 /// `machine-rule: root.start-row.machine-rule`. It used to be a literal `machine-rule: true` in the markup, which is wrong for the
 /// composed-and-unbuilt arm — *building a composed device is not wired yet* is §9.4's other kind,
 /// a project state, and drawing it in `fg` as a law of physics tells the reader this program will
@@ -868,7 +894,7 @@ fn start_row(s: &Settings, d: &Device, seen: &mut Presence, machine: Option<&str
 /// called `Rockbox on a 5G, second try` is what they called it, and truncating it here would be
 /// the window
 /// deciding a person's own name for their own iPod is too long.
-fn running_rule(machine: &str) -> String {
+pub(crate) fn running_rule(machine: &str) -> String {
     format!("{machine} is running. Stop it first.")
 }
 

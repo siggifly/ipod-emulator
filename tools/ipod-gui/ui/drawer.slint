@@ -1,9 +1,15 @@
 // The drawer — docs/GUI.md §4, §7.5, §8.1, §9.1, §14.3, §16.3.
 //
-// **420 px, right-anchored, and it PUSHES.** The well and the shelf narrow to `W - 420`; the drawer
-// occupies the full client height minus the shelf. It is not a sidebar wearing a hat and it is not
-// an overlay: nothing in this program floats (§2.4), and a drawer that covered the shelf's right
-// 420 px would be covering rather than pushing, which principle 5 forbids.
+// **420 px, right-anchored, and it OVERLAYS** (§21.2). It occupies the full client height minus
+// the shelf and slides in over the device; the device does not move. It is not a sidebar wearing a
+// hat and it does not float: §2.4 bans floating, and floating is a thing with a shadow, its own
+// edges and a surface behind it on all four sides. This is anchored to an edge, full-height, with
+// a 1 px rule and no shadow — the same construction it always was, minus the push.
+//
+// **The push was right while the device shared the window with a field of nothing.** §3's pushed
+// `hero` bought that the device was never occluded, and there were 760 px of `bg-sunken` to push
+// it into. §21.2 spends those pixels: the window is the device now, so there is nothing to push
+// into and a device that shrank whenever this opened would be the window fidgeting.
 //
 // **Max three levels deep**, and the depth slides — the borrowed iPod motion, inside a 420 px panel
 // where no framebuffer can be (§6.1). Every route in is a route out: `⌘\`, the handle, the shelf's
@@ -30,6 +36,7 @@ import {
     Row,
     Scroll,
     TickRow,
+    VerbRow,
 } from "primitives.slint";
 import { RailRow } from "rail.slint";
 import { GamesPage } from "games.slint";
@@ -39,6 +46,7 @@ import { DevicesPage } from "devices.slint";
 import { PartsPage } from "parts.slint";
 import { SettingsPage } from "settings.slint";
 import { ReadoutPage } from "readout.slint";
+import { VerbsPage } from "verbs.slint";
 
 // The generated Rust is `pub enum DrawerPage { None, Devices, Parts, Games, Work, Readout,
 // Settings, Reference, Composer, ComposerIpod, ComposerRuns, ComposerName }` with `None` as
@@ -65,199 +73,6 @@ export enum DrawerPage {
     composer-name,
 }
 
-// ─── The root page ──────────────────────────────────────────────────────────────────────────────
-//
-// Seven rows, and **six of them are disabled with a reason** (§9.4's second kind: *this is not
-// finished, by us* — say what does work, and name the escape hatch as a command in `mono`).
-//
-// A row that is present and dead is the shape §19.1 indicts. A row that is absent is a page you
-// have to re-learn next visit (§9.1). So they are present, greyed, and each says why and what to
-// type instead — and every command named below is one this repository actually has: they are read
-// out of `ipod-boot`'s own `usage()`, not invented. Where there is no command, the row says so
-// rather than pointing at a phantom.
-export component MenuPage inherits Rectangle {
-    in property <int> failures;
-    /// How many titles the shelf holds, for the `Games` row's badge. An `int` rather than the
-    /// model itself: `MenuPage` draws a number and has no use for the rows, and handing it the
-    /// model would make every title's name a dependency of the root menu.
-    in property <int> title-count;
-    /// How many iPods are in the library, for the `iPods` row's badge.
-    in property <int> device-count;
-    /// §Settings' developer switch. Off, this menu is three rows.
-    in property <bool> developer;
-
-    callback close();
-    callback go(DrawerPage, int);
-
-    background: Ink.bg;
-
-    VerticalLayout {
-        spacing: 0px;
-
-        DrawerHeader {
-            back: "Close";
-            title: "Menu";
-            back-pressed => {
-                root.close();
-            }
-        }
-
-        // **The root page scrolls, and it still has to.** Three of its seven rows are live now —
-        // Devices, Parts and Settings — and their disabled reasons went with them rather than being
-        // left standing beside the pages that make them false, which is the drift §16.9 exists to
-        // delete. A disabled `Pressable` is 44 + 34 = 78 px because §9.4's reason slot is reserved
-        // under it, so this page's own minimum is 44 header + 3×44 live + 4×78 disabled =
-        // **488 px**, down from 556. The drawer is
-        // `client-height - SHELF`, which at the declared window minimum of 400 is **312**. 488 is
-        // still well past that, so the Scroll stays. Without one, Work is cut in half and
-        // Readout / Reference fall outside the drawer's
-        // `clip` — and a clipped item is not merely invisible: `WindowInner::move_focus` gates tab
-        // navigation on `is_visible_or_clipped_by_flickable()`, which recovers an item only when the
-        // hiding ancestor is a Flickable. The drawer clips with a Rectangle, so there was no
-        // recovery, no accessible-tree entry and no scroll indicator either. The Work page had this
-        // right; the root page of the same drawer did not.
-        scroll := Scroll {
-            vertical-stretch: 1;
-            min-height: 0px;
-            preferred-height: 0px;
-            viewport-height: rows.preferred-height;
-
-                rows := VerticalLayout {
-                    width: scroll.width;
-                    alignment: start;
-                    spacing: 0px;
-                    accessible-role: AccessibleRole.list;
-                    accessible-label: "Menu";
-
-                    // ── Three rows, and that is the whole menu ──────────────────────────────
-                    //
-                    // **The window's first job is to be an iPod.** Version 0.4 said so in its own
-                    // source — *"user mode is the iPod and nothing else… what somebody who just
-                    // cloned this should meet"* — and this menu had grown to seven permanent
-                    // destinations, four of which are instruments. A person who wants to run a
-                    // game met a parts library, a job inbox and a counter readout on the way.
-                    //
-                    // Nothing moved out of reach. Parts' job — repairing a device that is missing
-                    // a file — belongs on that device, where the problem is; the Work rail's job
-                    // is progress, which belongs on the thing being built. What is hidden here is
-                    // the DESTINATION, and only for the audience that does not want it.
-                    Row {
-                        index: 0;
-                        count: root.developer ? 7 : 3;
-                        label: "iPods";
-                        value: root.device-count > 0 ? "\{root.device-count}" : "";
-                        chevron: true;
-                        activated => {
-                            root.go(DrawerPage.devices, 1);
-                        }
-                        gained-focus => {
-                            scroll.ensure-visible(self.absolute-position.y, self.height);
-                        }
-                    }
-
-                    Row {
-                        index: 1;
-                        count: root.developer ? 7 : 3;
-                        label: "Games";
-                        value: root.title-count > 0 ? "\{root.title-count}" : "";
-                        chevron: true;
-                        activated => {
-                            root.go(DrawerPage.games, 1);
-                        }
-                        gained-focus => {
-                            scroll.ensure-visible(self.absolute-position.y, self.height);
-                        }
-                    }
-
-                    Row {
-                        index: 2;
-                        count: root.developer ? 7 : 3;
-                        label: "Settings";
-                        chevron: true;
-                        activated => {
-                            root.go(DrawerPage.settings, 1);
-                        }
-                        gained-focus => {
-                            scroll.ensure-visible(self.absolute-position.y, self.height);
-                        }
-                    }
-
-                    // ── The instruments, when asked for ────────────────────────────────────
-                    //
-                    // `Settings::developer`, a stored switch rather than a launch flag: a flag is
-                    // invisible to somebody who already has the window open and does not survive
-                    // it. Everything below is a page for the third audience — firmware work — and
-                    // each one is a view, never the only route to a capability.
-                    Rectangle {
-                        visible: root.developer;
-                        height: root.developer ? 1px : 0px;
-                        background: Ink.line;
-                    }
-
-                    Row {
-                        index: 3;
-                        count: root.developer ? 7 : 3;
-                        label: "Parts";
-                        visible: root.developer;
-                        chevron: true;
-                        activated => {
-                            root.go(DrawerPage.parts, 1);
-                        }
-                        gained-focus => {
-                            scroll.ensure-visible(self.absolute-position.y, self.height);
-                        }
-                    }
-
-                    Row {
-                        index: 4;
-                        count: root.developer ? 7 : 3;
-                        label: "Readout";
-                        visible: root.developer;
-                        chevron: true;
-                        activated => {
-                            root.go(DrawerPage.readout, 1);
-                        }
-                        gained-focus => {
-                            scroll.ensure-visible(self.absolute-position.y, self.height);
-                        }
-                    }
-
-                    Row {
-                        index: 5;
-                        count: root.developer ? 7 : 3;
-                        label: "Work";
-                        visible: root.developer;
-                        value: root.failures > 0 ? "\{root.failures}" : "";
-                        warn: root.failures > 0;
-                        chevron: true;
-                        activated => {
-                            root.go(DrawerPage.work, 1);
-                        }
-                        gained-focus => {
-                            scroll.ensure-visible(self.absolute-position.y, self.height);
-                        }
-                    }
-
-                    // The one row with nothing behind it. `ReferencePage` exists in no markup
-                    // file, so its refusal is true — which is what
-                    // `every_drawer_row_that_names_a_page_can_open_it` checks, and what the Games
-                    // row's refusal had stopped being.
-                    Row {
-                        index: 6;
-                        count: root.developer ? 7 : 3;
-                        visible: root.developer;
-                        label: "Reference";
-                        enabled: false;
-                        machine-rule: false;
-                        reason: "The keyboard table and the stated limits have no page yet.";
-                        gained-focus => {
-                            scroll.ensure-visible(self.absolute-position.y, self.height);
-                        }
-                    }
-                }
-        }
-    }
-}
 
 // ─── The drawer itself ──────────────────────────────────────────────────────────────────────────
 
@@ -280,6 +95,18 @@ export component Drawer inherits Rectangle {
     // page in this drawer is at depth 1 and returns to the menu, which each of them names itself.
     in property <DrawerPage> under: DrawerPage.none;
     in property <int> rail-failures: 0;
+
+    // ── §21.3's root page ──
+    //
+    // Three properties and one callback, all of them straight through: `verbs.rs` builds the rows,
+    // `devices::facts` builds the table under them, and the ordinal comes back. The drawer owns the
+    // root slot, so it has to be given what the root page reads — the same argument the Work page's
+    // eight properties below carry.
+    in property <[VerbRow]> verbs;
+    in property <[DetailRow]> verbs-about;
+    in property <string> verbs-about-heading;
+    callback verb-act(int);
+
     // The client height the drawer is being given. **Pushed in, because a component's root element
     // cannot read `parent`** — Slint says `Cannot access id 'parent'` — and the alternative, letting
     // each use site write `height: <something> - Geometry.shelf`, would put §9.5's decision in two
@@ -499,18 +326,17 @@ export component Drawer inherits Rectangle {
             }
 
             // depth 0
-            MenuPage {
+            VerbsPage {
                 width: Geometry.drawer-w;
                 visible: root.on-screen(1);
-                failures: root.rail-failures;
-                title-count: root.titles.length;
-                device-count: root.devices.length;
-                developer: root.developer;
+                rows: root.verbs;
+                about: root.verbs-about;
+                about-heading: root.verbs-about-heading;
                 close => {
                     root.close();
                 }
-                go(p, d) => {
-                    root.go(p, d);
+                act(v) => {
+                    root.verb-act(v);
                 }
             }
 
@@ -844,9 +670,9 @@ export component Drawer inherits Rectangle {
 
 // ─── The handle (§7.5) ──────────────────────────────────────────────────────────────────────────
 //
-// 12 x 96, on the well's trailing edge, so it rides the push rather than the window edge — which is
-// the window's job to position. **Never disabled**: it is one of the four routes in, and the
-// program's discoverability does not get to be conditional.
+// 12 x 96, on the drawer's own leading edge, so it rides the drawer rather than the window edge —
+// which is the window's job to position. **Never disabled**: it is one of the four routes in, and
+// the program's discoverability does not get to be conditional.
 export component DrawerHandle inherits Rectangle {
     in property <bool> open: false;
     callback toggled();
@@ -871,7 +697,7 @@ export component DrawerHandle inherits Rectangle {
         width: 100%;
         height: 100%;
         label: root.open ? "Close the drawer" : "Open the drawer";
-        accessible-description: "420 pixels, right; the well and the shelf narrow to make room.";
+        accessible-description: "420 pixels, right; it slides over the iPod and the iPod stays put.";
         activated => {
             root.toggled();
         }

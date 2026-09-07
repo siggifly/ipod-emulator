@@ -463,36 +463,58 @@ fn every_drawer_page_is_hidden_by_visible_and_never_by_if() {
     }
 }
 
-/// **A menu row does not state a gap that has been closed.**
+/// **The root page words no row and no refusal of its own** — §21.3, and §16.9's rule made
+/// structural.
 ///
-/// §16.9's rule, and §8 decision 22: the Devices, Parts and Settings rows' disabled reasons and
-/// escape hatches are **deleted**, not left standing beside the pages that make them false. A stale
-/// reason is worse than no reason — it is the program asserting something about itself that stopped
-/// being true, which is §1.1's shape exactly.
+/// This replaces `no_menu_row_states_a_gap_that_has_been_closed`, which walked `MenuPage`'s rows
+/// looking for a `reason:` left standing beside a page that had since been built. That was the
+/// right test for a menu written as markup — a stale reason is the program asserting something
+/// about itself that stopped being true — and it is the wrong shape now: §21.3's page draws a
+/// repeater over rows `verbs::view` builds, so there is no `label:` in the markup to walk and no
+/// `reason:` to go stale beside it.
+///
+/// **What replaces it is stronger, because it removes the possibility rather than checking for the
+/// symptom.** A hard-coded row on this page could not be refused by the model, could not be
+/// re-worded by `devices::running_rule`, and could not be measured by
+/// `every_reason_this_window_draws_fits_the_slot_it_is_drawn_in` — which only sweeps the four
+/// producers. So the rule is that the page carries no row text at all.
+///
+/// The page's own name and its `‹` are exempt and are named here rather than pattern-matched:
+/// `settings.slint`'s header states the same carve-out for the same reason — *the page states no
+/// policy and words no sentence beyond its own labels and its page name*.
 #[test]
-fn no_menu_row_states_a_gap_that_has_been_closed() {
-    let lines = code(&ui("drawer.slint"));
-    for label in ["iPods", "Parts", "Settings"] {
-        let at = lines
-            .iter()
-            .position(|l| l == &format!("label: \"{label}\";"))
-            .unwrap_or_else(|| panic!("ui/drawer.slint's MenuPage has no {label} row"));
-        let row = &lines[at..(at + 8).min(lines.len())];
-        for stale in ["reason:", "escape-hatch:", "enabled: false"] {
+fn the_root_page_words_no_row_and_no_refusal_of_its_own() {
+    let lines = code(&ui("verbs.slint"));
+    assert!(
+        lines.iter().any(|l| l.starts_with("for r[i] in root.rows:")),
+        "ui/verbs.slint no longer draws its rows from a model, so this sweep is reading a page \
+         that is not the one it is about"
+    );
+
+    // The header's two, and nothing else. A page has to be able to name itself.
+    const OWN: [&str; 3] = ["back: \"Close\";", "title: \"Menu\";", "accessible-label: \"Menu\";"];
+
+    for (n, line) in lines.iter().enumerate() {
+        if OWN.contains(&line.as_str()) {
+            continue;
+        }
+        for worded in ["label:", "reason:", "value:", "sub:", "escape-hatch:", "enabled: false"] {
             assert!(
-                !row.iter().any(|l| l.starts_with(stale)),
-                "ui/drawer.slint:{}: the {label} menu row still carries `{stale}`, and the page it \
-                 says does not exist is drawn one slot along",
-                at + 1
+                !(line.starts_with(worded) && line.contains('"')),
+                "ui/verbs.slint:{}: `{line}` — this page words a row. Every string on it is \
+                 `verbs.rs`'s, so that one is a second wording nothing measures and nothing can \
+                 refuse",
+                n + 1
             );
         }
-        assert!(
-            row.iter().any(|l| l.starts_with("activated =>")),
-            "ui/drawer.slint:{}: the {label} menu row goes nowhere, which is the live-but-inert \
-             control §19.1 calls fatal",
-            at + 1
-        );
     }
+
+    // And the control: the sweep can see a worded row, so a green run means there is not one.
+    let planted = "label: \"iPods\";";
+    assert!(
+        planted.starts_with("label:") && planted.contains('"') && !OWN.contains(&planted),
+        "the sweep would not catch a row worded in the markup, so it asserts nothing"
+    );
 }
 
 /// **The verdict is never computed in a binding, and the window computes no compatibility rule of
