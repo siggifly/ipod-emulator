@@ -8,7 +8,7 @@ that. What it adds is a way to tell a live answer from a dead one **without read
 whole file** — because a document that grows by addendum puts its current answer at the
 bottom, and nothing on the page says so.
 
-893 headings across 17 documents — 47 dated, 18 settled, 15 retracted, 5 corrected.
+907 headings across 18 documents — 50 dated, 19 settled, 15 retracted, 6 corrected.
 
 ## Where each document stands today
 
@@ -34,6 +34,7 @@ above it in the same document may have been superseded.
 | [`15-the-register-agreement-table.md`](15-the-register-agreement-table.md) | *nothing in it is dated* | — | |
 | [`16-the-third-bootloader.md`](16-the-third-bootloader.md) | It is not a missing `root=`, and the kernel never asks the drive who it i… | `2026-08-19` |  |
 | [`17-the-boot-matrix.md`](17-the-boot-matrix.md) | Addendum — what the 25.1.3 stall looks like from the window (2026-08-30) | `2026-08-30` |  |
+| [`18-brick-is-playable.md`](18-brick-is-playable.md) | 4.  The proof of play — a frame that comes back, and the arm where it doe… | `2026-09-07` | settled |
 
 ## Retracted, and what came after it
 
@@ -61,6 +62,7 @@ and nothing dated replaced it.
 | `10-the-resource-image.md` | 1. RetailOS reaches the display | 2016 | — |
 | `11-the-videocore-runtime.md` | 7.0  Two sequences, two sides of the bus — do not m… | 991 | — |
 | `12-how-retailos-draws.md` | RETRACTED — everything above about the wheel is a m… | 1053 | RESOLVED — RetailOS navigates; every run that… `2026-09-05` |
+| `13-do-the-games-load.md` | 9.  Reproducing every screen in this file — the com… | 423 | 2026-08-18: the built-ins are not eApps, and… `2026-08-18` |
 | `16-the-third-bootloader.md` | Confirmed by forcing it, one variable — RETRACTED 2… | 50 | The experiment the retraction said was blocke… `2026-08-19` |
 | `16-the-third-bootloader.md` | RETRACTED, and then re-established with the right c… | 1028 | — |
 
@@ -208,12 +210,13 @@ and nothing dated replaced it.
 
 ### [`13-do-the-games-load.md`](13-do-the-games-load.md)
 
-33 headings, 2 of them marked or dated:
+33 headings, 3 of them marked or dated:
 
 | line | when | state | heading |
 |---|---|---|---|
-| 685 | 2026-08-18 |  | 2026-08-18: the built-ins are not eApps, and the framework surface is enumerable |
-| 758 | 2026-09-06 |  | The community patch, characterised — and what it actually defeats (2026-09-06) |
+| 423 | 2026-08-19 | corrected | 9.  Reproducing every screen in this file — the commands below do not run, 2026-08-19 |
+| 706 | 2026-08-18 |  | 2026-08-18: the built-ins are not eApps, and the framework surface is enumerable |
+| 779 | 2026-09-06 |  | The community patch, characterised — and what it actually defeats (2026-09-06) |
 
 ### [`14-the-apple-logo.md`](14-the-apple-logo.md)
 
@@ -251,4 +254,13 @@ and nothing dated replaced it.
 | 320 | 2026-08-19 |  | Superseded: the whole matrix, measured 2026-08-19 |
 | 537 | 2026-08-26 |  | Addendum — the 5.5G does not boot, and it is the FIRMWARE, not the ROM (2026-08-26) |
 | 1149 | 2026-08-30 |  | Addendum — what the 25.1.3 stall looks like from the window (2026-08-30) |
+
+### [`18-brick-is-playable.md`](18-brick-is-playable.md)
+
+14 headings, 2 of them marked or dated:
+
+| line | when | state | heading |
+|---|---|---|---|
+| 35 | 2026-09-07 |  | 2. The descent, measured — 2026-09-07 |
+| 158 | 2026-09-07 | settled | 4.  The proof of play — a frame that comes back, and the arm where it does not, 2026-… |
 

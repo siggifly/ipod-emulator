@@ -1026,8 +1026,9 @@ fn main() {
         }
         // --clickwheel : model the wheel's four registers instead of answering them with zero.
         // --wheel=SCRIPT : inject a sequence, and imply --clickwheel.
-        // --wheel-click-instr=N : instructions between the frames of a rotate (default 20000, which
-        //   at --clock=5 is 4 ms per click — a brisk but human scroll).
+        // --wheel-click-instr=N : instructions between the frames of a rotate. The default is
+        //   4 ms of SIMULATED time per click — a brisk but human scroll — which is `4000 * clock`
+        //   and therefore 20 000 at `--clock=5` and 300 000 at the default 75.
         // --wheel-no-irq : model the registers but never raise IRQ 40. The ablation that separates
         //   "the firmware read a frame" from "the firmware was interrupted into reading one".
         //
@@ -1048,21 +1049,8 @@ fn main() {
         if !args.iter().any(|a| a == "--no-clickwheel") {
             let mut w = ipod_machine::ClickWheel::new(0x7000_c000);
             w.irq_enabled = !args.iter().any(|a| a == "--wheel-no-irq");
-            let gap = args
-                .iter()
-                .find_map(|a| a.strip_prefix("--wheel-click-instr="))
-                .and_then(|v| v.parse::<u64>().ok())
-                .unwrap_or(20_000)
-                .max(1);
-            // **Read here rather than taken from the machine**, because `--clock=` is applied
-            // further down and a script parsed before it would convert against the default. Same
-            // argument, same precedence, so the two cannot disagree.
-            let clock = args
-                .iter()
-                .find_map(|a| a.strip_prefix("--clock="))
-                .and_then(|v| v.parse::<u64>().ok())
-                .map(|n| n.max(1))
-                .unwrap_or(ipod_machine::CLOCK as u64);
+            let clock = wheel_clock(&args);
+            let gap = wheel_click_gap(&args, clock);
             if let Some(spec) = wheel_spec {
                 match ipod_machine::parse_wheel_script(spec, gap, clock) {
                     Ok(steps) => w.script = steps,
@@ -4121,6 +4109,87 @@ fn map_hardware(m: &mut ipod_machine::Machine, cold_boot: bool, args: &[String])
             "ledger #8: PLL_STATUS OR-mask NOT installed (--no-pll-lock) — {dropped} mask(s) \
              removed at {PLL_STATUS:#010x}"
         );
+    }
+}
+
+/// `--wheel-click-instr=N`, or the default that tracks `--clock`.
+///
+/// **The default is a duration, not a number of instructions**, and it has to be because the thing
+/// it is calibrated against is the firmware's wheel poll, which sees the *simulated* interval. A
+/// hard 20 000 was 4 ms when `--clock=5` was the default; when the default moved to 75 on
+/// 2026-08-17 the same constant became **266 µs** — a scroll no thumb can produce, and the exact
+/// input flood whose measured consequence (31 frames posted, 18 dropped unread at RetailOS's
+/// language menu) `parse_wheel_script` writes up. research/04's ledger row for the clock change
+/// records the number as having moved with it, `20 000 -> 300 000`; `ipod-gui` moved
+/// (`emu.rs: click_gap: 300_000`) and this did not, so the two front ends disagreed in silence
+/// from that day until 2026-09-07.
+///
+/// `4000 * clock` is 20 000 at `--clock=5` — byte for byte the schedule every recipe written at
+/// the accelerant already gets — and 300 000 at 75, which is what the window already sends.
+fn wheel_click_gap(args: &[String], clock: u64) -> u64 {
+    args.iter()
+        .find_map(|a| a.strip_prefix("--wheel-click-instr="))
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(4_000 * clock)
+        .max(1)
+}
+
+/// `--clock=N`, or the compile-time default.
+///
+/// **Read from the argv rather than taken from the machine**, because `--clock=` is applied further
+/// down and a script parsed before it would convert against the default. Same argument, same
+/// precedence, so the two cannot disagree.
+fn wheel_clock(args: &[String]) -> u64 {
+    args.iter()
+        .find_map(|a| a.strip_prefix("--clock="))
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(|n| n.max(1))
+        .unwrap_or(ipod_machine::CLOCK as u64)
+}
+
+#[cfg(test)]
+mod wheel_gap_tests {
+    use super::{wheel_click_gap, wheel_clock};
+
+    fn argv(a: &[&str]) -> Vec<String> {
+        a.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    /// **The regression this is here for**: the default was a constant while `--clock`'s default
+    /// moved under it. The assertion that matters is the pair — 4 ms at BOTH clocks — because a
+    /// constant satisfies either one alone.
+    #[test]
+    fn the_click_gap_is_four_milliseconds_at_every_clock() {
+        for (a, want_clock) in [
+            (argv(&["--clock=5"]), 5),
+            (argv(&[]), ipod_machine::CLOCK as u64),
+            (argv(&["--clock=75"]), 75),
+            (argv(&["--clock=1"]), 1),
+        ] {
+            let clock = wheel_clock(&a);
+            assert_eq!(clock, want_clock, "{a:?}");
+            let gap = wheel_click_gap(&a, clock);
+            assert_eq!(
+                gap / clock,
+                4_000,
+                "{a:?}: {gap} instructions at {clock}/us is not 4 ms"
+            );
+        }
+        // The two numbers the corpus names by hand: research/04's ledger row for the clock change,
+        // and `ipod-gui`'s `click_gap`.
+        assert_eq!(wheel_click_gap(&argv(&["--clock=5"]), 5), 20_000);
+        assert_eq!(wheel_click_gap(&argv(&["--clock=75"]), 75), 300_000);
+    }
+
+    /// An explicit flag still wins, and is still taken literally — it is the knob for asking for a
+    /// scroll no thumb could produce, which is a real thing to want to ablate.
+    #[test]
+    fn an_explicit_click_gap_overrides_the_clock() {
+        let a = argv(&["--clock=75", "--wheel-click-instr=20000"]);
+        assert_eq!(wheel_click_gap(&a, wheel_clock(&a)), 20_000);
+        // Zero would divide by zero in `parse_wheel_script`; it is clamped, not refused.
+        let z = argv(&["--wheel-click-instr=0"]);
+        assert_eq!(wheel_click_gap(&z, wheel_clock(&z)), 1);
     }
 }
 

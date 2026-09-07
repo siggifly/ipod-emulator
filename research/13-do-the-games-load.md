@@ -420,7 +420,7 @@ timing is the machine's timing" has to mean to be worth saying.
 
 ---
 
-## 9. Reproducing every screen in this file
+## 9. ⚠️ Reproducing every screen in this file — the commands below do not run, 2026-08-19
 
 > ⚠️ **Stale since the clock change, and measured to be — 2026-08-19.** The commands below are
 > written against `tools/ipod-boot/*.sh` with `--clock=5`. Both are gone: the recipes are
@@ -438,6 +438,18 @@ timing is the machine's timing" has to mean to be worth saying.
 > The gestures themselves are still right — `ROW` is still four clicks per row, `SEL` is still a
 > press — and §10's `--wheel` supports simulated-time anchors (`@12s`, `+250ms`) which do not move
 > when the clock does. Recalibrating this descent onto those is the fix, and it has not been done.
+>
+> ✅ **DONE 2026-09-07 — [research/18](18-brick-is-playable.md).** The descent is recalibrated onto
+> the firmware's clock and run at the faithful `--clock=75`: the Language picker at 4.8 s, the main
+> menu at 66.8 s, Brick's playfield at 152.9 s, `script: 100 of 100 steps fired`. The eight-click
+> gesture below survived the recalibration unchanged — it is still exactly one row — and four of
+> this file's pixel counts came back identical, 75 267 / 75 791 / 75 565 / **76 763**. Two things
+> below did **not** survive and are corrected there: Brick is row 5 only on a drive carrying the 56
+> purchased titles (on a drive built from an IPSW the list is the four built-ins and Brick is row
+> **0**), and §6's inverse-gesture proof is now run with the arm §6 did not have — the same script
+> with the rotations removed, which reaches the same playfield and produces **0 returns against 6**.
+> The commands in this section are left exactly as they were, because what they got wrong is the
+> point of keeping them.
 
 
 Three commands. Each takes a few minutes and writes a PNG sequence, a manifest and an `.mp4` into
@@ -559,10 +571,19 @@ is a property of the game at `--clock=5`, not of the instrument.
 
 ### 10.4 A rally
 
-The recipe is in [`ipod-film asset`](../ipod-film asset), which is the
-tool that produces the film, so the script and the write-up cannot drift apart. It is **two paddle
-sweeps and one button press**, and it took five attempts to get there — the interesting part is
-which four things were wrong.
+The recipe is `ipod-film asset gameplay` —
+[`do_gameplay()`](../tools/ipod-machine/src/bin/ipod-film.rs), the tool that produces the film — so
+the script and the write-up cannot drift apart. It is **two paddle sweeps and one button press**,
+and it took five attempts to get there; the interesting part is which four things were wrong.
+
+> ⚠️ **That command does not run, 2026-09-07.** `do_gameplay()`'s steps are still these
+> instruction anchors while `to_brick()`'s descent was re-based on simulated time on 2026-09-01,
+> and the two are concatenated into one `--wheel=` that `parse_wheel_script` refuses:
+> *"step `@2502340000:touch` mixes units: this script is in seconds"*. So the script and the
+> write-up cannot drift apart, and neither of them runs. Everything in this section is a 2026-08-14
+> measurement, in pre-`7e30c1f` instructions, and stays a lead until re-read off a run at HEAD —
+> `NEXT.md` §0b tracks it. [research/18](18-brick-is-playable.md) re-measures the descent, the
+> paddle and the serve at the faithful clock; it does **not** re-measure this rally.
 
 The rally it produces, read off the film by locating the ball and the paddle in every frame:
 

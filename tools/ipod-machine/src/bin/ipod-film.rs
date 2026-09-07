@@ -552,6 +552,24 @@ fn to_brick() -> String {
     // **`@80s`**: the language picker draws at **73.2 s simulated** — measured with `--bcm-film`'s
     // `first_usec` column, on the retail ROM and a drive built from `iPod_20.1.3`.
     //
+    // ⚠️ **That 73.2 s is stale, and so is every gap below it — measured 2026-09-07.** Same ROM,
+    // same IPSW, same `first_usec` column: the picker draws at **4.8 s**, the main menu answers the
+    // first Select **58.3 s** later, a one-row gesture lands in **0.6-1 s**, a Select that opens a
+    // submenu takes **6-9 s**, and the Select that launches Brick takes **15.7 s**. The 73.2 s was
+    // taken on 2026-09-01, before `7e30c1f` stopped a halt from inventing simulated time. So `@80s`
+    // now fires seventy-five seconds after the screen it aims at — harmless in itself — and every
+    // `+1500ms` after it is a gap calibrated against a machine that answered on a different
+    // schedule, which is not.
+    //
+    // **The unit is right and the calibration is not**, and those are different bugs: re-basing
+    // this on simulated time was a real fix and is not being undone. research/18 §2 carries a
+    // descent measured at this clock that lands all nine of its gestures, and its §4 the two-arm
+    // control that says it played. This is left as it stands rather than being edited to match,
+    // because `do_gameplay` below it cannot run at all (its own anchors are still instruction
+    // counts, and `parse_wheel_script` refuses the mixed script — confirmed by running it,
+    // 2026-09-07) and re-basing the pair means re-reading a rally off its own run at HEAD, which is
+    // research/13 §10.4a's rule and a piece of work of its own. NEXT.md 0b tracks all three.
+    //
     // **`down=`/`up=` rather than `press=`**, for the reason `diag_tour` gives at length: `press=`
     // expands to a down/up pair one click apart, and a firmware that polls cannot see it.
     let head = "@80s:touch,+150ms:down=select,+300ms:up=select,+150ms:release";

@@ -65,6 +65,9 @@ echo "clean-run matrix"
 echo "  scratch   $SCRATCH   (fresh; CACHE inside it, so no row can inherit a boot)"
 echo "  clock     5 instructions per simulated microsecond — the research accelerant, not the"
 echo "            faithful 75. At 75 none of these budgets finishes booting."
+echo "  except    brick, which runs at 75 and states so in its ROUTE column. It is the only row"
+echo "            that measures PLAY rather than 'does it draw', and at 5 the game runs 15x fast"
+echo "            against its own timer. It carries its own budget, in the firmware's clock."
 echo
 
 # ── which real dumps we have, and what each one is ─────────────────────────────────────────────
@@ -87,10 +90,13 @@ pick_ipsw() {                       # $1 = "13|20"
   done
 }
 
-printf '%-9s %-6s %-11s %-14s %-8s %s\n' TARGET GEN NOR ROUTE VERDICT EVIDENCE
-printf '%-9s %-6s %-11s %-14s %-8s %s\n' ------ --- --- ----- ------- --------
-row() { printf '%-9s %-6s %-11s %-14s %-8s %s\n' "$1" "$2" "$3" "$4" "$5" "$6"; }
+printf '%-9s %-6s %-11s %-19s %-8s %s\n' TARGET GEN NOR ROUTE VERDICT EVIDENCE
+printf '%-9s %-6s %-11s %-19s %-8s %s\n' ------ --- --- ----- ------- --------
+row() { printf '%-9s %-6s %-11s %-19s %-8s %s\n' "$1" "$2" "$3" "$4" "$5" "$6"; }
 
+# ROUTE is 19 wide rather than 14 so `brick`'s route can carry its clock. Every row's route is one
+# of a handful of fixed strings, and a column that silently overflows on one of them misaligns the
+# whole table from that line down — which is how a reader loses track of which column a number is in.
 pictures() { grep -c '^[0-9]' "$1/frames.tsv" 2>/dev/null || echo 0; }
 last_digest() { awk '/^[0-9]/{d=$NF} END{print d}' "$1/frames.tsv" 2>/dev/null; }
 # **$9, not $8.** The manifest gained a `first_usec` column when the assets were re-anchored in
@@ -303,24 +309,209 @@ boot_doom() {                       # $1 nor  $2 gen  $3 label  $4 drive
   fi
 }
 
-# ── 0.6 goals: rows that are expected not to pass yet ──────────────────────────────────────────
-
-# Brick — RetailOS's own built-in, and a 0.5 requirement. **Not implemented, deliberately.**
+# `brick` — Apple's own built-in, a 0.5 requirement, and **the only row here that measures PLAY.**
 #
-# It was demonstrated playable, and the recipe that did it was never written down: no file in
-# research/, no recipe in tools/, and grep finds neither the digest nor a descent. Guessing a
-# descent here would produce a confident FAIL about a thing that works, which is the exact shape
-# AGENTS.md §6 is about — so this row states the gap instead of inventing a number.
+# Every other row asks *does it draw*. This one asks *does the wheel move the paddle*, and the two
+# questions want different machines, different evidence and different verdicts. research/18 is the
+# measurement; this is it as a gate.
 #
-# **And it cannot be written like the rows above even once the descent is known.** Every other row
-# runs at `--clock=5`, the accelerant, because at the faithful 75 these budgets do not finish
-# booting — harmless for *does it draw*, since research/04 records a 6 G A/B at 5 and 75 landing on
-# the same 933 ATA commands and 75 267 non-black pixels. A PLAYABILITY row is the exception: at
-# clock 5 the operator reports *"the balls just shoot immediately super fast, nearly unplayable"*.
-# Brick needs --clock=75 and a budget sized for real time.
+# ── 1. THE CLOCK, and why this row alone breaks the harness's rule ─────────────────────────────
+#
+# The banner above says every row runs at `--clock=5`, the research accelerant. That is harmless
+# for a does-it-draw row — research/04 records a 6 G A/B at 5 and at 75 landing on the same 933 ATA
+# commands and the same 75 267 non-black pixels — and it is **not harmless here**, because Brick's
+# animation is driven by the firmware's own timer. The operator played it at clock 5 and reported
+# *"the balls just shoot immediately super fast, nearly unplayable"*. A row written like its
+# neighbours would measure Brick in the state we already know is wrong. So: **75, the real part's
+# rate**, and the row says so in its ROUTE column.
+#
+# The fear that made the accelerant the rule does not survive contact with the clock: it is the
+# *instruction budgets* that do not finish booting at 75, not the clock. Measured 2026-09-07 on the
+# 5G dump and a drive built from `iPod_20.1.3`, the Language picker draws at **4.8 s simulated**,
+# where at clock 5 it takes 200.8 s (research/12). Fifteen times less iPod-time for the same work.
+#
+# ── 2. THE BUDGET, stated in the clock the firmware waits on ───────────────────────────────────
+#
+# `--until` decides what a run covers; `BUDGET` is only the ceiling that stops a wedged one. The
+# spacing below is measured rather than guessed, and every figure is from research/18 §2:
+#
+#   4.8 s     the Language picker draws                                        75 267 non-black
+#   66.8 s    the main menu answers the Select at 8 s — **58 s of first-boot work, and the one
+#             expensive wait in the whole descent**                            75 791
+#   0.6-1 s   a one-row gesture lands
+#   6-9 s     a Select that opens a submenu
+#   15.7 s    the Select that launches Brick                                   76 763
+#   1.4 s     the centre button to the ball moving
+#
+# 208 s of iPod is **15.6 G instructions** at this clock — about 25 minutes on the machine this was
+# written on, which is the row's honest price and roughly 1.4x a `retailos` row. There is no
+# shorter route to a played game: the 58 s is RetailOS doing first-boot work on a drive this
+# harness deliberately builds fresh for every row.
+#
+# ── 3. BRICK IS ROW 0 HERE, and that is a property of the drive rather than of RetailOS ────────
+#
+# research/13 §5 has Brick at row 5 of a 56-entry Games list — that was the operator's own drive,
+# with 56 purchased titles interleaved alphabetically. A drive built from an IPSW carries none of
+# them, so the list is the four built-ins, `Brick · Music Quiz · Parachute · Solitaire`, and Brick
+# sorts first and is selected on entry. The descent needs no scroll inside the list. **A row that
+# copied research/13's five gestures would walk off the end of a four-entry list.**
+#
+# ── 4. THE CONTROL, which is the reason this row is worth having ───────────────────────────────
+#
+# A picture count cannot tell *arrival* from *play* — the `doom` row learned that the hard way and
+# its comment says so. Reaching a title screen is not the claim. The claim is that the wheel moves
+# the paddle, and the evidence is **a frame that comes back**: four gestures, `+8 -8 +8 -8`, on a
+# playfield whose ball has NOT been served, so the paddle is the only thing on screen that can
+# move. An inverse gesture then lands on a **byte-identical earlier frame** — the film's own
+# `repeat_of` column, which names the earlier index whose 76 800-halfword digest it matched.
+#
+# `BRICK_NULL=1` is the arm that makes this row fail on demand, and it is not a debug switch — it
+# is the control that gives the verdict its meaning. It replaces each `touch, rotate=±8, release`
+# with a bare `touch, release` of the same duration at the same microsecond, so the finger lands on
+# the wheel and comes off without turning it. Everything else is identical by construction, because
+# both arms are built from these same lines. Measured 2026-09-07, research/18 §4.4 — this row, run
+# five times:
+#
+#   5G   real       PASS  script: 100 of 100, playfield 76763, 6 returns, 38 after the serve
+#   5G   realB      PASS  the same run again — the manifests are IDENTICAL, every frame, every
+#                         instruction count, every digest
+#   5G   synthetic  PASS  script: 100 of 100, playfield 76763, 4 returns, 37 after the serve
+#   5.5G synthetic  PASS  script: 100 of 100, playfield 76763, 6 returns, 40 after the serve
+#   5G   BRICK_NULL FAIL  script:  68 of  68, playfield 76763, 0 returns, 38 after the serve
+#
+# **The null arm reaches the same playfield and serves the same ball**; it differs in one number and
+# that number is the claim. And the three passing machines are not the same machine: Apple's
+# bootloader out of a real ROM, and two synthesised ROMs entered through the drive, one of them a
+# different generation on a different updater family. All three land on the same three digests —
+# `0x14854c1e…` -> `0x70ec99eb…` -> `0x3d5be725…` — over 76 800 halfwords.
+#
+# **The null arm reaches the same playfield and serves the same ball.** It fails on the paddle and
+# on nothing else, which is what makes the verdict mean what it says rather than meaning "something
+# happened". Its playfield frame is held across **301 consecutive samples, 3.01 G instructions**,
+# through all four gestures, without one new picture.
+#
+# What that rules out, and nothing weaker does: that the panel changed because the game animates on
+# its own (nothing else is moving pre-serve, which is exactly why the digest CAN repeat); that the
+# touch did it (the null arm touches at the same microseconds); that a match was luck (76 800
+# halfwords agreeing, three times).
 boot_brick() {                      # $1 nor  $2 gen  $3 label  $4 drive
-  row brick "$2" "$3" - BLOCKED "the descent was never recorded — issue #24. Needs --clock=75, not 5"
+  local nor="$1" gen="$2" label="$3" drive="$4"
+  local out="$SCRATCH/brick-$gen-$label" work="$SCRATCH/brick-$gen-$label.img" route
+  [ -n "$drive" ] || { row brick "$gen" "$label" - BLOCKED "no drive for this generation"; return; }
+  mkdir -p "$out"; clone_disk "$drive" "$work"
+
+  # **Every anchor absolute, and in the firmware's clock.** The two instants the verdict keys on —
+  # when Brick was launched and when the ball was served — are the same numbers the script used,
+  # so the two cannot drift apart. A `+N` chain computes them somewhere else and then they can.
+  brick_row() { printf ',@%sms:touch,+500ms:rotate=+8,+2s:release' "$1"; }
+  brick_sel() { printf ',@%sms:touch,+500ms:press=select,+2s:release' "$1"; }
+  # The paddle gesture and its ablation, at the same instant and for the same duration. 3528 ms is
+  # not a round number by accident: it is 500 ms to the first click, seven more 4 ms apart, then
+  # 3 s — so the two arms release on the same microsecond.
+  brick_pad() {
+    if [ -n "${BRICK_NULL:-}" ]; then printf ',@%sms:touch,+3528ms:release' "$1"
+    else printf ',@%sms:touch,+500ms:rotate=%s,+3s:release' "$1" "$2"; fi
+  }
+  local w="@8s:touch,+500ms:press=select,+2s:release"   # English on the Language picker
+  w="$w$(brick_row 76504)$(brick_row 83032)$(brick_row 89560)"         # main menu -> Photos, Videos, Extras
+  w="$w$(brick_sel 104088)"                                  # open Extras
+  w="$w$(brick_row 116592)"                                  # Clock -> Games
+  w="$w$(brick_sel 127120)"                                  # open the Games list
+  w="$w$(brick_sel 137624)"                                  # launch row 0 = Brick
+  w="$w$(brick_pad 160128 +8)$(brick_pad 167656 -8)$(brick_pad 175184 +8)$(brick_pad 182712 -8)"
+  w="$w$(brick_sel 191240)"                                  # the centre button serves
+  local launch_us=138124000 paddle_us=160128000 serve_us=191740000
+
+  # **`--rtc` and `--battery` are pinned, and this row is the one that could not do without it.**
+  # They are the only two things in this machine that come from outside it, and `--rtc`'s own
+  # comment in `trace.rs` records the cost of leaving them free: the same recipe an hour apart gave
+  # 44 511 132 instructions and 44 509 887. Measured here on 2026-09-07 before this line existed —
+  # two runs of THIS row, one at 11:14 and one at 12:36, diverged by **24 298 instructions**, which
+  # slid one mid-update frame off a 10 M film sample and turned **6 returns into 5**. The verdict
+  # survived; the evidence did not, and evidence a person cannot reproduce is the thing this whole
+  # harness exists to stop shipping. The date is arbitrary and fixed; nothing here depends on it
+  # being any particular day, only on it being the same day every time.
+  #
+  # The rows above do not pin it. That is a smaller risk rather than no risk — their evidence is
+  # picture counts and ATA censuses, and `trace.rs` records those as not having moved across the
+  # same comparison — but a row whose evidence is a count of byte-identical returns has no such
+  # margin.
+  #
+  # `--wheel-click-instr` is stated rather than left to the default even though 300 000 IS the
+  # default at this clock since 2026-09-07. A row that names its own calibration cannot be
+  # silently re-calibrated by a change to a default somewhere else — which is the exact thing that
+  # happened to this flag between 2026-08-17 and 2026-09-07, when the clock default moved to 75 and
+  # this one did not, leaving every unqualified script scrolling at 266 µs per click.
+  # An ARRAY, not a string. Two flags in a shell variable expanded unquoted are two flags in bash
+  # and **one argument in zsh**, which does not word-split — so they arrive as a single unknown
+  # option, are ignored, and the run reports nothing wrong. That has cost this project time before,
+  # and the failure is invisible: the machine boots, the wheel script still fires in full, and the
+  # only symptom is that the numbers move.
+  local -a pin=(--rtc=2026-01-01T12:00:00 --battery=100)
+  if [ -n "$(fact "$nor" "Build")" ]; then
+    route="Apple ROM, clock 75"
+    FLASH="$nor" DISK="$work" BUDGET=17000000000 "$BIN" retail --clock=75 --until=208s "${pin[@]}" \
+      --clickwheel --wheel-click-instr=300000 --wheel="$w" \
+      --bcm-film=0xE0000:140:F0:10000000:"$out" > "$out.log" 2>&1
+  else
+    route="from the drive, 75"
+    "$TRACE" 17000000000 --osos-from-disk --boot-osos --flash="$nor" --disk="$work" \
+      --disk-writable --sysinfo --bcm --pmu --nor --clock=75 --until=208s "${pin[@]}" \
+      --clickwheel --wheel-click-instr=300000 --wheel="$w" \
+      --bcm-film=0xE0000:140:F0:10000000:"$out" > "$out.log" 2>&1
+  fi
+
+  local fired nfired mfired pf pf_digest pre_digest returns played
+  # **Read, not assumed.** A machine that spends its budget halted fires 0 of N and reads exactly
+  # like a firmware that has stopped listening — AGENTS.md §6's first named shape, and the reason
+  # every anchor above is in simulated time rather than instructions.
+  fired=$(grep -oE "script: [0-9]+ of [0-9]+" "$out.log" | head -1)
+  nfired=$(printf '%s' "$fired" | awk '{print $2}')
+  mfired=$(printf '%s' "$fired" | awk '{print $4}')
+  # The playfield: the last picture standing when the first paddle gesture arrives. Reported as a
+  # number rather than compared against 76 763, because that count is this drive's and this
+  # build's, and a row that asserts it would go red for a reason that is not a regression.
+  pf=$(awk -F'\t' -v t="$paddle_us" '/^[0-9]/ && $5 <= t {n=$9} END{print n+0}' "$out/frames.tsv" 2>/dev/null)
+  # **And the launch has to have CHANGED it**, which a pixel count cannot say. `pf > 1000` is true
+  # of the Games list too, so a run that pressed Select on a list and got nothing would fail on the
+  # returns test instead and report "arrived but did not play" — the right verdict reached for the
+  # wrong reason, which is the defect the `$9, not $8` note above this function is about. Comparing
+  # the digest standing at the launch against the one standing when the paddle arrives asks the
+  # question directly, and asks it without naming 76 763 — a number belonging to this drive and this
+  # build, which a gate must not assert.
+  pf_digest=$(awk -F'\t' -v t="$paddle_us" '/^[0-9]/ && $5 <= t {d=$NF} END{print d}' "$out/frames.tsv" 2>/dev/null)
+  pre_digest=$(awk -F'\t' -v t="$launch_us" '/^[0-9]/ && $5 <= t {d=$NF} END{print d}' "$out/frames.tsv" 2>/dev/null)
+  # **A return is a row whose digest matched an earlier one, where BOTH are in the game.** The
+  # digest map is global over the whole run, so without the second half of that test a frame
+  # matching some boot screen would score as a paddle return.
+  returns=$(awk -F'\t' -v t="$launch_us" '/^[0-9]/ {u[$1]=$5; if ($3 != "-" && $5 > t && u[$3] > t) n++} END{print n+0}' \
+    "$out/frames.tsv" 2>/dev/null)
+  # New pictures after the serve — the ball. Distinct from the returns on purpose: the paddle
+  # proves the wheel is read, the ball proves the game is running, and a row that conflated them
+  # could pass on either alone.
+  played=$(awk -F'\t' -v t="$serve_us" '/^[0-9]/ && $5 > t && $3 == "-" {n++} END{print n+0}' \
+    "$out/frames.tsv" 2>/dev/null)
+  local ev="$fired, playfield $pf non-black, $returns returns, $played pictures after the serve"
+
+  if [ -z "$fired" ] || [ "$nfired" != "$mfired" ]; then
+    row brick "$gen" "$label" "$route" FAIL "not every gesture was delivered: ${fired:-no script line at all}, $ev"
+  elif [ "${pf:-0}" -le 1000 ] || [ "${pf:-0}" -eq 76800 ]; then
+    row brick "$gen" "$label" "$route" FAIL "never reached a playfield: $ev"
+  elif [ -n "$pre_digest" ] && [ "$pf_digest" = "$pre_digest" ]; then
+    row brick "$gen" "$label" "$route" FAIL \
+      "the Select did not launch anything — the panel at the launch and at the first paddle gesture are the same picture: $ev"
+  elif [ "${returns:-0}" -lt 2 ]; then
+    # The verdict the BRICK_NULL arm produces, and the one a regression in the wheel produces.
+    row brick "$gen" "$label" "$route" FAIL \
+      "arrived but did not play — the panel never came back to an earlier frame under the inverse gesture: $ev"
+  elif [ "${played:-0}" -lt 8 ]; then
+    row brick "$gen" "$label" "$route" PARTIAL "the paddle moves, the ball does not — the serve did not take: $ev"
+  else
+    row brick "$gen" "$label" "$route" PASS "$ev -> $out"
+  fi
 }
+
+# ── 0.6 goals: rows that are expected not to pass yet ──────────────────────────────────────────
 #
 # **They report GOAL, never FAIL, and the distinction is the whole point.** A matrix with three
 # permanently-red rows is a matrix people stop reading, and the failure it is meant to catch —
