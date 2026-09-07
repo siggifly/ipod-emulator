@@ -9618,7 +9618,9 @@ pub(crate) mod tests {
     /// the trailing edge and sits on the top edge.
     fn drawn_hold_switch() -> slint::LogicalPosition {
         let hero = dressed_fit().hero_logical;
-        let well_h = geometry::PREF_HEIGHT - geometry::SHELF;
+        // The drawer overlays, so the well is the whole client — and since §7.5's shelf went, the
+        // whole client is the whole window. Same derivation as `drawn_wheel_centre`.
+        let well_h = geometry::PREF_HEIGHT;
         let body_y = well_h
             - geometry::GAP_2
             - geometry::CRADLE_LABEL
@@ -19109,7 +19111,7 @@ pub(crate) mod tests {
     ///
     /// It also pins the four bindings that were reading the **bench's** two fields: `enabled` and
     /// `reason` came from `DeviceRow.startable` / `.cradle-label`, which `window.slint:873` and
-` read for the drawn iPod, and `machine-rule` was a literal `true`.
+    /// `:890` read for the drawn iPod, and `machine-rule` was a literal `true`.
     #[test]
     fn the_devices_page_opens_a_row_and_reaches_its_start() {
         let dir = temp_dir("devices-wired");
