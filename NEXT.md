@@ -360,6 +360,25 @@ not.
 > mixes units — deliberately, per item 4c. One command (`ipod-film asset gameplay`) confirms or
 > refutes it; I have not run it. The fix is to re-base the gameplay half on the clock too, which is
 > the same fix `to_brick()` already had.
+>
+> **✅ Count 2 CONFIRMED by running it, 2026-09-07.** Verbatim: `--wheel: step "@2502340000:touch"
+> mixes units: this script is in seconds, and the two clocks diverge whenever the machine idles.` /
+> `ipod-film: the run failed; no film written`, exit 1. The reading off the source was right in
+> every particular. **Still not fixed** — re-basing `do_gameplay` means re-reading a rally off its
+> own run at HEAD, which is count 1's work.
+>
+> **⚠️ And a third, found while confirming the second: `to_brick()`'s own calibration is stale
+> too.** Its comment states *"the language picker draws at 73.2 s simulated … on the retail ROM and
+> a drive built from `iPod_20.1.3`"*, measured 2026-09-01. Same ROM, same IPSW, measured
+> 2026-09-07: **4.8 s**. The figure predates `7e30c1f`, so `@80s` now fires seventy-five seconds
+> after the screen it aims at, and every gap after it is scaled to a clock the machine no longer
+> keeps. It is anchored in the right *unit* — that fix was real — and calibrated against the wrong
+> machine.
+>
+> **Count 1 is untouched and stays SUSPECT.** [research/18](research/18-brick-is-playable.md)
+> measures the descent, the paddle and the serve at `--clock=75` on the shipping build, with a
+> control arm; it does **not** measure the rally, the ball's physics or the 24 px quantum. Those are
+> still 2026-08-14 numbers in pre-`7e30c1f` instructions.
 
 ## 0y — ~~Nothing draws on a synthetic NOR~~ · **FIXED 2026-08-20 — one pin, three cells**
 

@@ -6,11 +6,13 @@ game. So does Rockbox.
 
 ![cold boot through to a game](docs/media/ipod-12-device-boot.gif)
 
-> **Alpha.** It boots, it draws, and the wheel moves it — that last one proven on 2026-09-05 against
-> a control that sat on the language picker for 2 250 s without input. **The Brick pictures on this
-> page were made on 2026-08-14**, and the one run since that reached Brick had a line of the machine
-> temporarily reverted, so on the build this program ships it is unverified rather than known. Expect
-> rough edges, and expect things that work here to fail on files nobody has tested.
+> **Alpha.** It boots, it draws, the wheel moves it, and it plays Brick. That last one was
+> re-measured on 2026-09-07 on the build this program ships, at the iPod's own clock rather than the
+> research accelerant, against a control arm that keeps every touch and removes only the turn of the
+> wheel: same descent, same playfield, same served ball, and the paddle does not move
+> ([research/18](research/18-brick-is-playable.md)). **The Brick pictures on this page were made on
+> 2026-08-14** and have not been re-rendered; what they show has been. Expect rough edges, and
+> expect things that work here to fail on files nobody has tested.
 > **[Open an issue](https://github.com/siggifly/ipod-emulator/issues)** if something breaks; every
 > report so far has found a real bug.
 
