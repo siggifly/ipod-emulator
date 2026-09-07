@@ -554,7 +554,7 @@ impl Composer {
     /// `the_verdict_the_plan_and_the_recipe_are_one_recipe` calls after every kind of edit.
     ///
     /// [`Composer::open`] sits in the middle of the run and is **not** gated: `push_composer` reads
-    /// it on every frame, through `set_composer_open_field` at `main.rs:6404`.
+    /// it on every frame, through `set_composer_open_field` at `main.rs:6512`.
     #[cfg(test)]
     pub fn region(&self) -> &Region {
         &self.region
@@ -989,6 +989,20 @@ impl Composer {
             }
             Some(_) => {}
         }
+        let chosen = self.pick_field(s, f, index);
+        // **Run on every successful choice, including the ones that cannot have caused it.** See
+        // the function's own note: an invariant checked only where somebody expected it to break is
+        // one nobody re-checks when a fourth field starts moving the model.
+        if chosen.is_ok() {
+            self.drop_a_drive_of_another_generation(s);
+            self.recompute();
+        }
+        chosen
+    }
+
+    /// [`Composer::choose`]'s body, after the drawn row has agreed to be picked.
+    fn pick_field(&mut self, s: &Settings, f: Field, index: usize) -> Result<(), String> {
+        let out_of = |what: &str| format!("there is no {what} at position {index}");
         match f {
             Field::Ipod => {
                 if index == 0 {
@@ -1028,7 +1042,12 @@ impl Composer {
                     self.set_start(Start::FromIpsw(keep));
                     return Ok(());
                 }
-                let d = s.disks.get(index - 1).ok_or_else(|| out_of("disk"))?;
+                // **The same filtered list the picker drew**, and that is not a tidiness point:
+                // `choose` indexes by drawn position, so a list that is filtered on the way out and
+                // unfiltered on the way back in hands the recipe whichever drive happens to sit at
+                // that index in the library — which is a wrong pair chosen by arithmetic.
+                let drives = self.drives_for(s);
+                let d = drives.get(index - 1).ok_or_else(|| out_of("disk"))?;
                 self.set_start(Start::FromDisk {
                     name: d.name.clone(),
                     fat_type: None,
@@ -1036,7 +1055,8 @@ impl Composer {
                 Ok(())
             }
             Field::From => {
-                let r = video_releases().nth(index).ok_or_else(|| out_of("release"))?;
+                let releases = self.releases_for();
+                let r = releases.get(index).ok_or_else(|| out_of("release"))?;
                 self.set_start(Start::FromIpsw(r.file.to_string()));
                 Ok(())
             }
@@ -1405,6 +1425,46 @@ impl Composer {
     /// GUI.md §11.1: an iPod states its model, and the model decides which bundles can follow. A
     /// bundle for the other generation is not a bundle for this one, so choosing a different iPod
     /// drops it rather than leaving a plan that names somebody else's software.
+    /// **The chosen drive follows the model too, and it did not.**
+    ///
+    /// [`Composer::follow_the_model`] only ever looked at `Start::FromIpsw`, so the mismatch could
+    /// still be built from the other direction: choose a 5.5G's drive, then change the iPod to a
+    /// 5G, and the plan is left holding the pair that boots to errors — which `Composer::commit`
+    /// then files. [`Composer::drives_for`] keeps that pair out of the picker; this keeps it out of
+    /// a recipe whose iPod moved under it.
+    ///
+    /// **Separate from `follow_the_model` because it needs the library and that one cannot have
+    /// it.** `follow_the_model` runs inside `make_one` and `set_model`, neither of which is handed
+    /// a `Settings`; a drive's updater family is a record in the library. So this runs from
+    /// [`Composer::choose`], which has one, after every choice — including the ones that cannot
+    /// have caused it, because an invariant checked only where it is expected to break is an
+    /// invariant nobody re-checks when a fourth field starts changing the model.
+    fn drop_a_drive_of_another_generation(&mut self, s: &Settings) {
+        let Start::FromDisk { name, .. } = &self.recipe.start else {
+            return;
+        };
+        let mine = self
+            .model()
+            .map(|m| m.generation.updater_families())
+            .unwrap_or(&[]);
+        // Cannot say which iPod this is: nothing to disagree with.
+        if mine.is_empty() {
+            return;
+        }
+        let keeps = s
+            .disks
+            .iter()
+            .find(|d| d.name == *name)
+            .and_then(drive_family)
+            // A drive nothing here built has no family to disagree with, and is kept.
+            .is_none_or(|f| mine.contains(&f));
+        if !keeps {
+            // Back to *build one*, with no bundle named — which is where `Recipe::default` starts
+            // and what the picker's own option 0 means.
+            self.set_start(Start::FromIpsw(String::new()));
+        }
+    }
+
     fn follow_the_model(&mut self) {
         let Start::FromIpsw(file) = &self.recipe.start else {
             return;
@@ -1820,7 +1880,24 @@ impl Composer {
             presses: 1,
             consequence: String::new(),
         }];
-        for (i, d) in s.disks.iter().enumerate() {
+        // **Filtered, so the mismatch cannot be made here at all.** Picking a ROM and a drive from
+        // two lists that did not know about each other is exactly how a 5G ends up running 5.5G
+        // software and booting to errors; `Blocked::Generations` refuses that pair once it exists,
+        // and this is the half that stops it existing. `drives_for` keeps every drive it cannot
+        // read a family off, so nothing somebody supplied themselves disappears.
+        let drives = self.drives_for(s);
+        // The library holds drives and none of them is this iPod's — a state worth a sentence,
+        // because *Build one* is then the only option and a person is owed the reason.
+        if drives.is_empty() && !s.disks.is_empty() {
+            if let Some(m) = self.model() {
+                v.push(self.nothing_applies(format!(
+                    "Every filed drive is another generation's; this iPod is a {}. Build one, or \
+                     choose a different iPod.",
+                    m.generation.label()
+                )));
+            }
+        }
+        for (i, d) in drives.iter().enumerate() {
             v.push(Choice {
                 id: i as u32 + 1,
                 label: d.name.clone(),
@@ -1851,14 +1928,11 @@ impl Composer {
     /// nothing. It is a machine rule — a 5G's software is not a 5.5G's, ever — so it carries no
     /// escape hatch.
     fn firmware_options(&self) -> Vec<Choice> {
-        let mine = self
-            .model()
-            .map(|m| m.generation.updater_families())
-            .unwrap_or(&[]);
-        let mut v = Vec::new();
-        for (i, r) in video_releases().enumerate() {
-            let ok = mine.contains(&(r.updater_family as u32));
-            v.push(Choice {
+        let mut v: Vec<Choice> = self
+            .releases_for()
+            .into_iter()
+            .enumerate()
+            .map(|(i, r)| Choice {
                 id: i as u32,
                 label: r.file.trim_end_matches(".ipsw").to_string(),
                 sub: if r.variant.is_empty() {
@@ -1866,30 +1940,101 @@ impl Composer {
                 } else {
                     format!("{} — {}", r.model, r.variant)
                 },
-                enabled: ok,
+                enabled: true,
                 chosen: matches!(&self.recipe.start, Start::FromIpsw(f) if f == r.file),
-                reason: if ok {
-                    String::new()
-                } else {
-                    match self.model() {
-                        Some(m) => format!(
-                            "the {}'s software; this iPod is a {}",
-                            other_label(r.updater_family),
-                            m.generation.label()
-                        ),
-                        None => NO_IPOD.to_string(),
-                    }
-                },
+                reason: String::new(),
                 escape: String::new(),
-                // Only claimed where there is a refusal to classify: a 5G's software is not a
-                // 5.5G's, ever, and that is a machine rule rather than something we have not
-                // finished.
-                machine_rule: !ok,
+                machine_rule: false,
                 presses: 1,
                 consequence: String::new(),
-            });
+            })
+            .collect();
+        // **An empty list has to say why, or it is the dead end §14.1 exists to prevent.** It is
+        // reachable: a generation this build has established no family mapping for offers nothing,
+        // which is `families_of`'s documented *cannot say* rather than *nothing matches*.
+        if v.is_empty() {
+            v.push(self.nothing_applies(match self.model() {
+                Some(m) => format!(
+                    "This build knows no Apple bundle for a {}. Choose a different iPod, or hand \
+                     this one a drive somebody else built.",
+                    m.generation.label()
+                ),
+                None => NO_IPOD.to_string(),
+            }));
         }
         v
+    }
+
+    /// **The Apple bundles that belong with the iPod on screen**, and no others.
+    ///
+    /// The other generation's bundles used to be drawn and disabled, on §14.1's argument that a
+    /// list which never hides anything teaches which software belongs to which iPod. The operator
+    /// asked for the opposite here — *"dont offer grayed out things to people for example in the
+    /// selection for ipsw"* — and the distinction that reconciles the two is what the disabled row
+    /// is *for*: **disable a thing somebody might reasonably expect and needs told about; omit a
+    /// thing that was never applicable.** A family-25 bundle in front of a 5G is not a refusal
+    /// aimed at this person, it is another model's inventory, and there are sixty-odd of them.
+    ///
+    /// §14.1 is kept where it is doing work: the refusals that survive are the ones about *this*
+    /// iPod — a part that has left the library, a bootloader that would not start what the row
+    /// promises, a ROM and a drive that are different generations — and the empty case above still
+    /// says why and offers the remedy.
+    ///
+    /// **An iPod this build cannot identify filters nothing.** `families_of`'s empty list means
+    /// *cannot say*, and filtering everything out on it would hand somebody an empty picker over a
+    /// hand-edited settings file.
+    fn releases_for(&self) -> Vec<&'static firmware::Release> {
+        let Some(mine) = self.model().map(|m| m.generation.updater_families()) else {
+            return video_releases().collect();
+        };
+        if mine.is_empty() {
+            return video_releases().collect();
+        }
+        video_releases()
+            .filter(|r| mine.contains(&(r.updater_family as u32)))
+            .collect()
+    }
+
+    /// **The filed drives that belong with the iPod on screen.**
+    ///
+    /// A drive this program built records the bundle it was built from, and that names its updater
+    /// family — the number a 5G and a 5.5G differ by and nothing else does, since they share
+    /// `FamilyID` 6. A drive with no such record is **kept**: not knowing is not a reason to refuse,
+    /// and a picker that hid every drive somebody supplied themselves would hide the only ones some
+    /// people have.
+    fn drives_for<'a>(&self, s: &'a Settings) -> Vec<&'a ipod_machine::settings::Disk> {
+        let mine = self
+            .model()
+            .map(|m| m.generation.updater_families())
+            .unwrap_or(&[]);
+        s.disks
+            .iter()
+            .filter(|d| match (mine.is_empty(), drive_family(d)) {
+                // Cannot say which iPod this is, or cannot say what built the drive. Either way
+                // there is nothing to disagree about.
+                (true, _) | (_, None) => true,
+                (false, Some(f)) => mine.contains(&f),
+            })
+            .collect()
+    }
+
+    /// One row standing in for a list that filtered down to nothing, **with the remedy on it**.
+    ///
+    /// Drawn and disabled, which is §14.1 doing the job it is actually for: an empty picker with
+    /// nothing in it teaches nobody, and is the dead end that rule was written against.
+    fn nothing_applies(&self, why: String) -> Choice {
+        Choice {
+            id: 0,
+            label: "Nothing here fits this iPod".into(),
+            sub: String::new(),
+            enabled: false,
+            chosen: false,
+            reason: why,
+            escape: String::new(),
+            machine_rule: true,
+            presses: 1,
+            consequence: String::new(),
+        }
     }
 
     fn loader_options(&self) -> Vec<Choice> {
@@ -2326,14 +2471,15 @@ fn video_releases() -> impl Iterator<Item = &'static firmware::Release> {
         .filter(move |r| families.contains(&(r.updater_family as u32)))
 }
 
-/// Which generation a family belongs to, for the sentence on a disabled bundle.
-fn other_label(family: u16) -> String {
-    for g in [identity::Generation::Video1, identity::Generation::Video2] {
-        if g.updater_families().contains(&(family as u32)) {
-            return g.label();
-        }
-    }
-    format!("family {family}")
+/// **The updater family a filed drive carries**, or `None` for one nothing here built.
+///
+/// `Disk::built_from` is the installer this program recorded at the moment it built the drive, so
+/// this is a library record resolved through the catalogue rather than a filename parsed for a
+/// number. `None` means *cannot say* — a drive somebody supplied has no such record, and the whole
+/// design of the generation check is that not knowing and no reason to object are the same answer.
+fn drive_family(d: &ipod_machine::settings::Disk) -> Option<u32> {
+    let built = d.built_from.as_deref()?;
+    firmware::by_file(built).map(|r| u32::from(r.updater_family))
 }
 
 #[cfg(test)]
@@ -2408,6 +2554,152 @@ mod tests {
         };
         s.remember_as(device);
         s
+    }
+
+    /// A library holding one drive built from each generation's bundle, and one somebody supplied.
+    fn three_drives() -> Settings {
+        use ipod_machine::settings::Disk;
+        let mut s = library("My 5.5G");
+        for (name, built) in [
+            ("five", Some("iPod_20.1.3.ipsw")),
+            ("five-five", Some("iPod_25.1.3.ipsw")),
+            ("theirs", None),
+        ] {
+            s.disks.push(Disk {
+                name: name.into(),
+                path: std::path::PathBuf::from(format!("/nowhere/{name}.img")),
+                built_from: built.map(str::to_string),
+                installed: Vec::new(),
+            });
+        }
+        s
+    }
+
+    /// **A drive of the other generation is not offered, so the pair cannot be composed.**
+    ///
+    /// Picking a ROM and a drive from two lists that do not know about each other is how the
+    /// operator's `Black 5g` came to be a 5G ROM running 5.5G software. `Blocked::Generations`
+    /// refuses that device once it exists; this is the half that stops it existing.
+    ///
+    /// **A drive nothing here built is kept**, which is the same rule
+    /// `inspect::generation_mismatch` states for itself: not knowing is not a reason to refuse, and
+    /// a picker that hid every supplied drive would hide the only ones some people have.
+    #[test]
+    fn a_drive_of_another_generation_is_not_offered() {
+        let s = three_drives();
+
+        let names = |c: &mut Composer| -> Vec<String> {
+            c.set_open(Some(Field::Disk));
+            c.options(&s).into_iter().map(|o| o.label).collect()
+        };
+
+        let mut five_five = with_ipod(); // A444, a 5.5G
+        let offered = names(&mut five_five);
+        assert!(offered.contains(&"five-five".to_string()), "{offered:?}");
+        assert!(offered.contains(&"theirs".to_string()), "a supplied drive was hidden: {offered:?}");
+        assert!(!offered.contains(&"five".to_string()), "a 5G's drive offered to a 5.5G: {offered:?}");
+
+        let mut five = with_ipod();
+        five.set_model("A146").expect("a 5G");
+        let offered = names(&mut five);
+        assert!(offered.contains(&"five".to_string()), "{offered:?}");
+        assert!(offered.contains(&"theirs".to_string()), "{offered:?}");
+        assert!(!offered.contains(&"five-five".to_string()), "a 5.5G's drive offered to a 5G: {offered:?}");
+
+        // **And the index the picker draws is the index `choose` walks.** A list filtered on the
+        // way out and unfiltered on the way back in hands the recipe whichever drive happens to sit
+        // at that position in the library, which is a wrong pair chosen by arithmetic.
+        five.choose(&s, Field::Disk, 1).expect("the first drive offered to a 5G");
+        assert!(
+            matches!(five.recipe().start, Start::FromDisk { ref name, .. } if name == "five"),
+            "choosing position 1 landed on {:?}",
+            five.recipe().start
+        );
+    }
+
+    /// **A filtered list that empties says why and offers the remedy**, which is the dead end §14.1
+    /// is written against — an empty picker with nothing in it teaches nobody.
+    #[test]
+    fn a_picker_with_nothing_left_in_it_says_so() {
+        use ipod_machine::settings::Disk;
+        let mut s = library("My 5.5G");
+        s.disks.push(Disk {
+            name: "five".into(),
+            path: std::path::PathBuf::from("/nowhere/five.img"),
+            built_from: Some("iPod_20.1.3.ipsw".into()),
+            installed: Vec::new(),
+        });
+
+        let mut c = with_ipod(); // a 5.5G, and the library's only drive is a 5G's
+        c.set_open(Some(Field::Disk));
+        let opts = c.options(&s);
+        let stood_in = opts
+            .iter()
+            .find(|o| !o.enabled)
+            .expect("no row explains why the library's drives are gone");
+        assert!(stood_in.reason.contains("5.5G"), "{}", stood_in.reason);
+        assert!(stood_in.reason.contains("Build one"), "no remedy: {}", stood_in.reason);
+        assert!(
+            opts.iter().any(|o| o.enabled && o.label == "Build one"),
+            "the remedy the sentence names is not on the page"
+        );
+
+        // The control: with a drive of its own, the list is drives and nothing stands in for them.
+        s.disks[0].built_from = Some("iPod_25.1.3.ipsw".into());
+        c.set_open(Some(Field::Disk));
+        assert!(
+            c.options(&s).iter().all(|o| o.enabled),
+            "a stand-in row survived a list that has something in it"
+        );
+    }
+
+    /// **Changing the iPod under a chosen drive drops the drive**, which is the mismatch reached
+    /// from the direction the picker's own filter cannot see.
+    #[test]
+    fn changing_the_model_drops_a_drive_of_another_generation() {
+        let s = three_drives();
+        // **By label, never by a guessed index.** The offered list is filtered, so the position a
+        // drive sits at in the library is not the position the picker draws it at — which is the
+        // same arithmetic this whole change is about.
+        let at = |c: &mut Composer, label: &str| -> usize {
+            c.set_open(Some(Field::Disk));
+            c.options(&s)
+                .iter()
+                .position(|o| o.label == label)
+                .unwrap_or_else(|| panic!("{label} is not offered"))
+        };
+
+        let mut c = with_ipod(); // a 5.5G
+        let i = at(&mut c, "five-five");
+        c.choose(&s, Field::Disk, i).expect("the 5.5G's drive");
+        assert!(
+            matches!(c.recipe().start, Start::FromDisk { ref name, .. } if name == "five-five"),
+            "{:?}",
+            c.recipe().start
+        );
+
+        // The model chosen by number rather than by position, so this says what it means.
+        let five = emulable()
+            .position(|m| m.number == "A146")
+            .expect("the 5G is in the emulable list");
+        c.choose(&s, Field::Model, five).expect("the 5G");
+        assert!(
+            matches!(c.recipe().start, Start::FromIpsw(ref f) if f.is_empty()),
+            "a 5.5G's drive survived being handed to a 5G: {:?}",
+            c.recipe().start
+        );
+
+        // **The control: a drive nothing here built survives the same move.** Not knowing what
+        // built it is not a reason to take it away from somebody.
+        let mut d = with_ipod();
+        let i = at(&mut d, "theirs");
+        d.choose(&s, Field::Disk, i).expect("the supplied drive");
+        d.choose(&s, Field::Model, five).expect("the 5G");
+        assert!(
+            matches!(d.recipe().start, Start::FromDisk { ref name, .. } if name == "theirs"),
+            "a supplied drive was dropped for a generation nothing can read off it: {:?}",
+            d.recipe().start
+        );
     }
 
     /// The three derived values are a pure function of the recipe and the read, always.
@@ -3322,45 +3614,53 @@ mod tests {
     }
 
     /// **GUI.md §11.1, made mechanical**: an iPod states its model, and the model decides which
-    /// bundles can follow. The other generation's are drawn and disabled, never absent.
+    /// bundles can follow. The other generation's are **not offered at all**.
+    ///
+    /// They used to be drawn and disabled, on §14.1's argument that a list which hides nothing
+    /// teaches which software belongs to which iPod. The operator asked for the opposite —
+    /// *"dont offer grayed out things to people for example in the selection for ipsw"* — and the
+    /// line that reconciles it with §14.1 is what a disabled row is for: **disable what somebody
+    /// might reasonably expect and needs told about; omit what was never applicable.** Sixty rows
+    /// of another model's inventory are the second.
     #[test]
     fn the_offered_firmware_follows_the_chosen_model() {
         let s = library("My 5.5G");
         let mut c = with_ipod(); // a 5.5G
         c.set_open(Some(Field::From));
-        let opts = c.options(&s);
-        assert!(opts.len() >= 4, "only {} bundles offered", opts.len());
-        let (on, off): (Vec<_>, Vec<_>) = opts.iter().partition(|o| o.enabled);
-        assert!(!on.is_empty(), "no bundle at all for a 5.5G");
-        assert!(!off.is_empty(), "the other generation's bundles are absent, not disabled");
-        for o in &off {
-            assert!(!o.reason.is_empty(), "a disabled bundle with no reason");
-            assert!(
-                o.reason.contains("5G") && o.reason.contains("5.5G"),
-                "the reason does not name both iPods: {}",
-                o.reason
-            );
-            assert!(o.machine_rule, "a 5G's software is not a 5.5G's, ever");
-            assert!(o.escape.is_empty(), "a machine rule carries a command");
-        }
+        let mine = c.options(&s);
+        assert!(!mine.is_empty(), "no bundle at all for a 5.5G");
+        assert!(
+            mine.iter().all(|o| o.enabled),
+            "a bundle is drawn disabled; the other generation's should not be drawn"
+        );
+        // The control: this list is a filter and not the whole catalogue.
+        assert!(
+            mine.len() < video_releases().count(),
+            "every Video bundle is offered, so nothing was filtered"
+        );
 
-        // Choose the other iPod and the two sets swap.
+        // Choose the other iPod and the two sets are disjoint.
         let mut d = with_ipod();
         d.set_model("A146").expect("a 5G");
         d.set_open(Some(Field::From));
         let theirs = d.options(&s);
-        let on_now: Vec<&str> = theirs
-            .iter()
-            .filter(|o| o.enabled)
-            .map(|o| o.label.as_str())
-            .collect();
-        for o in &on {
+        assert!(!theirs.is_empty(), "no bundle at all for a 5G");
+        for o in &theirs {
             assert!(
-                !on_now.contains(&o.label.as_str()),
+                !mine.iter().any(|m| m.label == o.label),
                 "{} is offered to both generations",
                 o.label
             );
         }
+
+        // **And a row that is not drawn cannot be chosen by index either.** `Composer::choose`
+        // walks the same filtered list the picker drew; the arithmetic used to run over the whole
+        // catalogue, which is how a filtered list hands back the wrong item at the right position.
+        let one_past = theirs.len();
+        assert!(
+            d.choose(&s, Field::From, one_past).is_err(),
+            "a position past the end of the offered list chose something"
+        );
     }
 
     /// A bundle that no longer belongs to the chosen iPod is dropped rather than left standing as a

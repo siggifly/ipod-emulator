@@ -124,10 +124,18 @@ pub fn plan(holes: Holes) -> Vec<Step> {
     v.push(Step {
         kind: Verb::Start,
         what: "cold boot".into(),
-        sub: format!(
-            "about {} s — no percentage until this device has completed one",
-            compose::COLD_BOOT_SECONDS
-        ),
+        // **This said `about 75 s` and it was a constant that had stopped being true.** The figure
+        // was measured at `--clock=5`; the default became 75, a boot that spends its time polling
+        // executes fifteen times the instructions at that clock, and the plan went on quoting the
+        // old number — to the one person in the program who has never seen this device boot and has
+        // nothing to compare it against.
+        //
+        // **A first run has no measurement, so it makes no claim.** There is nothing honest to put
+        // here: this device has never completed a boot, `Device::cold_boot` is `None` for it by
+        // construction, and the sentence a plan can truthfully write about a duration it has not
+        // measured is none. What it costs is said while it is happening instead — the phase on the
+        // shelf, a count that moves in the cradle, and a bar once there is something to divide by.
+        sub: "no percentage until this device has completed one".into(),
         cost: Cost::NONE,
     });
     v

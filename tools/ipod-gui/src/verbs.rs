@@ -28,6 +28,36 @@ use ipod_machine::settings::{Device, Presence, Settings};
 use crate::devices;
 use crate::machine::{self, Life, Restore};
 use crate::rail::Caps;
+use crate::work;
+
+/// **The one sentence for *there is not an iPod yet*.**
+///
+/// Five rows on this page reach that state — the four machine controls and `Files on the drive…` —
+/// and each of them used to word it for itself. The four controls did not word it at all: they
+/// substituted the literal `this iPod` for the device's name and went on to say *this iPod is not
+/// running* under a bench captioned `No iPod yet`, four times, on the first screen anybody sees.
+/// **There is one thing wrong on that screen and it is not four things.**
+const NO_IPOD_YET: &str = "There is no iPod yet.";
+
+/// What §21.4's first run will cost, in the plan's own numbers.
+///
+/// **`work::cost` and never a literal**, which is the same call `main::empty_shelf` makes for the
+/// bench's own row 3 and `push_ledger` makes for the bill — so the drawer, the bench and the ledger
+/// cannot print three prices for one press. `Holes::Sparse` because that is what a real build on
+/// this machine allocates, and it is the figure the other two quote.
+fn first_run_cost() -> String {
+    let cost = work::cost(ipod_machine::compose::Holes::Sparse);
+    if cost.down == 0 {
+        // The catalogue lost the release. `0 B to download` would read as *free* rather than as
+        // *nothing to fetch it from*, which is `main::empty_shelf`'s own note on the same branch.
+        return "makes an iPod first — nothing to download".into();
+    }
+    format!(
+        "makes an iPod first — {} to download, about {} on disk",
+        ipod_machine::si(cost.down),
+        ipod_machine::si(cost.disk)
+    )
+}
 
 /// One row of the page. **Closed, and ordered as the page draws it**, so `main.rs` can turn a
 /// press back into a verb by ordinal and nothing has to keep a second list in step.
@@ -314,9 +344,10 @@ fn boot_row(s: &Settings, d: Option<&Device>, seen: &mut Presence, now: Now, ver
         return Row::no(verb, devices::running_rule(m), true);
     }
     let absent = s.missing_with(d, seen);
-    if let Some(b) = machine::Blocked::of(Some(d), &absent) {
+    let mismatch = s.generation_mismatch(d);
+    if let Some(b) = machine::Blocked::of(Some(d), &absent, mismatch.as_deref()) {
         // The bench's own words for this device, so one iPod is not described two ways.
-        return Row::no(verb, crate::blocked_label(crate::Press::Centre, d, &absent, b), b.machine_rule());
+        return Row::no(verb, crate::blocked_label(crate::Press::Centre, d, &absent, b, mismatch.as_deref()), b.machine_rule());
     }
     Row::go(verb, "")
 }
@@ -498,7 +529,13 @@ fn games_row(now: Now) -> Row {
 /// `Resume`, whose refusal is a fact about this window rather than about the machine — see below.
 fn control_row(verb: Verb, d: Option<&Device>, now: Now) -> Row {
     let alive = now.life.alive();
-    let named = d.map(|d| d.name.as_str()).unwrap_or("this iPod");
+    // **`this iPod` is a phrase about an iPod, and with an empty library there is not one.** These
+    // four rows read *this iPod is not running* / *this iPod has no restore point* on the first
+    // screen anybody sees, directly under a row that says `No iPod yet`. There is one thing wrong
+    // on that screen and it is not four things — which is the empty case `files_row` two functions
+    // down already words for itself, and this borrows its sentence rather than inventing a fifth.
+    let named = d.map(|d| d.name.as_str());
+    let no_ipod = || NO_IPOD_YET.to_string();
     // **The key is on the row whether or not the row can be pressed**, and that is §21.6's *keep
     // their keys* taken literally: the operator could not work out how to stop a machine, and a
     // person who reads `Suspend · Esc` on a machine that is off has learnt the key for the moment
@@ -526,13 +563,26 @@ fn control_row(verb: Verb, d: Option<&Device>, now: Now) -> Row {
         // The centre button is the same press, which is why the key column names it rather than a
         // keystroke: §7.3 makes the drawn button the start affordance and this row is the second
         // way to reach it, not a different act.
-        Verb::Start if alive => no(format!("{named} is already running.")),
+        Verb::Start if alive => no(format!("{} is already running.", named.unwrap_or("It"))),
+        // **With no iPod this press is §21.4's first run, and the row has to cost it as one.** It
+        // read *cold boot, from the reset vector*, which is what `Cmd::PowerOn` does and not what
+        // this press does: `press_is_first_run` routes an empty library into `work::Queue::press`,
+        // which downloads Apple's firmware and builds an 8 GB drive before anything boots. The
+        // bench's own cradle two inches away has said so all along — `Press the centre button to
+        // make an iPod`, with the bill under it — and this row promised a reset vector.
+        //
+        // **The numbers are `work::cost`'s**, the same call the empty bench's shelf and the ledger
+        // make, so three surfaces cannot print three bills for one press.
+        Verb::Start if d.is_none() => row(&first_run_cost()),
         Verb::Start => row("cold boot, from the reset vector"),
 
         // §12.4. `Esc` from `Running` sets `Link::save_on_quit`, and `nav::Stack::escape` is the
         // one definition of that key — this row is the same act with a label on it, which is the
         // whole of what §21.6 asks for: *none of them is discoverable*.
-        Verb::Suspend if !alive => no(format!("{named} is not running, so there is nothing to put down.")),
+        Verb::Suspend if !alive => no(match named {
+            Some(n) => format!("{n} is not running, so there is nothing to put down."),
+            None => no_ipod(),
+        }),
         Verb::Suspend => row(&match now.park_bytes.filter(|n| *n > 0) {
             Some(n) => format!("writes the restore point and stops — {}", ipod_machine::si(n)),
             None => "writes the restore point and stops".into(),
@@ -545,30 +595,56 @@ fn control_row(verb: Verb, d: Option<&Device>, now: Now) -> Row {
         // by *building* the machine thread, and a window that has already built one has no route
         // back to the snapshot. Saying so is better than sending `PowerOn` under a label that
         // promised three seconds.
-        Verb::Resume if alive => no(format!("{named} is running.")),
+        Verb::Resume if alive => no(format!("{} is running.", named.unwrap_or("It"))),
         Verb::Resume => match d.map(|d| Restore::of(&crate::resting_config(now.settings, d))) {
-            Some(Restore::Whole) if !now.thread => {
-                row("puts the machine back where it was, about 3 s")
-            }
+            // **`about 3 s` was the second literal of the pair, and the file a resume will read
+            // replaces it.** Its twin on §7.3's cradle went the same way, for §21.6's own stated
+            // reason: a figure true of one machine on one host goes on being printed long after
+            // everything that made it true has moved. The restore point's size is a fact about
+            // *this* device, it costs one `stat` of a file `Restore::of` has just established the
+            // existence of, and it is the currency `Suspend` two rows up already reports in.
+            Some(Restore::Whole) if !now.thread => row(&match d
+                .and_then(|d| crate::resting_config(now.settings, d).snapshot)
+                .and_then(|p| std::fs::metadata(p).ok())
+                .map(|m| m.len())
+            {
+                Some(n) => format!(
+                    "puts the machine back where it was — {} to read",
+                    ipod_machine::si(n)
+                ),
+                None => "puts the machine back where it was".into(),
+            }),
             Some(Restore::Whole) => no(
                 "This machine has been built and powered off, and a restore happens only as the \
                  thread is built. Close the window and start it again to resume."
                     .into(),
             ),
+            // Reachable only with a device, since `Restore::of` was asked about one — so the name
+            // is always there, and `It` is the total-match answer rather than a case that happens.
             Some(Restore::Broken) => no(format!(
-                "{named}'s restore point no longer matches its drive, so resuming it would pair a \
-                 restored memory with a drive that moved."
+                "{}'s restore point no longer matches its drive, so resuming it would pair a \
+                 restored memory with a drive that moved.",
+                named.unwrap_or("It")
             )),
-            _ => no(format!("{named} has no restore point.")),
+            _ => no(match named {
+                Some(n) => format!("{n} has no restore point."),
+                None => no_ipod(),
+            }),
         },
 
         // §12.5: power off is real — the machine is dropped and re-entered at the reset vector,
         // not restored and pretended. `Esc` from `Booting` is this, because §12.4 refuses to park
         // a boot: a 1.6 GB write of a state nobody wants.
-        Verb::Kill if !alive => no(format!("{named} is not running.")),
+        Verb::Kill if !alive => no(match named {
+            Some(n) => format!("{n} is not running."),
+            None => no_ipod(),
+        }),
         Verb::Kill => row("drops the machine. Nothing is written; the next start is cold."),
 
-        Verb::Restart if !alive => no(format!("{named} is not running, so there is nothing to cycle.")),
+        Verb::Restart if !alive => no(match named {
+            Some(n) => format!("{n} is not running, so there is nothing to cycle."),
+            None => no_ipod(),
+        }),
         Verb::Restart => row("power off and straight back on, from the reset vector"),
 
         // Not reachable: the caller matches on the same five. Total rather than `unreachable!`,
@@ -585,7 +661,7 @@ fn control_row(verb: Verb, d: Option<&Device>, now: Now) -> Row {
 fn files_row(d: Option<&Device>) -> Row {
     let why = match d {
         Some(d) => format!("Nothing in this window reads {}'s volume yet.", d.name),
-        None => "There is no iPod yet.".into(),
+        None => NO_IPOD_YET.into(),
     };
     Row::no(Verb::Files, why, false).escape("ipod-boot fat DISK.img tree")
 }

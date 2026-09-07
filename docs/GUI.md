@@ -1042,8 +1042,8 @@ on either side. Its geometry is constant. Only its colour and its continuity cha
 
 | state | ring | label (24 px, `body` 14/20, centred) |
 |---|---|---|
-| startable, never booted | `accent` | `press ● to start · cold boot, about 75 s` |
-| startable, parked | `accent` | `press ● to resume · about 3 s` |
+| startable, never booted | `accent` | `press ● to start · cold boot` — **and `was 19 min` after this device has completed one at this clock; see §12.3** |
+| startable, parked | `accent` | `press ● to resume · 149 MB to read` — the restore point's own size, not the `about 3 s` this row used to promise |
 | **parked, pair broken** | `fg-dim` | `press ● to cold boot · the parked snapshot no longer matches this drive` |
 | a title | `accent` | `press ● to play · there is no boot` |
 | first run | `accent` | `press ● to make an iPod · 6.5 MB to download, about 28 MB on disk` |
@@ -1129,13 +1129,22 @@ about the table itself that no reading had.
 
   | row | as written, with `●` | shipped, with `Press the centre button` |
   |---|---|---|
-  | `startable, never booted` | 40 | `— cold boot, about 75 s` — **47** |
-  | `startable, parked` | 29 | `— resume, about 3 s` — **43** |
-  | **`parked, pair broken`** | **71** | `— no resume, about 75 s` — **47** |
-  | `booting`, with a fraction | 32 | `to stop — booting, 62 %` — **47** |
-  | `booting`, counted | 46 | `to stop — booting, 412 M instr` — **54** |
+  | `startable, never booted` | 40 | `— cold boot, was 999 min` — **47** |
+  | `startable, parked` | 29 | `— resume, 1.6 GB to read` — **47** |
+  | **`parked, pair broken`** | **71** | `— no resume, was 999 min` — **47** |
+  | `booting`, with a fraction | 32 | `to stop — 26 min left` — **44** |
+  | `booting`, counted | 46 | `to stop — 21.5 G instr` — **45** |
   | `stopped` | as long as the `Stop` is | unchanged, unbudgeted |
   | **`a control was pressed…`** | **72** | unchanged; there is no press in it to shorten |
+
+  *(**Re-measured 2026-09-07 and every row moved, because the three that quoted a duration were
+  quoting a constant.** See §12.3: `about 75 s` was measured at `--clock=5` and went on being
+  printed at 75, where the same boot costs fifteen times as much. The two `startable` rows now carry
+  a measurement of this device or nothing at all, the parked row carries the restore point's own
+  size, and the two booting rows lost the word `booting` — which `Life::shelf` says a row above the
+  device — to make room for the estimate the operator asked for. **The counted row is no longer over
+  budget**: it was 54 and is 45, which is the first time every row in this table fits.
+  `999 min` and `21.5 G instr` are the widest values each column can take, not typical ones.)*
 
   **The measurement lands on the `●` question above, and it is the argument for keeping it.**
   `press ●` is seven characters and `Press the centre button` is twenty-three, so every press row
@@ -3065,6 +3074,70 @@ what the old signal cost. **The settings key moved with the meaning** —
 `device.N.cold_boot_instructions` — so every denominator learned by the old signal is read by
 nobody and gone at the next save.)*
 
+*(**And the promise beside the bar was a literal for the whole of that time, wrong by fifteen
+times.** `machine.rs` read `Restore::Never => " — cold boot, about 75 s"`. That figure was measured
+— RetailOS's language picker draws at about 1.05 G instructions and this machine does about 14 M
+instr/s — but it was measured at `--clock=5`, and **the default became 75 on 2026-08-17 while the
+string did not**. A boot that spends its time polling executes fifteen times the instructions when
+each one buys a fifteenth of the simulated time, so the window spent months quoting a clock-5 number
+at clock 75. The operator started a fresh iPod, watched the logo for six minutes and reasonably
+concluded it had hung. It was booting normally.*
+
+*Three things follow, and they are the whole of the fix.*
+
+*① **A cold-boot measurement is three readings of one experiment, or it is not a measurement.**
+`Device::cold_boot_instructions` alone is a fact about the iPod; how long it takes is a fact about
+the host emulating it, and at which clock. So `Device::cold_boot_millis` and
+`Device::cold_boot_clock` are recorded with it, `Device::cold_boot()` is the only reader and refuses
+to assemble a partial one, and `Settings::expected_boot(clock)` hands it back **only when the clock
+matches**. A measurement taken at another clock is dropped rather than scaled: the ratio between the
+two is whatever fraction of the boot is spent polling, which is not a number this program has
+measured, and multiplying by 15 would be inventing the very figure this section exists to stop
+inventing. Every device written before this pays one boot with no fraction and no estimate — the
+same once-only price the `boot_instructions` rename charged, and for the same reason. **The boot
+target is the other half**: §21.3's `Diagnostics` row enters a boot ROM image directly and reaches
+its first screen in a fraction of an operating system's cold boot, so `main::cold_boot_of` answers
+`None` for anything but `BootTarget::Os` — and `pump_machine` asks the same question before it lets
+such a boot *teach* the denominator.*
+
+*② **While a boot is running, the estimate is divided out of the boot itself.**
+`Progress::remaining` is `(denominator − executed) / Pace::speed`, and every term is a reading taken
+since this machine started. It self-corrects, which is the property that matters: a boot running
+slower than the one that taught the denominator produces a bigger number every time it is asked, so
+the estimate grows in front of the person instead of expiring silently. `machine::boot_tail` is the
+one producer, and it has three forms — `2 min left` where there is an answer, `4 min so far` where
+there is not, and `Progress::caption` for the first tick before a wall second has passed.*
+
+*③ **An estimate that turns out wrong keeps counting.** Past the denominator there is no smaller
+estimate to give, only a wrong one, so `remaining` answers `None`, the caption goes back to a clock
+that moves, and `Life::shelf` says `booting — longer than it took last time` in words. A bar sitting
+at 100 % while nothing happens is worse than no bar.*
+
+*Two more literals of the same family went with it, both replaced by a file's own size:
+§7.3's `resume, about 3 s` on the cradle, and §21.6's `Resume` row in the drawer, which now read
+`resume, 149 MB to read` off the restore point they are about. `compose::COLD_BOOT_SECONDS` is
+**deleted**; the first-run plan's `Start` step makes no duration claim at all, because a device that
+has never booted has nothing to claim from.)*
+
+*(**Three facts, three slots, and none of them said twice.** The cradle label is 47 characters at a
+two-digit percentage against a 48-character row — measured, not guessed — so it could not carry a
+third fact, and that is why the word `booting` left it: `Life::shelf` says `booting` a row above the
+device beside the machine's name, the 4 px rule says the fraction eight pixels under it, and the
+caption says the one thing neither can. `bench-booting.png` is the photograph:*
+`My 5.5G · booting — the panel has lit` *above,* `Press the centre button to stop — 43 s left`
+*below. It also bought back the counted form, which was over budget and exempted at 55 characters
+and now fits at 44.)*
+
+*(**And the phase is `Reached`: two published counters crossing zero, in the order a cold boot
+crosses them.** Not the firmware's phases — nothing in this program can see those, and a list of
+them reasoned out from what an operating system *ought* to do is the instrument AGENTS.md §6 is
+about. `Out::fb_nonzero` is the panel and `Stats::ata_commands` is the drive, and Addendum 32 is
+where the order was measured: the first lit pixel at 43 M of an 872 M boot, the drive's first answer
+at 57.5 M, the machine going quiet at 823.6 M. There is a second counter one field away —
+`Stats::data_reads`, the click wheel's — which §12.8 once drew under the label `ata commands`, so
+`a_booting_machine_says_which_of_its_own_milestones_it_has_passed` reads through `Life::read` and
+fails when fed the wrong one.)*
+
 *And the difference is **drawn** rather than only modelled: a 4 px determinate rule in the cradle's
 own band, under the body, when there is a fraction — and nothing at all when there is not, which is
 this section's "no fraction and no bar" as a picture. It costs zero vertical budget: the band
@@ -3634,6 +3707,52 @@ true about the hardware.
 86Box — the closest hardware-accuracy analogue on the PC side — chose **hide**: it lists only CPUs
 compatible with the selected machine. `compose.rs` is better-shaped for the opposite choice, because
 it produces a paragraph and a remedy rather than a filtered list.
+
+#### 14.1.1 …and the line this rule stops at
+
+The operator, driving the shipped window: *"dont offer grayed out things to people for example in
+the selection for ipsw etc"*. Taken flat that retires §14.1. Taken as written it sharpens it, and
+the sharpening is the useful part.
+
+**Disable a thing somebody might reasonably expect and needs told about. Omit a thing that was never
+applicable to them.** Every refusal §14.1 was written for is the first kind, and each is about *this*
+iPod: a part that has left the library, a bootloader that would not start what the row promises, a
+ROM and a drive that are different generations. A person can see why they expected the option, and
+the sentence is the answer. The firmware picker was doing something else — it drew every
+Video-generation bundle and greyed the other generation's, which in front of a 5G is **sixty-odd
+rows of another model's inventory**, each carrying a sentence about an iPod the reader does not
+have. That is not a refusal aimed at anybody; it is a catalogue with the wrong half crossed out.
+
+So the two pickers where the model decides the answer now **filter**:
+
+| picker | producer | rule |
+|---|---|---|
+| Apple bundles | `Composer::releases_for` | the chosen model's `updater_families`, and nothing else |
+| filed drives | `Composer::drives_for` | the family in `Disk::built_from` |
+
+**A drive nothing here built is kept.** It has no family to read, and that is
+`inspect::generation_mismatch`'s own rule applied one level up: not knowing is not a reason to
+refuse, and a picker that hid every supplied drive would hide the only ones some people have. An
+iPod this build cannot identify filters nothing either, for the same reason — `families_of`'s empty
+list means *cannot say*, not *nothing matches*.
+
+**And a filtered list that empties says why and offers the remedy**, which is §14.1 doing the job it
+actually exists for: an empty picker with nothing in it is the dead end this section rejects.
+`Composer::nothing_applies` is the one row that stands in — *Every filed drive is another
+generation's; this iPod is a 5.5G. Build one, or choose a different iPod.*
+
+**The filter and the press walk the same list.** `Composer::choose` indexes by drawn position, so a
+list filtered on the way out and unfiltered on the way back in hands the recipe whichever drive
+happens to sit at that index in the library — a wrong pair chosen by arithmetic.
+`a_drive_of_another_generation_is_not_offered` measures the two together, and
+`the_offered_firmware_follows_the_chosen_model` asserts that a position past the end of the offered
+list chooses nothing.
+
+**The mirror case is `Composer::drop_a_drive_of_another_generation`**: the filter cannot see somebody
+choosing a good drive and *then* changing the iPod under it, which is the same bad pair reached from
+the other direction. It runs from `choose` after every choice, including the ones that cannot have
+caused it — an invariant checked only where somebody expected it to break is one nobody re-checks
+when a fourth field starts moving the model.
 
 ### 14.2 The drawn device is a control surface, and desktop accuracy emulators have declined that
 
@@ -5193,10 +5312,10 @@ saying which of its paragraphs this superseded, and the three that were wordings
 structure — §12.5's power-row location, §12.5's Diagnostics sentence, §12.8's *pushes rather than
 covers* — are corrected where they stand rather than deleted.
 
-**What is not built, and each says so where it is designed**: §21.4's *the default iPod builds
-itself* is half-built — pressing a verb with no iPod runs the first run, which is the load-bearing
-half, and `This iPod`'s two pickers are not drawn (§21.3 below records where that decision went);
-§21.7's pop-out window is not built. **§21.8 is built and §21.5 has moved**, both by other hands:
+**What is not built, and each says so where it is designed**: §21.7's pop-out window is not built.
+**§21.4 is built as of 2026-09-07** — what was left of it turned out to be three sentences in the
+drawer rather than a mechanism, and §21.4 records which and why; `This iPod`'s two pickers are not
+drawn and are not going to be (§21.3 below records where that decision went). **§21.8 is built and §21.5 has moved**, both by other hands:
 the scroll gesture and the MacBook trackpad landed (§21.8.1), and `fix(machine): model the boot-ROM
 handoff remap, and the chord-boot storm goes` retires the interrupt storm §21.5 names as the one
 thing standing between SELECT+REW and the honest chord. That is §21.5's own stated retirement
@@ -5366,6 +5485,32 @@ current first run puts in front of somebody who has just opened the program.
 
 `This iPod 5.5G ▾ synthetic ▾` in the drawer is where that default is *changed*, not where it is
 *chosen*. A person who never opens it still gets a working iPod.
+
+**Built, 2026-09-07 — and what was left of it was three sentences rather than a mechanism.** The
+press was already routed: `press_is_first_run` sends an empty library into `work::Queue::press`, and
+`bench-empty.png` shows the bench asking for it correctly — `No iPod yet`, *Press the centre button
+to make an iPod*, and the bill under it. **The drawer, one press away, was describing a different
+program.** `menu-empty.png` is the picture of it:
+
+| row | said | what pressing it does |
+|---|---|---|
+| `Start` | *cold boot, from the reset vector* | downloads Apple's firmware, builds an 8 GB drive, **then** boots |
+| `Suspend` `Resume` `Kill` `Restart` | *this iPod is not running* — four times | nothing; there is no iPod for `this iPod` to refer to |
+
+Both are the same defect from §21.3's own rule — *it words no sentence twice* — failing in the
+direction nobody checks: not two surfaces disagreeing, but one surface answering a question that
+does not apply. `Start` now costs the first run in `work::cost`'s own numbers, which is the call the
+bench's shelf and the ledger already make, so three surfaces cannot print three bills for one press;
+and the four controls say `verbs::NO_IPOD_YET`, the sentence `Files on the drive…` was already using
+for the same state. `the_drawer_with_no_ipod_costs_the_first_run_and_says_there_is_no_ipod` measures
+both, and `bench-empty.png` / `menu-empty.png` are now in the shot set — the first screen anybody
+sees had never been photographed, and `parts-empty` photographed an empty *page* rather than an
+empty *program*.
+
+**`Rockbox` with no iPod is still a refusal that points at the row above it**, and that is left
+standing deliberately rather than overlooked: making it run the first run would either promise
+Rockbox and deliver Apple's software, or need the fixed first-run plan to grow an install step. The
+row says the true thing today and the honest version is a `work.rs` change, not a wording one.
 
 ### 21.5 The chords, and which of them can be honest
 

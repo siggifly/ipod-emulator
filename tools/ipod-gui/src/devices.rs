@@ -845,7 +845,8 @@ fn start_row(s: &Settings, d: &Device, seen: &mut Presence, machine: Option<&str
     // the press reached `resolve_for_start`, which started a machine with no disk in it. The bench
     // was saying *press the centre button to finish making Third* about the same iPod at the same
     // moment. Two surfaces, one device, two answers.
-    let blocked = crate::machine::Blocked::of(Some(d), &gone);
+    let mismatch = s.generation_mismatch(d);
+    let blocked = crate::machine::Blocked::of(Some(d), &gone, mismatch.as_deref());
     // **`Unfinished` still leaves the control live, for exactly one device.** §10.3's half-made
     // first run is finished by pressing it — `press_is_first_run` routes that press to
     // `work::Queue` rather than to a machine — and refusing it here would move the only way to
@@ -863,7 +864,7 @@ fn start_row(s: &Settings, d: &Device, seen: &mut Presence, machine: Option<&str
     } else if let Some(b) = blocked {
         // A file that is not there cannot be read by anything; a thing this program has not
         // written yet is a project state and carries a command instead (§9.4).
-        row.reason = crate::blocked_label(crate::Press::Centre, d, &gone, b);
+        row.reason = crate::blocked_label(crate::Press::Centre, d, &gone, b, mismatch.as_deref());
         row.machine_rule = b.machine_rule();
     }
     row
@@ -971,8 +972,17 @@ mod tests {
         Settings {
             resources: vec![
                 Item {
-                    name: "MA146, seed 20266".into(),
-                    what: Resource::Firmware(synthetic("MA146", 20_266)),
+                    // **It was `MA146`, and that made this whole fixture the operator's own bug.**
+                    // `MA146` is a 5G; the drive below is built from `iPod_25.1.3.ipsw`, which is
+                    // updater family 25, which is the 5.5G's — so every test that took `library()`
+                    // was running against an iPod whose ROM and drive are different generations,
+                    // under a device called `My 5.5G` pointing at a drive called `my-5.5g.img`.
+                    // Nothing could see it, because nothing asked; the day `Blocked::of` started
+                    // asking, six tests went red at once and this is what they had found.
+                    // `MA446` is the 30 GB black 5.5G, which is what the two names either side of
+                    // it have been saying all along.
+                    name: "MA446, seed 20266".into(),
+                    what: Resource::Firmware(synthetic("MA446", 20_266)),
                     from: None,
                 },
                 Item {
@@ -1001,8 +1011,8 @@ mod tests {
                 },
             ],
             devices: vec![
-                device("My 5.5G", "MA146, seed 20266", Some("my-5.5g.img")),
-                device("Second", "MA146, seed 20266", Some("spare.img")),
+                device("My 5.5G", "MA446, seed 20266", Some("my-5.5g.img")),
+                device("Second", "MA446, seed 20266", Some("spare.img")),
                 device("Third", "the other one", None),
             ],
             ..Settings::default()
@@ -1298,7 +1308,7 @@ mod tests {
         // The drive leaves the disk, and the iPod leaves the library.
         let path = s.disks[0].path.clone();
         std::fs::remove_file(&path).expect("removing the image this test wrote");
-        s.resources.retain(|it| it.name != "MA146, seed 20266");
+        s.resources.retain(|it| it.name != "MA446, seed 20266");
 
         let v = view_of(&mut p, &s, all_on());
         let rules: Vec<&str> = v
@@ -1309,7 +1319,7 @@ mod tests {
             .collect();
         assert_eq!(rules.len(), 2, "both absences were expected, got {rules:?}");
         assert!(
-            rules[0].contains("MA146, seed 20266") && rules[0].contains("not in the library"),
+            rules[0].contains("MA446, seed 20266") && rules[0].contains("not in the library"),
             "the iPod's absence is not named first: {rules:?}"
         );
         assert!(
@@ -1317,7 +1327,7 @@ mod tests {
             "the drive's absence does not name the path: {rules:?}"
         );
         // And the fact lines still say what the device names, rather than going blank.
-        assert_eq!(fact(&v, "iPod"), "MA146, seed 20266");
+        assert_eq!(fact(&v, "iPod"), "MA446, seed 20266");
         assert_eq!(fact(&v, "Drive"), "my-5.5g.img");
     }
 
@@ -1814,24 +1824,24 @@ mod tests {
         let mut s = library(&dir);
         let mut p = Devices::new();
 
-        // The fixture files its ROM under the recipe — `<model>, seed <n>` — and a person calls
-        // that iPod `Black 5G`, so this is the two-name arm.
+        // The fixture files its ROM under the recipe — `<model>, seed <n>` — and the window
+        // describes it from the model in it, so this is the two-name arm.
         p.open_row(&s, 0, true);
         assert_eq!(
             fact(&view_of(&mut p, &s, all_on()), "iPod"),
-            "Black 5G, filed as MA146, seed 20266"
+            "Black 5.5G, filed as MA446, seed 20266"
         );
 
         // Filed under the name a person uses, which is what `Composer::commit` does. One name, said
         // once.
-        s.resources[0].name = "Black 5G".into();
+        s.resources[0].name = "Black 5.5G".into();
         for d in &mut s.devices {
-            if d.firmware == "MA146, seed 20266" {
-                d.firmware = "Black 5G".into();
+            if d.firmware == "MA446, seed 20266" {
+                d.firmware = "Black 5.5G".into();
             }
         }
         p.open_row(&s, 0, true);
-        assert_eq!(fact(&view_of(&mut p, &s, all_on()), "iPod"), "Black 5G");
+        assert_eq!(fact(&view_of(&mut p, &s, all_on()), "iPod"), "Black 5.5G");
 
         // A resource of the wrong kind resolves to nothing, so the line says what the device
         // *names* and the machine rule below says the library no longer holds it. Inventing a
