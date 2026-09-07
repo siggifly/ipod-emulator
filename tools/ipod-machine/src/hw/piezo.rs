@@ -111,6 +111,23 @@ pub struct Fire {
     pub word: u32,
 }
 
+/// **A tone that finished**: the wave it ran, and how long the enable bit was set.
+///
+/// The *duration* is not in this register — [`Piezo`]'s own note says so: `AsyncPiezo` programs it
+/// into `TIMER2_CFG` and this block is only turned on and off. So the length is **measured**, as
+/// the simulated microseconds between the write that set bit 31 and the write that cleared it,
+/// rather than decoded from anything. research/05 predicts what that should come to on RetailOS —
+/// *"a tone runs about 26 000 instructions — 5.2 ms of simulated time, against the 3 ms that
+/// `0x001B91FC` programs into `TIMER2_CFG`; the remainder is the task's wake-up"* — so this is a
+/// number that can disagree with the static reading and say so.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Tone {
+    /// The register with the enable bit masked off, as it was while it ran.
+    pub wave: u32,
+    /// How long bit 31 stayed set, in simulated microseconds.
+    pub usec: u32,
+}
+
 /// `PWM0_CTRL`, and a census of the page it sits in.
 pub struct Piezo {
     /// Base of the window — `0x7000a000`.
@@ -147,6 +164,14 @@ pub struct Piezo {
     /// `offset -> (reads, writes)` for everything in the page that is **not** the register. The
     /// falsification hook for "the block is one register wide".
     pub neighbours: BTreeMap<u32, (u64, u64)>,
+    /// **The last tone that finished.** `None` until one has, which is the honest answer for a run
+    /// that has clicked once and not yet stopped — and the state anything rendering a click has to
+    /// have a policy for rather than a default hidden in a zero.
+    pub tone: Option<Tone>,
+    /// The tone that is running: the wave, and the microsecond bit 31 was set. Private because it
+    /// is the intermediate of one measurement and reading it as a fact about the part would be
+    /// reading a stopwatch that is still going.
+    running: Option<(u32, u32)>,
 }
 
 impl Piezo {
@@ -177,6 +202,8 @@ impl Piezo {
             log: Capped::new(4096),
             sites: BTreeMap::new(),
             neighbours: BTreeMap::new(),
+            tone: None,
+            running: None,
         }
     }
 
@@ -233,6 +260,7 @@ impl Piezo {
                 self.fires += 1;
                 *self.waves.entry(self.wave()).or_insert(0) += 1;
                 *self.sites.entry(pc).or_insert(0) += 1;
+                self.running = Some((self.wave(), usec));
                 self.log.push(Fire {
                     icount,
                     usec,
@@ -240,10 +268,27 @@ impl Piezo {
                     word: self.reg,
                 });
             }
-            (true, false) => self.stops += 1,
+            (true, false) => {
+                self.stops += 1;
+                // **`wrapping_sub`, because `Memory::usec` is a `u32` and wraps every ~71 minutes
+                // of simulated time.** A tone straddling the wrap is milliseconds long either way,
+                // so the wrapped difference is the right answer rather than a guarded one; what a
+                // subtraction would give is a 71-minute click.
+                if let Some((wave, at)) = self.running.take() {
+                    self.tone = Some(Tone { wave, usec: usec.wrapping_sub(at) });
+                }
+            }
             // A wave changed under a running enable bit. Not a click by this model's definition,
-            // and counted separately rather than folded into one or the other.
-            (true, true) => self.retriggers += 1,
+            // and counted separately rather than folded into one or the other. The clock keeps
+            // running: the enable bit never fell, so this is one tone whose pitch moved, and
+            // restarting it here would report the tail as the whole.
+            (true, true) => {
+                self.retriggers += 1;
+                let wave = self.wave();
+                if let Some(r) = self.running.as_mut() {
+                    r.0 = wave;
+                }
+            }
             (false, false) => {}
         }
     }
@@ -266,6 +311,15 @@ impl Piezo {
             self.reads,
             if self.on() { "ON" } else { "off" },
         )];
+        if let Some(t) = self.tone {
+            out.push(format!(
+                "  last tone: wave {:#010x} for {} us ({:.2} ms) — MEASURED off the enable bit, \
+                 not decoded; the duration lives in TIMER2_CFG",
+                t.wave,
+                t.usec,
+                t.usec as f64 / 1000.0,
+            ));
+        }
         if self.reads > 0 {
             out.push(
                 "  READS — nothing has ever been observed to read this register; the write-only \
@@ -482,6 +536,66 @@ mod tests {
     #[test]
     fn a_silent_run_reports_nothing() {
         assert!(piezo().report().is_empty());
+    }
+
+    /// **How long the tone ran, measured off the enable bit rather than decoded.**
+    ///
+    /// The duration is not in this register — `AsyncPiezo` programs it into `TIMER2_CFG` — so the
+    /// only honest source for it is the interval between the write that set bit 31 and the write
+    /// that cleared it. research/05's RetailOS run puts that at 5.2 ms of simulated time against
+    /// the 3 ms programmed, which is the shape asserted here.
+    ///
+    /// **It carries its own control**, and that is the half that matters: while the tone is still
+    /// running the answer is `None` and not a zero. A renderer handed `0` would draw a click of no
+    /// length and could not tell that from a click nobody has measured yet, which is `AGENTS.md`
+    /// §6's shape — an instrument that cannot report *not yet* reports the wrong thing instead.
+    ///
+    /// **How to make it go red:** move the `self.tone = ...` line into the `(false, true)` arm, so
+    /// a tone is dated when it starts. The `None` assertion fails first.
+    #[test]
+    fn a_tone_is_measured_from_the_enable_bit_and_is_none_until_it_stops() {
+        let mut p = piezo();
+        store(&mut p, 0, 0, 0x0011_c758, 100, 1_000_000);
+        assert_eq!(p.tone, None, "a stop before any start dated a tone that never ran");
+        store(&mut p, 0, 0x8080_0055, 0x000c_7210, 200, 1_000_100);
+        assert_eq!(
+            p.tone, None,
+            "the tone was dated while it was still running — a stopwatch read before it stopped"
+        );
+        store(&mut p, 0, 0, 0x0011_c758, 300, 1_005_300);
+        assert_eq!(p.tone, Some(Tone { wave: 0x0080_0055, usec: 5_200 }));
+        assert!(p.report().iter().any(|l| l.contains("5200 us (5.20 ms)")));
+    }
+
+    /// `Memory::usec` is a `u32` and wraps every ~71 minutes of simulated time. A tone is
+    /// milliseconds long on either side of that, so the wrapped difference is the answer.
+    ///
+    /// **How to make it go red:** use `usec - at` instead of `wrapping_sub`. In release it reports
+    /// 4 294 964 096 us — a 71-minute click; in debug it panics.
+    #[test]
+    fn a_tone_across_the_clocks_wrap_is_milliseconds_not_seventy_one_minutes() {
+        let mut p = piezo();
+        store(&mut p, 0, 0x8080_0055, 0x000c_7210, 1, u32::MAX - 999);
+        store(&mut p, 0, 0, 0x0011_c758, 2, 2_200);
+        assert_eq!(p.tone.expect("a tone").usec, 3_200);
+    }
+
+    /// A wave changing under a running enable bit is one tone whose pitch moved, so the clock is
+    /// not restarted — restarting it would report the tail as the whole tone. The *pitch* recorded
+    /// is the one it ended on, which is the only one this model can claim to know it stopped at.
+    ///
+    /// Apple stops before every start, so `retriggers` is expected to stay zero on RetailOS; this
+    /// is what the model does if that stops being true.
+    ///
+    /// **How to make it go red:** set `self.running = Some((self.wave(), usec))` in the
+    /// `(true, true)` arm — the length becomes 400 us, which is the last leg rather than the tone.
+    #[test]
+    fn a_retrigger_moves_the_pitch_without_restarting_the_clock() {
+        let mut p = piezo();
+        store(&mut p, 0, 0x8080_0055, 0x000c_7210, 1, 1_000);
+        store(&mut p, 0, 0x8080_005b, 0x000c_7210, 2, 1_600);
+        store(&mut p, 0, 0, 0x0011_c758, 3, 2_000);
+        assert_eq!(p.tone, Some(Tone { wave: 0x0080_005b, usec: 1_000 }));
     }
 }
 

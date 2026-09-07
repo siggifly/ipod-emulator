@@ -10,7 +10,14 @@
 //! the second implementation has to cost a file rather than a rewrite. [`Source`] is the touch
 //! half, [`Detents`] the feedback half, [`Frame`] is what an adapter pushes, and [`Mode`] is
 //! everything neither of them should have to write twice. `trackpad/mac.rs` is the first
-//! implementation of both and today the only one.
+//! implementation of both and today the only one of [`Source`]; `click/mac.rs` is a second
+//! [`Detents`].
+//!
+//! **[`Detents`] is not the trackpad's, and that is worth reading before touching it.** It lives
+//! here because this is where the click wheel's feedback is described, but nothing about it is
+//! about a trackpad: what fires it is the emulated piezo at `0x7000A000`, so it fires for an arrow
+//! key and for a two-finger scroll exactly as it does for a finger on the pad, and on a build where
+//! [`support`] is a compile-time `false` it fires just the same.
 //!
 //! **The core never sees a platform unit.** A [`Contact`] is millimetres from the centre of the
 //! surface, x right and **y down**, and both conversions that get there belong to the adapter
@@ -126,14 +133,30 @@ pub trait Source {
     fn announce(&self, note: &str);
 }
 
-/// **What tells a finger that a detent went past.**
+/// **What tells a finger, or an ear, that the iPod clicked.**
 ///
 /// A list rather than one implementation, and the reason is not portability. **A real 5G clicks
 /// through a piezo — it makes a *sound*.** The linear actuator is what modders fit in its place, so
-/// an audible click is the *faithful* behaviour and haptics is the enhancement. Adding the piezo's
-/// click is one [`add_sink`] and nothing here changes; that click should come from the emulated
-/// part rather than from the window counting steps, which is why nothing in this crate synthesises
-/// audio.
+/// an audible click is the *faithful* behaviour and haptics is the enhancement, and both are here:
+/// `trackpad/mac.rs` is the actuator and `click/mac.rs` is the piezo.
+///
+/// # Who decides that a click happened
+///
+/// **The guest does.** [`Detents::click`] used to be called by the window after it had counted
+/// wheel steps, which meant an iPod that had not booted clicked on its logo screen — a sound the
+/// part cannot make, because on real hardware the click comes out of a piezo that firmware drives.
+/// What calls it now is `Piezo::fires`, the count of times the guest took `PWM0_CTRL`'s enable bit
+/// from clear to set.
+///
+/// Four things fall out of that one change, and none of them needed a case of its own:
+///
+/// * **Silent before boot**, which is correct.
+/// * **RetailOS's own policy** — measured in research/05: SELECT clicks, twice, 1 300 s apart; and
+///   MENU, PLAY, NEXT and PREV each click once within 0.14 s of the press.
+/// * **Silent when Rockbox's keyclick is off**, because the guest genuinely is not clicking. The
+///   same run measured that too: stock settings, **zero** writes to the register.
+/// * **Every input route**, not only the trackpad. A two-finger scroll and §16.8's arrow keys turn
+///   the same wheel, and it is the *iPod* that clicked, so the sinks fire whatever moved it.
 pub trait Detents {
     /// A name, for the capability report. No full stop.
     fn describe(&self) -> &'static str;
@@ -143,12 +166,17 @@ pub trait Detents {
     /// It is a claim about the *build* and never about the hardware. macOS has no API that says
     /// whether a pad has an actuator and none that reports a failed pulse, so a pre-2015 trackpad
     /// answers `true` here and stays quiet. §21.8 is the only place that says so, and that gap is
-    /// exactly what a second sink closes.
+    /// exactly what the second sink closes.
     fn present(&self) -> bool;
 
-    /// Fire one. Already rate-limited by [`Feedback`]; this is called at most once per contact
-    /// frame and never within [`TICK_FLOOR`] of the last.
-    fn detent(&self);
+    /// **The guest clicked.** Already rate-limited by [`Feedback`]; this is called at most once per
+    /// reading of the machine's census and never within [`TICK_FLOOR`] of the last.
+    ///
+    /// The tone is what the register was observed to run — the wave word and how long the enable
+    /// bit stayed set. `None` while a click has been counted and its own stop has not been seen
+    /// yet, which is a case a renderer has to have a policy for rather than a zero to mistake for a
+    /// measurement; `click::sound` is that policy.
+    fn click(&self, tone: Option<crate::click::Tone>);
 
     /// **Say that a line drawn on the surface went past.**
     ///
@@ -486,36 +514,43 @@ fn on_drawn_ring(x: f32, y: f32) -> (f32, f32) {
 
 // ── The actuator, and what it may be asked for ──────────────────────────────────────────────────
 
-/// **The shortest gap between two detents. 6 ms.**
+/// **The shortest gap between two pulses. 6 ms.**
 ///
 /// Apple's own `NSAlignmentFeedbackFilter` withholds feedback when the thing being aligned moves
 /// too fast, which is the platform saying out loud that the actuator has a rate. There is no
-/// published figure, so this is the one the spike used — 6 ms, ~167 Hz. It sits above the ~39
-/// detents a second an ordinary spin produced and *below* the pad's own 124 Hz mean sample rate,
-/// which is what makes it **never bite at any speed a hand reaches**: frames arrive about 8 ms
-/// apart, so two consecutive ones are never inside the floor and the only thing ever coalesced is a
-/// second detent inside a single frame. 32 of 278 were, at ordinary speed.
+/// published figure, so this is the one the spike used — 6 ms, ~167 Hz.
+///
+/// **It cannot bite on a click, and that is now a property of the caller rather than a measurement
+/// of a hand.** Clicks are read off the machine by `main.rs`'s 16 ms tick, so two *readings* are
+/// never inside the floor — the only thing that can be coalesced is a second click found in the
+/// same reading, which on the measured policies means the guest clicked twice inside 16 ms.
+/// research/05 puts RetailOS's two SELECT clicks 1 300 s apart and Rockbox's at one per four
+/// detents, so nothing observed comes close.
+///
+/// What the floor still does is hold the **edge marks** off, and that is what it is for: those
+/// arrive at the pad's own 124 Hz and would otherwise stack against a click on one actuator.
 pub const TICK_FLOOR: Duration = Duration::from_millis(6);
 
 /// The rate limiter, and the counters that say what it did.
 ///
-/// **At most one pulse per frame**, which is not a second rule but the same one: within one event
+/// **At most one pulse per reading**, which is not a second rule but the same one: within one call
 /// the clock does not advance, so the floor above already refuses the second. Saying so here is
-/// cheaper than a loop that can only ever run once, and it is what the spike measured rather than
-/// what its code implied.
+/// cheaper than a loop that can only ever run once.
 ///
-/// # A dropped detent is worse than a missed edge, and this is where that is enforced
+/// # A dropped click is worse than a missed edge, and this is where that is enforced
 ///
-/// One actuator now has two callers, so they can contend — and the two failures are not equally
-/// bad. A missed edge is a boundary you have to find by feel; **a dropped detent is a wheel that
-/// stopped turning**, which is the input not working. So the priority is absolute rather than
-/// weighted, and it is structural rather than a rule someone has to remember:
+/// One actuator has two callers, so they can contend — and the two failures are not equally bad.
+/// A missed edge is a boundary you have to find by feel; **a dropped click is a thing the emulated
+/// iPod did that nobody was told about**, and it is rare by construction — research/05 measures one
+/// per button press on RetailOS and one per four detents on Rockbox, so there is never a second one
+/// along in a moment to stand in for it. The priority is therefore absolute rather than weighted,
+/// and structural rather than a rule someone has to remember:
 ///
-/// **[`Ticks::due`] reads `detent` and nothing else.** No field a [`Ticks::mark_due`] can write is
+/// **[`Ticks::due`] reads `click` and nothing else.** No field a [`Ticks::mark_due`] can write is
 /// on its path, so no sequence of marks — none, one, a thousand in the same microsecond — can
-/// change its answer for any input. A mark cannot delay, refuse or coalesce a detent because it
-/// cannot reach the state the detent's decision is made from. `a_flood_of_edge_marks_cannot_refuse_a_single_detent`
-/// is the test, and deleting one word — `self.detent` for `self.any` in `due` — is how to make it
+/// change its answer for any input. A mark cannot delay, refuse or coalesce a click because it
+/// cannot reach the state the click's decision is made from. `a_flood_of_edge_marks_cannot_refuse_a_single_detent`
+/// is the test, and deleting one word — `self.click` for `self.any` in `due` — is how to make it
 /// go red.
 ///
 /// The yielding is all in the other direction: a **mark** waits on `any`, so it stands off for
@@ -523,8 +558,8 @@ pub const TICK_FLOOR: Duration = Duration::from_millis(6);
 /// a single actuator, and it is the edge rather than the wheel that gives way.
 #[derive(Default)]
 pub struct Ticks {
-    /// The last **detent**. The only clock [`Ticks::due`] consults, and no mark ever writes it.
-    detent: Option<Instant>,
+    /// The last **click**. The only clock [`Ticks::due`] consults, and no mark ever writes it.
+    click: Option<Instant>,
     /// The last pulse of either kind. Only a mark consults it, because only a mark yields.
     any: Option<Instant>,
     fired: u64,
@@ -534,16 +569,16 @@ pub struct Ticks {
 }
 
 impl Ticks {
-    /// Whether to actuate, for a frame that produced `clicks` detents.
+    /// Whether to actuate, for a reading that found `clicks` of the guest's clicks.
     ///
-    /// **Reads `self.detent` and nothing else** — see the type's note. That is not an optimisation
+    /// **Reads `self.click` and nothing else** — see the type's note. That is not an optimisation
     /// and the extra field is not redundant: it is the whole of the guarantee that geometry
-    /// feedback cannot starve the wheel.
+    /// feedback cannot starve the part's own click.
     pub fn due(&mut self, now: Instant, clicks: u32) -> bool {
         if clicks == 0 {
             return false;
         }
-        let ready = match self.detent {
+        let ready = match self.click {
             Some(t) => now.saturating_duration_since(t) >= TICK_FLOOR,
             None => true,
         };
@@ -551,7 +586,7 @@ impl Ticks {
             self.coalesced += u64::from(clicks);
             return false;
         }
-        self.detent = Some(now);
+        self.click = Some(now);
         self.any = Some(now);
         self.fired += 1;
         self.coalesced += u64::from(clicks - 1);
@@ -559,7 +594,7 @@ impl Ticks {
     }
 
     /// Whether to actuate for an edge crossing. Yields to any pulse inside [`TICK_FLOOR`], and
-    /// **never writes the clock a detent is judged against.**
+    /// **never writes the clock a click is judged against.**
     pub fn mark_due(&mut self, now: Instant) -> bool {
         let ready = match self.any {
             Some(t) => now.saturating_duration_since(t) >= TICK_FLOOR,
@@ -574,7 +609,7 @@ impl Ticks {
         true
     }
 
-    /// Pulses fired, and detents that went unfelt.
+    /// Pulses fired, and clicks that went unfelt.
     pub fn counts(&self) -> (u64, u64) {
         (self.fired, self.coalesced)
     }
@@ -612,22 +647,22 @@ impl Feedback {
         self.felt = felt;
     }
 
-    /// One detent for a frame the machine took `clicks` steps from. Rate-limited once, for all of
-    /// them: two sinks firing on different schedules would be two clicks out of step.
-    pub fn fire(&mut self, clicks: u32) {
+    /// One pulse for a reading that found `clicks` of the guest's clicks. Rate-limited once, for
+    /// all of the sinks: two firing on different schedules would be a tick and a tock.
+    pub fn fire(&mut self, clicks: u32, tone: Option<crate::click::Tone>) {
         if !self.ticks.due(Instant::now(), clicks) {
             return;
         }
         for s in &self.sinks {
             if s.present() {
-                s.detent();
+                s.click(tone);
             }
         }
     }
 
     /// One edge crossing, if that edge is one of the ones being felt.
     ///
-    /// **Behind the detent by construction** — see [`Ticks`]. A crossing that arrives while the
+    /// **Behind the click by construction** — see [`Ticks`]. A crossing that arrives while the
     /// actuator is mid-pulse is dropped and counted rather than queued: a queued mark would arrive
     /// after the finger had moved on, which is a boundary reported in the wrong place.
     pub fn mark(&mut self, m: Mark) {
@@ -649,7 +684,7 @@ impl Feedback {
     pub fn describe(&self) -> String {
         let names: Vec<&str> = self.sinks.iter().filter(|s| s.present()).map(|s| s.describe()).collect();
         if names.is_empty() {
-            "nothing — a detent is felt by no one on this build".to_string()
+            "nothing — a click is felt and heard by no one on this build".to_string()
         } else {
             names.join(" and ")
         }
@@ -669,13 +704,13 @@ impl Feedback {
 }
 
 thread_local! {
-    /// **One set of sinks for the process**, because there is one hand on one surface.
+    /// **One set of sinks for the process**, because there is one hand and one pair of ears.
     ///
-    /// Reached by [`detent`] from `main.rs`'s own handler rather than owned by [`Mode`], and that
-    /// is the whole reason it is a thread-local: the handler is built before the mode exists, and
-    /// it is the handler — not the pad — that knows how many steps the *machine* took. With no
-    /// machine on the bench the wheel does not turn, and an actuator clicking against an empty
-    /// bench is a lie told through somebody's fingertip.
+    /// Reached by [`clicked`] from `main.rs`'s reading of the machine rather than owned by [`Mode`],
+    /// and that is the whole reason it is a thread-local: the sinks are installed when the window is
+    /// wired, and the caller is the 60 Hz tick that watches `Out` — neither of which is the pad, and
+    /// one of which exists on builds where the pad does not. **This is not a trackpad-mode
+    /// feature**: the iPod clicks, and whatever turned its wheel, the sinks fire.
     static FEEDBACK: RefCell<Feedback> = RefCell::new(Feedback::default());
 }
 
@@ -684,12 +719,16 @@ pub fn add_sink(sink: Box<dyn Detents>) {
     FEEDBACK.with(|f| f.borrow_mut().add(sink));
 }
 
-/// Ask for a detent, for a frame the machine took `clicks` steps from.
-pub fn detent(clicks: u32) {
-    if clicks == 0 {
+/// **The guest clicked `n` times since anyone last looked.** `docs/GUI.md` §21.8.
+///
+/// The one entry point, and its argument is a count off `Piezo::fires` rather than anything about a
+/// hand. Nothing in this crate synthesises a click any more: if the emulated `PWM0_CTRL` did not
+/// fire, nothing is felt and nothing is heard.
+pub fn clicked(n: u32, tone: Option<crate::click::Tone>) {
+    if n == 0 {
         return;
     }
-    FEEDBACK.with(|f| f.borrow_mut().fire(clicks));
+    FEEDBACK.with(|f| f.borrow_mut().fire(n, tone));
 }
 
 /// Ask for an edge crossing to be felt. Refused silently when that edge is not one of the ones
@@ -698,7 +737,7 @@ pub fn mark(m: Mark) {
     FEEDBACK.with(|f| f.borrow_mut().mark(m));
 }
 
-/// What a detent will be felt or heard as, and how many have been.
+/// What a click will be felt or heard as, and how many have been.
 pub fn feedback_state() -> (String, u64, u64) {
     FEEDBACK.with(|f| {
         let f = f.borrow();
@@ -1323,7 +1362,7 @@ pub fn note(s: &str) {
 mod mac;
 
 #[cfg(target_os = "macos")]
-pub use mac::{install, Handle, View};
+pub use mac::{actuator, install, Handle, View};
 
 /// Everywhere else there is nothing to install, and the caller is told so rather than left to
 /// wonder. `main.rs` reads [`support`] before it ever gets here, so this is the belt to that
@@ -1338,6 +1377,66 @@ impl Handle {
     /// ask — but the shape is the same so the call site is not two call sites.
     pub fn ticker(&self) -> Rc<dyn Fn()> {
         Rc::new(|| {})
+    }
+}
+
+/// No actuator off macOS. `NSHapticFeedbackManager` has no counterpart on Windows, X11 or Wayland
+/// that an ordinary application can reach, and `click::speaker` is the sink those platforms want
+/// anyway — the piezo is the faithful half and it needs no special hardware.
+#[cfg(not(target_os = "macos"))]
+pub fn actuator() -> Option<Box<dyn Detents>> {
+    None
+}
+
+/// **Every sink this build has, in one call**, so that `main.rs` installs feedback in one place and
+/// the set is a fact about the build rather than a side effect of the trackpad mode's installation.
+///
+/// # Nothing platform-shaped is installed under `cfg(test)`, and that is a hazard rather than a
+/// tidiness point
+///
+/// `wire()` is called by dozens of tests, on threads the harness owns. Both sinks are AppKit —
+/// `NSHapticFeedbackManager` and `NSSound` — and AppKit off the main thread is not a thing to do on
+/// somebody's machine in a loop; the *audible* one would also play a click out of the operator's
+/// speakers during `cargo test`, which is a test suite people stop running.
+///
+/// **What that leaves untested is nothing this call could have covered.** Whether the window asks
+/// for a click, and when, is `nothing_clicks_before_the_guest_drives_the_piezo…`, which installs its
+/// own counting sink through [`add_sink`] and exercises the whole route from `Stats::piezo_clicks`
+/// down. Whether each platform sink *works* is its own file's business:
+/// `macos_takes_the_container_and_agrees_about_how_long_it_is` builds the sound and asks macOS to
+/// read it back, and stops short of `play` for the same reason this stops short of installing it.
+pub fn install_sinks() {
+    if cfg!(test) {
+        return;
+    }
+    for s in [actuator(), crate::click::speaker()].into_iter().flatten() {
+        add_sink(s);
+    }
+}
+
+/// **A sink that counts instead of actuating.** `#[cfg(test)]`, and shared with `main.rs`'s tests
+/// on purpose: the question *did the window ask for a click* has to be askable from the file that
+/// owns the wiring, and a second counter written there would be a second thing to keep in step.
+#[cfg(test)]
+pub struct Counter(
+    pub &'static str,
+    pub bool,
+    pub &'static std::sync::atomic::AtomicU32,
+);
+
+#[cfg(test)]
+impl Detents for Counter {
+    fn describe(&self) -> &'static str {
+        self.0
+    }
+    fn present(&self) -> bool {
+        self.1
+    }
+    fn click(&self, _: Option<crate::click::Tone>) {
+        self.2.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    fn mark(&self, _: Mark) {
+        self.2.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 }
 
@@ -1796,38 +1895,56 @@ mod tests {
     /// `present()` guard.
     #[test]
     fn every_present_sink_fires_on_the_one_rate_limit() {
-        struct Counter(&'static str, bool, &'static AtomicU32);
-        impl Detents for Counter {
-            fn describe(&self) -> &'static str {
-                self.0
-            }
-            fn present(&self) -> bool {
-                self.1
-            }
-            fn detent(&self) {
-                self.2.fetch_add(1, Ordering::Relaxed);
-            }
-            fn mark(&self, _: Mark) {
-                self.2.fetch_add(1, Ordering::Relaxed);
-            }
-        }
         static HAPTIC: AtomicU32 = AtomicU32::new(0);
         static PIEZO: AtomicU32 = AtomicU32::new(0);
         static ABSENT: AtomicU32 = AtomicU32::new(0);
 
         let mut f = Feedback::default();
-        assert_eq!(f.describe(), "nothing — a detent is felt by no one on this build");
+        assert_eq!(f.describe(), "nothing — a click is felt and heard by no one on this build");
         f.add(Box::new(Counter("the actuator", true, &HAPTIC)));
         f.add(Box::new(Counter("the piezo", true, &PIEZO)));
         f.add(Box::new(Counter("something absent", false, &ABSENT)));
         assert_eq!(f.describe(), "the actuator and the piezo");
 
-        f.fire(1);
-        f.fire(1); // inside the floor, so refused for both together
+        f.fire(1, None);
+        f.fire(1, None); // inside the floor, so refused for both together
         assert_eq!(HAPTIC.load(Ordering::Relaxed), 1);
         assert_eq!(PIEZO.load(Ordering::Relaxed), 1);
         assert_eq!(ABSENT.load(Ordering::Relaxed), 0, "a sink that is not present was asked");
         assert_eq!(f.counts(), (1, 1));
+    }
+
+    /// **What the guest played reaches the sink that can render it.**
+    ///
+    /// The actuator throws the tone away — `NSHapticFeedbackManager` has one canned pattern and no
+    /// parameters — but the speaker is the whole reason the argument exists, and a `Feedback` that
+    /// dropped it on the way would leave every click at Apple's fallback pitch with nothing saying
+    /// so. `AGENTS.md` §6: a renderer that always sounds the same and one that is not being told
+    /// anything look identical.
+    ///
+    /// **How to make it go red:** have `Feedback::fire` call `s.click(None)`.
+    #[test]
+    fn the_tone_the_guest_played_reaches_the_sinks() {
+        static HEARD: std::sync::Mutex<Vec<Option<crate::click::Tone>>> =
+            std::sync::Mutex::new(Vec::new());
+        struct Ear;
+        impl Detents for Ear {
+            fn describe(&self) -> &'static str {
+                "an ear"
+            }
+            fn present(&self) -> bool {
+                true
+            }
+            fn click(&self, tone: Option<crate::click::Tone>) {
+                HEARD.lock().expect("the log").push(tone);
+            }
+            fn mark(&self, _: Mark) {}
+        }
+        let mut f = Feedback::default();
+        f.add(Box::new(Ear));
+        let tone = crate::click::Tone { wave: 0x0080_005b, usec: 5_200 };
+        f.fire(1, Some(tone));
+        assert_eq!(*HEARD.lock().expect("the log"), vec![Some(tone)]);
     }
 
     /// A surface that cannot be a rectangle answers `None` rather than an infinity. The size is read
@@ -2076,15 +2193,15 @@ mod tests {
     /// either way, because the diagnostic line wants the geometry whether or not the actuator does.
     #[test]
     fn only_the_edges_being_felt_reach_the_sinks() {
-        struct Counter(&'static AtomicU32);
-        impl Detents for Counter {
+        struct Edges(&'static AtomicU32);
+        impl Detents for Edges {
             fn describe(&self) -> &'static str {
                 "a counter"
             }
             fn present(&self) -> bool {
                 true
             }
-            fn detent(&self) {}
+            fn click(&self, _: Option<crate::click::Tone>) {}
             fn mark(&self, _: Mark) {
                 self.0.fetch_add(1, Ordering::Relaxed);
             }
@@ -2092,7 +2209,7 @@ mod tests {
         static SEEN: AtomicU32 = AtomicU32::new(0);
 
         let mut f = Feedback::default();
-        f.add(Box::new(Counter(&SEEN)));
+        f.add(Box::new(Edges(&SEEN)));
         f.feel(Felt::default());
         f.mark(Mark { edge: Edge::Rim, entering: true });
         f.mark(Mark { edge: Edge::Band, entering: true });

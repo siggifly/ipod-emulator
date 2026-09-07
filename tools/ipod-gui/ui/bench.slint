@@ -300,6 +300,8 @@ export component Bench inherits Rectangle {
     // shape this file deletes rather than keeps.
     in property <string> hold-refusal;
     in property <bool> hold: false;
+    // §21.8, issue #28. See `ipod.slint`.
+    in property <string> wheel-ghost;
     in property <bool> held-menu: false;
     in property <bool> held-next: false;
     in property <bool> held-prev: false;
@@ -789,6 +791,7 @@ export component Bench inherits Rectangle {
                 has-machine: root.has-machine;
                 hold-refusal: root.hold-refusal;
                 hold: root.hold;
+                wheel-ghost: root.wheel-ghost;
                 held-menu: root.held-menu;
                 held-next: root.held-next;
                 held-prev: root.held-prev;

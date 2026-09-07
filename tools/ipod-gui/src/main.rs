@@ -175,6 +175,21 @@ mod drops;
 // arithmetic module with tests and a `support()` that says so.
 mod trackpad;
 
+/// §21.8's audible half: the emulated piezo, rendered. `mod` rather than a `use` because the sinks
+/// are installed by name and the arithmetic is toolkit-free like every other file beside `main.rs`.
+///
+/// **Compiled on every platform, and dead on the ones with no sink to feed.** Only `Tone` and
+/// `Watch` are used off macOS — the synthesis has no consumer there, because `click::speaker`
+/// answers `None`. Keeping it compiled is the same seam `trackpad.rs` draws for the same reason:
+/// *"the arithmetic and their tests still compile and still run there"*, so a second platform's
+/// sink costs a file rather than a rewrite, and its tests are already green when it arrives.
+///
+/// Verified by building this crate with `click.rs`'s two `target_os` arms flipped to a name no
+/// target has, which is what a Linux build sees: **eleven** `never used` warnings without this
+/// line, none with it.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod click;
+
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -3061,10 +3076,11 @@ fn wire(
     // existed — `to_the_machine` for a press, `off_the_machine` for a release, and the direct
     // borrow for a move, exactly as `on_wheel_moved` takes it and for the same reason.
     //
-    // **The detent is asked for from here rather than from inside the pad**, because the honest
-    // number is *what the machine took*, not what the hand did: with no machine on the bench the
-    // wheel does not turn, and an actuator clicking against a bench with nothing on it is a lie
-    // about what happened told through somebody's fingertip.
+    // **Nothing here asks for a click, and that is issue #27.** The window used to count the steps
+    // a drag produced and pulse the actuator per step, which made an iPod click on a logo screen —
+    // a sound the part cannot make, because on real hardware the click comes out of a piezo that
+    // firmware drives. `Live::sample` asks instead, off `Piezo::fires`, and it therefore asks for
+    // every route into the wheel rather than for this one.
     let trackpad = {
         let live = live.clone();
         let weak = window.as_weak();
@@ -3080,12 +3096,9 @@ fn wire(
                     }
                     let held = live.borrow();
                     let Some(l) = held.as_ref() else { return };
-                    let evs = l.finger.borrow_mut().moved(x, y);
-                    let detents = evs.len() as u32;
-                    for ev in evs {
+                    for ev in l.finger.borrow_mut().moved(x, y) {
                         l.link.push(ev);
                     }
-                    trackpad::detent(detents);
                 }
                 trackpad::Act::Up => {
                     off_the_machine(&w, &live, |l| l.finger.borrow_mut().released());
@@ -3146,6 +3159,11 @@ fn wire(
         // exists — which is what makes the mode *absent* elsewhere rather than present and broken.
         let can = trackpad::support();
         trackpad::note(can.describe());
+        // **The feedback sinks, installed for the window and not for the mode.** They are driven by
+        // the emulated piezo, so they belong to whatever turns the wheel — a scroll, an arrow key,
+        // a drag on the drawing — and tying them to a mode nobody has to engage would have made
+        // haptics a trackpad feature. On a build with no sink at all `Feedback::describe` says so.
+        trackpad::install_sinks();
         #[cfg(target_os = "macos")]
         {
             // **The toolkit reach lives here, and that is `AGENTS.md` §9 rather than convenience.**
@@ -3712,6 +3730,14 @@ struct Live {
     /// painting a ROM's boot screen over a framebuffer that has something in it.
     drawn: Cell<bool>,
     buttons: Cell<u8>,
+    /// **How many of the guest's clicks have been felt or heard**, so the next look can ask for the
+    /// difference. §21.8, issue #27.
+    ///
+    /// It belongs to the machine and not to the window, which is why it is here and not a
+    /// thread-local beside `FEEDBACK`: `Piezo::fires` is one machine's census, and a device swapped
+    /// on the bench brings a new one that starts again at zero. Dropping the `Live` drops this with
+    /// it, so the next machine is anchored by construction rather than by remembering to reset.
+    clicks: RefCell<click::Watch>,
 }
 
 impl Live {
@@ -3752,6 +3778,21 @@ impl Live {
         self.hold.set(out.stats.hold);
         self.drawn.set(out.fb_nonzero != 0);
         self.buttons.set(out.stats.buttons);
+        // ── The click (§21.8, issue #27) ────────────────────────────────────────────────────────
+        //
+        // **This is the whole of what decides that anything clicks.** `Piezo::fires` counts the
+        // times the guest took `PWM0_CTRL`'s enable bit from clear to set; `Watch` turns that
+        // census into *how many since the last look*; `trackpad::clicked` puts it through the rate
+        // limit to every sink. Nothing else in this program asks for a pulse.
+        //
+        // It is above the `fb_seq` gate for the same reason the two lines before it are: a click
+        // happens on a machine whose screen has not changed — every one of the six RetailOS fires
+        // research/05 attributes to a button is one — and feedback that only arrived when the
+        // co-processor redrew would be a click reported by the panel.
+        trackpad::clicked(
+            self.clicks.borrow_mut().since(out.stats.piezo_clicks),
+            out.stats.piezo_tone.map(|(wave, usec)| click::Tone { wave, usec }),
+        );
         if out.fb_seq == self.seq.get() {
             return None;
         }
@@ -3983,6 +4024,7 @@ fn start_title(
         hold: Cell::new(false),
         drawn: Cell::new(false),
         buttons: Cell::new(0),
+        clicks: RefCell::new(click::Watch::default()),
     });
     Ok(())
 }
@@ -4093,6 +4135,7 @@ fn start_machine(
         hold: Cell::new(false),
         drawn: Cell::new(false),
         buttons: Cell::new(0),
+        clicks: RefCell::new(click::Watch::default()),
     });
     Ok(())
 }
@@ -4320,6 +4363,23 @@ fn hand_off(
 /// having been written out by hand is how the three would come apart.
 fn machine_controls(window: &MainWindow, life: &machine::Life, l: Option<&Live>) {
     window.set_machine_takes_input(life.alive());
+    // ── Where the wheel is being touched (§21.8, issue #28) ─────────────────────────────────────
+    //
+    // **One writer, and it is this one.** The alternative was to push from each of the four input
+    // routes, which is four places to keep in step and four places to forget when a fifth arrives;
+    // this runs on every machine tick, at the same 16 ms the panel and the drawn buttons are read
+    // at, and — the half that matters — it is the function *both* no-machine exits already call, so
+    // a ghost cannot outlive the machine whose wheel it was on.
+    //
+    // It is the **window's** finger and not `Stats::position`, for the reason `Finger::at` gives:
+    // the machine's position is a queue behind, so a ghost drawn from it would freeze exactly when
+    // the machine is busy — which is the one moment issue #28 exists for.
+    window.set_wheel_ghost(
+        l.and_then(|l| l.finger.borrow().grip())
+            .map(wheel::ghost_path)
+            .unwrap_or_default()
+            .into(),
+    );
     let (hold, down) = l.map_or((false, 0), |l| (l.hold.get(), l.buttons.get()));
     window.set_machine_hold(hold);
     let held = |b: wheel::Button| down & b.mask() != 0;
@@ -9294,6 +9354,30 @@ pub(crate) mod tests {
         )
     }
 
+    /// **The middle of the drawn hold switch**, in window coordinates. §7.4, issue #19.
+    ///
+    /// Derived the same way `drawn_wheel_centre` is and for the same reason — `ElementHandle` needs
+    /// Slint debug info that `build.rs` emits in debug profiles only, and both CI workflows run
+    /// `--release`. `hold-switch` sits inside `shell`, which fills the `IPod` root, which
+    /// `bench.slint` places at `body-x` / `body-y`; within it the switch is inset `HOLD_INSET` from
+    /// the trailing edge and sits on the top edge.
+    fn drawn_hold_switch() -> slint::LogicalPosition {
+        let hero = dressed_fit().hero_logical;
+        let well_h = geometry::PREF_HEIGHT - geometry::SHELF;
+        let body_y = well_h
+            - geometry::GAP_2
+            - geometry::CRADLE_LABEL
+            - geometry::GAP_1
+            - geometry::CRADLE_BAND
+            - hero;
+        let body_w = geometry::BODY_ASPECT * hero;
+        let body_x = (geometry::PREF_WIDTH - body_w) / 2.0;
+        slint::LogicalPosition::new(
+            (body_x + body_w - geometry::HOLD_INSET * hero - geometry::HOLD_W * hero / 2.0) as f32,
+            (body_y + geometry::HOLD_H * hero / 2.0) as f32,
+        )
+    }
+
     /// A point on the drawn ring's midline at `pos`, in window coordinates — where the label is.
     fn on_the_drawn_ring(pos: u8) -> slint::LogicalPosition {
         let hero = dressed_fit().hero_logical as f32;
@@ -9747,6 +9831,286 @@ pub(crate) mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// **Nothing clicks until the guest drives the piezo, and then every route does.** §21.8,
+    /// issue #27.
+    ///
+    /// The operator found this by feel: he turned the wheel on a machine that had not booted and
+    /// felt detents, and asked *"why is it happening if the ipod hasnt even booted, shouldnt this
+    /// being run by retailos in a way?"* He was right. On real hardware the click comes out of a
+    /// piezo at `0x7000A000` that the firmware drives; an iPod that has not booted is silent, and
+    /// so is one whose keyclick setting is off. The window used to count wheel steps and pulse per
+    /// step, which is a sound the part cannot make.
+    ///
+    /// **The first half carries its own control, which is the half that matters.** A silence proves
+    /// nothing on its own — a sink nobody installed, a `Live` that never ticked and a routing bug
+    /// all read as zero. So the wheel is turned by all four routes and the queue is drained to show
+    /// it *did* turn, and only then is the silence a measurement. `AGENTS.md` §6: before believing
+    /// a zero, run the control that makes the instrument produce a non-zero.
+    ///
+    /// **How to make it go red**, one for each half:
+    ///
+    /// - put a `trackpad::clicked(1, None)` back into `on_wheel_moved`, which is what the old
+    ///   step-driven shape amounts to on a route this test can reach — the silence assertion fails
+    ///   and says a sound was made the part cannot make. (The trackpad's own `Act::Moved`, where
+    ///   the pulses actually used to be generated, needs a real `NSView` and is out of reach of any
+    ///   test; §21.8's replay is the instrument for that half.)
+    /// - delete the `trackpad::clicked(...)` call from `Live::sample` — the machine clicks and
+    ///   nothing is felt or heard, which is the state this whole change is worth nothing in.
+    #[test]
+    fn nothing_clicks_before_the_guest_drives_the_piezo_and_then_every_route_does() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static PULSES: AtomicU32 = AtomicU32::new(0);
+        PULSES.store(0, Ordering::Relaxed);
+        trackpad::add_sink(Box::new(trackpad::Counter("a counter", true, &PULSES)));
+
+        let (w, wiring, dir) = a_wired_bench_with_a_machine("piezo-click");
+        let felt = || PULSES.load(Ordering::Relaxed);
+
+        // ── The control: the wheel turns, by all four routes ──
+        //
+        // A drag around the ring, a scroll over it, and §16.8's two arrow keys. Every one of them
+        // reaches `wheel::Finger` and queues `Step`s for the machine, which is what the drain
+        // below is here to show — a silence measured over an input that never arrived would be the
+        // instrument reading zero because nothing was connected to it.
+        press_at(&w, on_the_drawn_ring(0));
+        for pos in [6u8, 12, 18, 24] {
+            drag_to(&w, on_the_drawn_ring(pos));
+        }
+        lift_at(&w, on_the_drawn_ring(24));
+        scroll_at(&w, on_the_drawn_ring(0), -600.0);
+        tap_key(&w, &String::from(char::from(slint::platform::Key::DownArrow)));
+        tap_key(&w, &String::from(char::from(slint::platform::Key::UpArrow)));
+        (wiring.machine_tick)();
+
+        let steps = drain_queue(&wiring)
+            .iter()
+            .filter(|e| matches!(e, ipod_machine::WheelEvent::Step(_)))
+            .count();
+        assert!(
+            steps >= 30,
+            "only {steps} steps reached the machine, so the silence below is a wheel that was not \
+             turned rather than a window that did not click"
+        );
+        assert_eq!(
+            felt(),
+            0,
+            "the wheel was turned on a machine whose piezo has never fired and something clicked \
+             — which is the window making a sound the part cannot make"
+        );
+
+        // ── And now the guest clicks ──
+        //
+        // One write to `Piezo`'s census is one press of MENU on a booted RetailOS: research/05
+        // measures one fire, 0.14 s after the press, from `AsyncPiezo`'s sequencer step.
+        let click = |n: u64, tone: Option<(u32, u32)>| {
+            {
+                let held = wiring.live.borrow();
+                let mut out = held.as_ref().expect("the machine").link.out.lock().unwrap();
+                out.stats.piezo_clicks = n;
+                out.stats.piezo_tone = tone;
+            }
+            (wiring.machine_tick)();
+        };
+        click(1, Some((0x0080_0055, 3_000)));
+        assert_eq!(felt(), 1, "the guest clicked and nothing was felt or heard");
+
+        // The census is a census: reading it again is not a second click.
+        click(1, Some((0x0080_0055, 3_000)));
+        assert_eq!(felt(), 1, "the same census twice was two clicks");
+
+        // A machine that restarts starts its census again, and that is not a flood. This is the
+        // one failure in the whole path that would be felt rather than merely wrong.
+        click(0, None);
+        assert_eq!(felt(), 1, "a fresh machine's zero reached the actuator as a burst");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **The ghost reaches the glass**, which is the half no assertion about a string can make.
+    /// §21.8, issue #28.
+    ///
+    /// `wheel::ghost_path` is tested hard for its geometry, and every one of those tests would pass
+    /// over a `Path` whose `commands` Slint refused to parse: a malformed SVG path is not a compile
+    /// error and not a panic, it is an element that draws nothing. `AGENTS.md` §6 — before
+    /// believing a zero, run the control that makes the instrument produce a non-zero — and here
+    /// the instrument is the rasterizer.
+    ///
+    /// **It is a three-shot comparison and the third shot is the control.** A pointer over the ring
+    /// changes hover state as well as the ghost, so *two* shots that differ prove nothing about
+    /// which of the two moved. The pointer is left exactly where it is for all three; only the
+    /// contact comes and goes.
+    ///
+    /// **How to make it go red**, each on a different half:
+    ///
+    /// - break the path — `"M 0 0 Z Q"` out of `ghost_path` — and the pressed shot matches the
+    ///   hovered one, because nothing drew.
+    /// - delete `wheel-ghost: root.wheel-ghost;` from `bench.slint` or `window.slint`, which takes
+    ///   the chain apart one component short of the drawing, and the same assertion fails.
+    /// - bind `fill` to `transparent` in `ipod.slint` and the shape draws nothing visible, which is
+    ///   the failure a test asserting on the property alone could not see.
+    #[test]
+    fn where_the_wheel_is_being_touched_is_drawn_on_it() {
+        let (w, wiring, dir) = a_wired_bench_with_a_machine("wheel-ghost");
+        // Bare ring at half past one — clear of all four labels, so nothing about a printed mark
+        // can be what moved.
+        let on = on_the_drawn_ring(12);
+        let shot = |w: &MainWindow| {
+            let px = w.window().take_snapshot().expect(
+                "the testing backend was built with a rasterizer; see this crate's Cargo.toml",
+            );
+            px.as_slice().iter().map(|p| [p.r, p.g, p.b]).collect::<Vec<_>>()
+        };
+
+        drag_to(&w, on);
+        (wiring.machine_tick)();
+        let hovered = shot(&w);
+        assert!(
+            w.get_wheel_ghost().is_empty(),
+            "a pointer that is only hovering has already put a finger on the wheel"
+        );
+
+        press_at(&w, on);
+        (wiring.machine_tick)();
+        assert!(!w.get_wheel_ghost().is_empty(), "a press on the ring drew no ghost at all");
+        let pressed = shot(&w);
+
+        let changed = hovered.iter().zip(&pressed).filter(|(a, b)| a != b).count();
+        assert!(
+            changed > 200,
+            "only {changed} pixels changed when a finger went down on the ring, so the path Slint \
+             was handed drew nothing — which no assertion about the string could have seen"
+        );
+
+        // ── The control: it goes away, and what is left is what was there before ──
+        lift_at(&w, on);
+        (wiring.machine_tick)();
+        assert!(w.get_wheel_ghost().is_empty(), "the finger lifted and the mark stayed");
+        assert!(
+            shot(&w) == hovered,
+            "the window did not come back to the picture it had before the press, so the pixels \
+             counted above were something other than the ghost"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **The drawn hold switch is operable by pointer**, which is the whole of issue #19.
+    ///
+    /// It is not a nicety. Measured in research/06 while proving input reaches Doom:
+    /// `CONFIG_KEYPAD IPOD_4G_PAD` has **no DOWN key and no ESC key**, Doom's menus are UP-only,
+    /// and `M_Responder` reads only `ev_keydown` so the wheel never moves one. During demo playback
+    /// `gamestate == GS_LEVEL`, so `G_Responder`'s demo branch discards keypresses outright — a
+    /// ten-second centre hold reaches `D_PostEvent` four times and changes nothing.
+    /// `button_hold()` going off→on posts `KEY_ESCAPE`, and **that is the only way into Doom's menu
+    /// at all**. A person handed a game they cannot start because the one control that starts it is
+    /// an undocumented keystroke has been handed nothing.
+    ///
+    /// **`the_hold_switch_is_the_machines_…` does not make this claim and cannot.** It calls
+    /// `invoke_hold_pressed()`, which enters at the window's own callback — everything above it is
+    /// assumed. What runs here is the part that was assumed: a pointer event dispatched at the
+    /// switch's own pixels, through `ipod.slint`'s `TouchArea`, `bench.slint`'s forward and
+    /// `window.slint`'s binding.
+    ///
+    /// **How to make it go red:** delete `hold-touch` from `ipod.slint`. The callback test goes on
+    /// passing, because the callback is still there and still bound; this one fails, because
+    /// nothing on the drawing raises it.
+    #[test]
+    fn a_pointer_on_the_drawn_hold_switch_throws_it() {
+        let (w, wiring, dir) = a_wired_bench_with_a_machine("hold-pointer");
+        let at = drawn_hold_switch();
+
+        press_at(&w, at);
+        assert_eq!(
+            drain_queue(&wiring),
+            vec![ipod_machine::WheelEvent::Hold(true)],
+            "a pointer press on the drawn hold switch reached nothing"
+        );
+        lift_at(&w, at);
+
+        // **It goes to where it is *not*.** The position is read off `Stats::hold`, which is the
+        // machine's own field, so the drawing and the switch cannot disagree about which way it is
+        // thrown — and the second press is `Hold(false)` rather than `Hold(true)` twice.
+        wiring.live.borrow().as_ref().expect("the machine").hold.set(true);
+        press_at(&w, at);
+        assert_eq!(drain_queue(&wiring), vec![ipod_machine::WheelEvent::Hold(false)]);
+        lift_at(&w, at);
+
+        // ── The control: the same press one switch-height above the body is not the switch ──
+        //
+        // Without this the arithmetic above could be pointing anywhere on the chassis and the
+        // assertion would still pass, because `body-touch` covers the whole of it. This is the
+        // press that has to reach nothing.
+        let above = slint::LogicalPosition::new(at.x, at.y - (geometry::HOLD_H * dressed_fit().hero_logical) as f32);
+        press_at(&w, above);
+        assert!(
+            drain_queue(&wiring).is_empty(),
+            "a press ABOVE the drawn body threw the hold switch, so the coordinates this test uses \
+             are not the switch's and the assertions above are about something else"
+        );
+        lift_at(&w, above);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **The switch can be hit**, which is a different claim from the one above and the one issue
+    /// #19 turns on in practice: *toggles by pointer **and by touch***.
+    ///
+    /// `HOLD_H` is 0.024 of body height — under 16 logical pixels at hero, about ten at a
+    /// thumbnail. That is a mouse target somebody aims at and it is not a touch target at all. So
+    /// `hold-touch` is taller than the drawing, exactly as the centre button's own area is, and
+    /// **bounded**: it stops at `glass.y`, so the top corner of the screen is still the screen.
+    ///
+    /// Three presses, and the two that must fail are the point — a target that had simply been made
+    /// enormous would satisfy the first assertion and break the device.
+    ///
+    /// **How to make it go red:** delete `height:` from `hold-touch` and the press below the
+    /// drawing reaches nothing; set it to `parent.height * 4` and the press on the screen throws
+    /// the switch.
+    #[test]
+    fn the_hold_switchs_target_is_bigger_than_its_drawing_and_stops_at_the_screen() {
+        let (w, wiring, dir) = a_wired_bench_with_a_machine("hold-target");
+        let hero = dressed_fit().hero_logical as f32;
+        let at = drawn_hold_switch();
+        let drawn_h = geometry::HOLD_H as f32 * hero;
+        let glass_top = (geometry::SCREEN_TOP - geometry::BEZEL_RATIO) as f32 * hero;
+        // The switch's own top edge is the body's, so this is measured from `at.y - drawn_h / 2`.
+        let body_top = at.y - drawn_h / 2.0;
+
+        let press = |y: f32| {
+            let p = slint::LogicalPosition::new(at.x, y);
+            press_at(&w, p);
+            let q = drain_queue(&wiring);
+            lift_at(&w, p);
+            q
+        };
+
+        // Just below the drawing: outside the switch as drawn, inside the target.
+        assert_eq!(
+            press(body_top + drawn_h + 2.0),
+            vec![ipod_machine::WheelEvent::Hold(true)],
+            "a press two pixels under the drawn switch reached nothing, so the target is the \
+             drawing and this control is as hard to hit as it looks"
+        );
+        wiring.live.borrow().as_ref().expect("the machine").hold.set(true);
+
+        // And the two that must not. A press on the screen is a press on the screen.
+        assert!(
+            press(body_top + glass_top + 2.0).is_empty(),
+            "a press on the top of the SCREEN threw the hold switch"
+        );
+        // Sideways it does not grow: past the body's trailing edge is the well.
+        let beside = slint::LogicalPosition::new(
+            at.x + geometry::HOLD_W as f32 * hero,
+            body_top + drawn_h / 2.0,
+        );
+        press_at(&w, beside);
+        assert!(
+            drain_queue(&wiring).is_empty(),
+            "a press BESIDE the iPod threw the hold switch, which is a target that has left the \
+             device"
+        );
+        lift_at(&w, beside);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// **The hold switch is the machine's, and it says so when there is no machine.** §7.4.
     ///
     /// Both halves, because the interesting one is the refusal: a switch that quietly did nothing
@@ -10096,6 +10460,7 @@ pub(crate) mod tests {
             hold: Cell::new(false),
             drawn: Cell::new(false),
             buttons: Cell::new(0),
+            clicks: RefCell::new(click::Watch::default()),
         }
     }
 
@@ -18425,8 +18790,8 @@ pub(crate) mod tests {
     /// five `Made of` lines were undrawn and so was the one control §7.2 puts on this page.
     ///
     /// It also pins the four bindings that were reading the **bench's** two fields: `enabled` and
-    /// `reason` came from `DeviceRow.startable` / `.cradle-label`, which `window.slint:860` and
-    /// `:893` read for the drawn iPod, and `machine-rule` was a literal `true`.
+    /// `reason` came from `DeviceRow.startable` / `.cradle-label`, which `window.slint:864` and
+    /// `:897` read for the drawn iPod, and `machine-rule` was a literal `true`.
     #[test]
     fn the_devices_page_opens_a_row_and_reaches_its_start() {
         let dir = temp_dir("devices-wired");

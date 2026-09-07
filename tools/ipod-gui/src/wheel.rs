@@ -244,6 +244,25 @@ pub struct Finger {
     /// way a `Step` is. Held here rather than inside [`Touch::Scroll`] so that enum stays `Eq` —
     /// every other rule in this file is written as a comparison against a variant.
     residue: f32,
+    /// **Where this window believes the wheel is**, 0..[`CLICKS`), and the only thing that can
+    /// answer *where is the finger* for an input that carries no position.
+    ///
+    /// It is the window's belief and deliberately **not** the machine's `Stats::position`, which is
+    /// the other candidate and is the wrong one. The machine's is a queue behind: a drag of
+    /// thirty-six clicks takes 120 ms of the iPod's own time to drain, so a ghost drawn from it
+    /// would freeze exactly when the machine is busy — and *"is it receiving me, or is it receiving
+    /// me and busy"* is the whole question issue #28 exists to answer. Drawn from here it says **I
+    /// am receiving you** whether or not anything is consuming it.
+    ///
+    /// **The two agree at rest**, because the machine's position is this one's own `Step`s applied
+    /// with the same wrap — `hw/wheel.rs`'s `apply` is `position = (position + d).rem_euclid(96)`.
+    /// So a ghost that ran ahead during a drag is caught up with by the time the queue drains, and
+    /// the window is never drawing a place the machine will not reach.
+    /// `the_steps_sent_to_the_machine_add_up_to_the_position_the_window_draws` is the assertion,
+    /// stated as the arithmetic rather than by driving a machine: `ClickWheel::apply` is
+    /// `pub(crate)` and out of this crate's reach, and a copy of it here to compare against would
+    /// be comparing this file with itself.
+    at: u8,
 }
 
 /// **Logical pixels of scroll per detent. 60, and it is Slint's own figure rather than a taste.**
@@ -326,6 +345,7 @@ impl Finger {
             out.push(ipod_machine::WheelEvent::Touch);
         }
         self.touch = Touch::Pointer { at, button };
+        self.at = at;
         self.residue = 0.0;
         if button != 0 {
             out.push(ipod_machine::WheelEvent::Button(button, true));
@@ -356,6 +376,7 @@ impl Finger {
             out.push(ipod_machine::WheelEvent::Touch);
         }
         self.touch = Touch::Pointer { at, button: 0 };
+        self.at = at;
         self.residue = 0.0;
         out
     }
@@ -377,6 +398,7 @@ impl Finger {
             return Vec::new();
         }
         self.touch = Touch::Pointer { at: to, button };
+        self.at = to;
         vec![ipod_machine::WheelEvent::Step(d.signum() as i8); d.unsigned_abs() as usize]
     }
 
@@ -419,6 +441,7 @@ impl Finger {
         }
         self.touch = Touch::Key;
         self.residue = 0.0;
+        self.at = step(self.at, by.signum() as i32);
         out.push(ipod_machine::WheelEvent::Step(by.signum()));
         out
     }
@@ -475,6 +498,7 @@ impl Finger {
         let clicks = (self.residue / PX_PER_CLICK) as i32;
         self.residue -= clicks as f32 * PX_PER_CLICK;
         if clicks != 0 {
+            self.at = step(self.at, clicks);
             out.extend(std::iter::repeat_n(
                 ipod_machine::WheelEvent::Step(clicks.signum() as i8),
                 clicks.unsigned_abs() as usize,
@@ -501,6 +525,141 @@ impl Finger {
         self.residue = 0.0;
         vec![ipod_machine::WheelEvent::Release]
     }
+
+    /// **Where the wheel is being touched, and how much the input actually said.** Issue #28.
+    ///
+    /// `None` when nothing is on the wheel — and the position is *kept* across that, because the
+    /// wheel does not move when nobody is turning it and a scroll that resumes after 300 ms of
+    /// stillness resumes from where it stopped.
+    pub fn grip(&self) -> Option<Grip> {
+        match self.touch {
+            Touch::Off => None,
+            // A pointer and a scroll are both a finger on a surface, moving continuously: a drag
+            // carries an angle outright and a scroll accumulates one 60 logical pixels at a time,
+            // which is fine enough that neither reads as a jump.
+            Touch::Pointer { .. } | Touch::Scroll => Some(Grip::Contact(self.at)),
+            // A key is not. §16.8's `↑` `↓` ask for **one detent**, not for somewhere to be, and
+            // drawing a fingertip gliding to a new angle would be the window inventing a gesture
+            // out of a keystroke.
+            Touch::Key => Some(Grip::Step(self.at)),
+        }
+    }
+}
+
+/// `at` moved `by` detents, the long way or the short way as given, wrapped into 0..[`CLICKS`).
+///
+/// `rem_euclid` and not `%`: a negative step past twelve o'clock has to land at 95 and `%` lands at
+/// -1, which as a `u8` is 255 — a position off the end of a 96-detent wheel, and the sort of thing
+/// that draws a ghost in the corner of the window.
+fn step(at: u8, by: i32) -> u8 {
+    (i32::from(at) + by).rem_euclid(CLICKS) as u8
+}
+
+/// **What is on the wheel, for the thing that draws it.** Issue #28.
+///
+/// Two variants and not one, because the input routes genuinely differ in what they know and the
+/// drawing must not claim more than was said. A real click wheel gives no visual feedback at
+/// all — your finger is on it, so you know where you are — and on glass you do not, which is what
+/// this is for; but a mark that implied a continuous sweep where somebody pressed a key twice would
+/// be a different lie in the same place.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Grip {
+    /// A finger on a surface, moving continuously — a drag on the drawn ring, a contact on the
+    /// trackpad, or a scroll gesture. Drawn as a **contact patch**.
+    Contact(u8),
+    /// A key. Drawn as **one detent**, at the position it stepped to, and never as a glide.
+    Step(u8),
+}
+
+impl Grip {
+    pub fn at(self) -> u8 {
+        match self {
+            Grip::Contact(p) | Grip::Step(p) => p,
+        }
+    }
+}
+
+/// **The side of the square the ghost is drawn in.** The `Path` in `ipod.slint` declares
+/// `viewbox-width: 100` and stretches it over the wheel's own square, so 50 is the outer radius and
+/// (50, 50) is the centre — whatever size the device is drawn at.
+///
+/// A viewbox and not pixels, for the reason the whole of `ipod.slint` is ratios of `body-height`:
+/// one number takes the device from a thumbnail to a hero, and a ghost computed in pixels would be
+/// the one part of it that did not scale.
+const VIEW: f32 = 100.0;
+
+/// **How much of the ring a fingertip covers, in degrees.** 34.
+///
+/// The real arithmetic is wider and is worth writing down rather than rounding away. A 5G's ring
+/// runs from 7.3 mm to 14 mm, so its midline is at 10.6 mm and its circumference is 67 mm; a
+/// fingertip's contact patch is about 10 mm across, which is **54°** — over an eighth of the wheel.
+///
+/// 34° is deliberately narrower than that, and the reason is the mark's *other* job. Issue #28 asks
+/// for something that says *where the wheel is being touched*, and a patch covering an eighth of it
+/// says only *somewhere on the left*. 34° is nine detents: wide enough to read as a fingertip
+/// rather than a cursor, narrow enough to point at a position. It is the one number here that is a
+/// judgement rather than a measurement, and it is the one to change if it reads wrong.
+const PATCH_DEG: f32 = 34.0;
+
+/// One detent, in degrees — 360 / 96 = 3.75. What a **key** press asks for, and therefore all a key
+/// press may draw.
+const DETENT_DEG: f32 = 360.0 / CLICKS as f32;
+
+/// How far the mark is held off the ring's own two edges, in viewbox units.
+///
+/// The band is 26 to 50 here, so 1.5 leaves the mark clear of the wheel's outer edge and of the
+/// centre button's — a mark that touched either would read as part of the moulding rather than as
+/// something on top of it.
+const INSET: f32 = 1.5;
+
+/// **Where the wheel is being touched, as an SVG path over a 100 × 100 viewbox.** Issue #28.
+///
+/// # Why this is arithmetic in Rust and a string in the markup
+///
+/// `ipod.slint`'s own rule is that *"the hit test is `wheel.rs`'s and is never re-derived here"* —
+/// the markup reports where the pointer is and this file decides what it means. The same rule
+/// applies in the other direction: Slint has `Math.sin`, so four trigonometric expressions and a
+/// string interpolation would compile, and they would be a second copy of `point_at`'s convention
+/// living somewhere no test can reach. Here it is one function with a return value.
+///
+/// # What it draws, and what it deliberately does not
+///
+/// * [`Grip::Contact`] — an annular sector [`PATCH_DEG`] wide across the ring's band. A finger on a
+///   surface, moving continuously: a drag on the drawing, a contact on the trackpad, or a scroll
+///   gesture, all of which carry or accumulate an angle finely enough that nothing is being
+///   invented.
+/// * [`Grip::Step`] — one detent, [`DETENT_DEG`] wide. §16.8's `↑` `↓` ask for a detent and not for
+///   somewhere to be, so what is drawn is the detent. **No glide, and no fingertip**: a smooth arc
+///   sliding to a new angle would be the window claiming a gesture out of a keystroke, which is
+///   issue #28's last requirement and the easiest one to lose.
+///
+/// **Nothing animates it, and that is the same requirement kept in the markup.** The mark is
+/// wherever the wheel is on the frame it is drawn; a pointer moves it at the pointer's own rate and
+/// a key moves it 3.75° at once, which is what each of those inputs did.
+pub fn ghost_path(g: Grip) -> String {
+    let half = match g {
+        Grip::Contact(_) => PATCH_DEG,
+        Grip::Step(_) => DETENT_DEG,
+    } / 2.0;
+    let mid = f32::from(g.at()) / CLICKS as f32 * 360.0;
+    let ring = WheelRing::new(VIEW / 2.0, VIEW / 2.0, VIEW / 2.0);
+    let (ri, ro) = (ring.inner + INSET, ring.outer - INSET);
+    // `at` reads the same convention `point_at` does: twelve o'clock is zero and the value grows
+    // clockwise, in a y-DOWN space. So SVG's sweep flag is 1 for increasing angle and 0 coming
+    // back, and the large-arc flag is 0 either way because no span here approaches 180°.
+    let at = |r: f32, deg: f32| {
+        let t = deg.to_radians();
+        (ring.cx + r * t.sin(), ring.cy - r * t.cos())
+    };
+    let (a, b) = (mid - half, mid + half);
+    let (x1, y1) = at(ro, a);
+    let (x2, y2) = at(ro, b);
+    let (x3, y3) = at(ri, b);
+    let (x4, y4) = at(ri, a);
+    format!(
+        "M {x1:.2} {y1:.2} A {ro:.2} {ro:.2} 0 0 1 {x2:.2} {y2:.2} \
+         L {x3:.2} {y3:.2} A {ri:.2} {ri:.2} 0 0 0 {x4:.2} {y4:.2} Z"
+    )
 }
 
 #[cfg(test)]
@@ -929,6 +1088,209 @@ mod tests {
         assert_eq!(f.keyed(-1), vec![Step(-1)], "the key opened a second contact");
         assert!(f.scroll_lifted().is_empty(), "a stale scroll timer released a held key");
         assert_eq!(f.key_released(), vec![Release], "the key that took the wheel could not lift it");
+    }
+
+    // ── Where the wheel is being touched (issue #28) ────────────────────────────────────────────
+
+    /// The numbers out of a path, in order, so an assertion can be about geometry rather than about
+    /// a string. A test that compared the string would pass for a shape drawn anywhere.
+    fn numbers(path: &str) -> Vec<f32> {
+        path.split_whitespace().filter_map(|t| t.parse::<f32>().ok()).collect()
+    }
+
+    /// The four corners of the sector: two on the outer arc, two on the inner one.
+    fn corners(path: &str) -> [(f32, f32); 4] {
+        let n = numbers(path);
+        // 18: two points, then an arc's radii and its three flags, twice over.
+        assert_eq!(n.len(), 18, "the path is not the shape this reader expects: {path}");
+        [(n[0], n[1]), (n[7], n[8]), (n[9], n[10]), (n[16], n[17])]
+    }
+
+    /// Radius from the viewbox's centre.
+    fn radius((x, y): (f32, f32)) -> f32 {
+        ((x - 50.0).powi(2) + (y - 50.0).powi(2)).sqrt()
+    }
+
+    /// Degrees clockwise from twelve o'clock, in the same convention `point_at` uses.
+    fn degrees((x, y): (f32, f32)) -> f32 {
+        (x - 50.0).atan2(50.0 - y).to_degrees().rem_euclid(360.0)
+    }
+
+    /// **Every route into the wheel says where it is being touched, and says how much it knows.**
+    /// Issue #28.
+    ///
+    /// The four routes are not all the same: a pointer carries an angle, a trackpad contact carries
+    /// one, a scroll accumulates one 60 px at a time, and a key carries none at all — it asks for a
+    /// detent. So a pointer and a scroll are a [`Grip::Contact`] and a key is a [`Grip::Step`], and
+    /// the difference is what stops the drawing claiming a gesture somebody did not make.
+    #[test]
+    fn every_route_into_the_wheel_says_where_it_is_being_touched() {
+        let r = unit();
+        let mut f = Finger::default();
+        assert_eq!(f.grip(), None, "an untouched wheel is being touched somewhere");
+
+        // A pointer: the position is the input's own.
+        f.pressed(&r, on_ring(24).0, on_ring(24).1);
+        assert_eq!(f.grip(), Some(Grip::Contact(24)));
+        f.moved(on_ring(30).0, on_ring(30).1);
+        assert_eq!(f.grip(), Some(Grip::Contact(30)));
+        f.released();
+        assert_eq!(f.grip(), None, "the finger lifted and something is still on the wheel");
+
+        // A scroll: no position of its own, so the window carries one — and it carries on from
+        // where the last contact left the wheel, because a wheel nobody is turning does not move.
+        f.scrolled(-PX_PER_CLICK * 4.0);
+        assert_eq!(f.grip(), Some(Grip::Contact(34)), "a scroll did not resume from the wheel");
+        f.scroll_lifted();
+
+        // A key: one detent, and it is a Step rather than a fingertip.
+        f.keyed(1);
+        assert_eq!(f.grip(), Some(Grip::Step(35)));
+        f.key_released();
+        assert_eq!(f.grip(), None);
+
+        // A contact on the trackpad is a pointer by the time it gets here — §21.8 uses `touched`.
+        f.touched(&r, on_ring(0).0, on_ring(0).1);
+        assert_eq!(f.grip(), Some(Grip::Contact(0)));
+    }
+
+    /// **What the window draws and what the machine will do are the same place.** Issue #28.
+    ///
+    /// The ghost is drawn from the *window's* position and not from `Stats::position`, because the
+    /// machine's is a queue behind and a mark that froze while the machine was busy would answer
+    /// the opposite of the question it is there for. The risk that buys is drift: two counters, and
+    /// nothing making them agree.
+    ///
+    /// This is what makes them agree, stated as arithmetic. `hw/wheel.rs`'s `apply` is
+    /// `position = (position + d).rem_euclid(96)`, so if the `Step`s a route emits sum to the same
+    /// delta the window moved itself by, the machine lands exactly where the ghost already is —
+    /// for every route, in both directions, across the wrap.
+    ///
+    /// **How to make it go red:** drop the `self.at = step(self.at, clicks)` line from `scrolled`.
+    /// The scroll arm's steps still reach the machine and the ghost stops following them, which is
+    /// a mark that says *the wheel is here* about a wheel that has gone somewhere else.
+    #[test]
+    fn the_steps_sent_to_the_machine_add_up_to_the_position_the_window_draws() {
+        let r = unit();
+        let sum = |evs: &[ipod_machine::WheelEvent]| -> i32 {
+            evs.iter()
+                .map(|e| match e {
+                    ipod_machine::WheelEvent::Step(d) => i32::from(*d),
+                    _ => 0,
+                })
+                .sum()
+        };
+        let mut f = Finger::default();
+        let check = |f: &Finger, machine: i32, what: &str| {
+            let drawn = f.grip().map(Grip::at);
+            assert_eq!(
+                drawn,
+                Some(machine.rem_euclid(CLICKS) as u8),
+                "after {what} the ghost is at {drawn:?} and the machine's wheel will be at {}",
+                machine.rem_euclid(CLICKS)
+            );
+        };
+
+        // **A press lands rather than steps**, and it is the one event in the whole set that does.
+        // `Finger::pressed` emits `Touch` and no `Step`, because the part's frame carries a
+        // position byte and the firmware reads differences — so the machine's own wheel is put
+        // where the finger is by the next frame rather than walked there. Everything after this
+        // line is a delta, and this is the anchor both sides share.
+        assert_eq!(sum(&f.pressed(&r, on_ring(90).0, on_ring(90).1)), 0, "a press stepped the wheel");
+        let mut machine = 90i32;
+        check(&f, machine, "a press at 90");
+
+        // A drag the short way round, across twelve o'clock — the wrap, on the route that computes
+        // its own delta.
+        machine += sum(&f.moved(on_ring(4).0, on_ring(4).1));
+        check(&f, machine, "a drag from 90 to 4");
+        machine += sum(&f.moved(on_ring(40).0, on_ring(40).1));
+        check(&f, machine, "a drag from 4 to 40");
+        f.released();
+
+        // A scroll, both ways, including one big enough to wrap.
+        for dy in [-PX_PER_CLICK * 9.0, PX_PER_CLICK * 60.0, -PX_PER_CLICK * 20.0] {
+            machine += sum(&f.scrolled(dy));
+            check(&f, machine, "a scroll");
+        }
+        f.scroll_lifted();
+
+        // And the keys, one detent at a time, back across zero.
+        for by in [-1i8, -1, -1, 1, 1] {
+            machine += sum(&f.keyed(by));
+            check(&f, machine, "a key");
+            f.key_released();
+        }
+    }
+
+    /// **The position wraps at the top of the wheel rather than running off the end of it.**
+    ///
+    /// A key or a scroll turned anticlockwise past twelve o'clock has to land at 95. `%` lands at
+    /// -1, which as a `u8` is 255 — a position off the end of a 96-detent wheel, drawn a long way
+    /// from anywhere.
+    ///
+    /// **How to make it go red:** `(i32::from(at) + by) as u8 % CLICKS as u8` in `step`.
+    #[test]
+    fn the_position_wraps_at_twelve_oclock_in_both_directions() {
+        let mut f = Finger::default();
+        f.keyed(-1);
+        assert_eq!(f.grip(), Some(Grip::Step(95)), "one detent back from zero left the wheel");
+        f.keyed(1);
+        assert_eq!(f.grip(), Some(Grip::Step(0)));
+        f.key_released();
+        // And a scroll the other way, which is the route that has no `keyed`'s single step to
+        // clamp it: five detents anticlockwise from zero is 91.
+        f.scrolled(PX_PER_CLICK * 5.0);
+        assert_eq!(f.grip().map(Grip::at), Some(91), "five detents back from 0 is 91");
+    }
+
+    /// **The mark is on the ring, at the position the wheel is at.** Issue #28.
+    ///
+    /// Read back out of the path rather than compared against a string, so this is an assertion
+    /// about geometry: the four corners sit on the band's two radii, and the sector is centred on
+    /// the angle `point_at` would have put a label at.
+    ///
+    /// **How to make it go red:** swap `sin` and `cos` in `ghost_path`'s `at`, which is the classic
+    /// error and puts every mark a quarter turn out. Position 0 lands at 90° instead of 0°.
+    #[test]
+    fn the_mark_sits_on_the_ring_at_the_wheels_own_position() {
+        for pos in [0u8, 1, 12, 24, 47, 48, 72, 95] {
+            let c = corners(&ghost_path(Grip::Contact(pos)));
+            let want = f32::from(pos) / CLICKS as f32 * 360.0;
+            for (i, p) in c.iter().enumerate() {
+                let r = radius(*p);
+                let on = if i < 2 { 48.5 } else { 27.5 };
+                assert!((r - on).abs() < 0.05, "corner {i} of {pos} is at radius {r}, not {on}");
+            }
+            // The sector's midpoint is the position. Compared as a shortest angular difference, so
+            // a patch straddling twelve o'clock is not read as 343 degrees away from zero.
+            let mid = (degrees(c[0]) + PATCH_DEG / 2.0).rem_euclid(360.0);
+            let off = (mid - want + 180.0).rem_euclid(360.0) - 180.0;
+            assert!(off.abs() < 0.05, "position {pos} is drawn at {mid} and belongs at {want}");
+        }
+    }
+
+    /// **A key press draws one detent and a finger draws a fingertip**, which is issue #28's last
+    /// requirement: *nothing is drawn that implies a continuous gesture where the input was
+    /// discrete.*
+    ///
+    /// **How to make it go red:** give `Grip::Step` `PATCH_DEG` in `ghost_path`. Both spans become
+    /// 34° and a keystroke is drawn as a thumb.
+    #[test]
+    fn a_key_draws_one_detent_and_a_finger_draws_a_fingertip() {
+        let span = |g: Grip| {
+            let c = corners(&ghost_path(g));
+            (degrees(c[1]) - degrees(c[0]) + 360.0) % 360.0
+        };
+        let key = span(Grip::Step(24));
+        let finger = span(Grip::Contact(24));
+        assert!((key - DETENT_DEG).abs() < 0.05, "a key drew {key} degrees, not one detent");
+        assert!((finger - PATCH_DEG).abs() < 0.05, "a finger drew {finger} degrees");
+        assert!(
+            finger > key * 8.0,
+            "a keystroke and a thumb are drawn nearly the same width, so the drawing does not \
+             distinguish a discrete input from a continuous one"
+        );
     }
 
     /// A delta of zero is a scroll event a trackpad sends at the end of a gesture, and it must not
