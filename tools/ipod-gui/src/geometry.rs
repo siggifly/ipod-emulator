@@ -17,8 +17,8 @@
 //!
 //! **Nothing here is persisted.** `k`, the measured client height and the too-short boolean are
 //! recomputed every launch. A remembered `k` would survive a move from a 2× display to a 1× one and
-//! put §9.6's shelf — the row carrying `write_target()` — below the bottom edge, which is the exact
-//! failure §16.1 describes. No key for any of this appears in `settings.txt`, ever.
+//! put §9.6's bottom term — the caption carrying `write_target()` — below the bottom edge, which is
+//! the exact failure §16.1 describes. No key for any of this appears in `settings.txt`, ever.
 
 /// How a constant is rendered into Slint.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -121,13 +121,11 @@ geometry! {
     CRADLE_LABEL:     Px = 24.0;
     GAP_2:            Px = 16.0;
     GAP_2_MIN:        Px = 8.0;
-    /// Flush to the bottom edge, three rows.
-    SHELF:            Px = 44.0;
     /// Everything in the column that is not the body, at minimum. Declared, then derived from the
     /// terms by `the_column_terms_sum_to_the_declared_chrome`.
-    CHROME_MIN:       Px = 152.0;
+    CHROME_MIN:       Px = 128.0;
     /// Everything in the column that is not the body, preferred.
-    CHROME_PREF:      Px = 188.0;
+    CHROME_PREF:      Px = 164.0;
 
     // ── §9.6 the horizontal budget, logical px ──
 
@@ -218,7 +216,8 @@ geometry! {
     /// that belong where they are; `no_opacity_literal_outside_the_cosmetic_set` is the narrower
     /// sweep that keeps 0.45 out instead.
     GHOST_OPACITY:    Ratio = 0.45;
-    /// §7.5's 3 px accent bar. **One constant** — the shelf's bar and the Rail's bar are the same
+    /// §7.5's 3 px accent bar, drawn over the bottom of the well now that the shelf's top rule is
+    /// not there to carry it. **One constant** — the bench's bar and the Rail's bar are the same
     /// bar at two sizes of surface, and two names for one number is how they come to disagree.
     PROGRESS_H:       Px = 3.0;
     /// The Rail's verb column, so a plan reads as a column rather than as a paragraph.
@@ -340,14 +339,14 @@ geometry! {
     /// is a container height and that is what this is. The other five roles get theirs when they
     /// get a use site.
     LINE_LABEL:       Px = 16.0;
-    /// §6.2's `title` line box — *20 / 26*. The shelf's first row is its use site.
+    /// §6.2's `title` line box — *20 / 26*. The caption above the device is its use site.
     ///
     /// It lived in `ui/bench.slint` as `Metric.title-size + Metric.s3 / 2` while `src/geometry.rs`
     /// had a different owner; the stated retirement condition was *when `geometry.rs` declares it*,
     /// and this is that. Written as the number the design states, checked against the type scale by
     /// `the_shelf_line_boxes_are_the_type_scales`.
     LINE_TITLE:       Px = 26.0;
-    /// §6.2's `body` line box — *14 / 20*. The shelf's second row.
+    /// §6.2's `body` line box — *14 / 20*. §11.4's identifications, on the caption's second line.
     LINE_BODY:        Px = 20.0;
     /// §9.5's pane: the measure its two sentences are set at, and the width of its primary Row.
     ///
@@ -498,7 +497,7 @@ geometry! {
     ///
     /// **And the pane it defers to is built**, which is worth saying here because this is the
     /// constant that makes the state reachable: `bench.slint`'s `ShortPane` replaces the well
-    /// whenever `too-short` is true, and [`SHORT_MEASURE`] plus [`SHELF`] is the column it has to
+    /// whenever `too-short` is true, and [`SHORT_MEASURE`] is the measure of the column it has to
     /// fit inside this floor. The paragraph that used to stand here recorded the opposite —
     /// *computed, pushed in, and read by no markup* — and with it the state between this floor and
     /// roughly 810 logical, where the 655.751 px device was laid out past the bottom edge and
@@ -514,7 +513,7 @@ geometry! {
     /// `k`, and §16.1 is why neither of them may read `hero` to try.
     PREF_WIDTH:       Px = MIN_WIDTH;
     /// The k = 1, sf = 1 case of body + [`CHROME_PREF`], rounded up. Not a round number.
-    PREF_HEIGHT:      Px = 844.0;
+    PREF_HEIGHT:      Px = 820.0;
 
     // ── The two small drawings (§6.6) ──
     //
@@ -573,8 +572,9 @@ pub const HYSTERESIS: f64 = 20.0;
 ///   + 2×PAGE_MARGIN 48 + 3×FOOTER_PAD 36  =  590
 /// ```
 ///
-/// Against `722 − SHELF` = 634 — §11.2's own stated window minimum — that is 44 px of slack, which
-/// is what `the_composer_root_fits_the_smallest_window_that_draws_the_device` exists to hold.
+/// Against 722 — §11.2's own stated window minimum, and the whole of it now that §7.5's shelf is
+/// not taking 44 off the drawer — that is 132 px of slack, which is what
+/// `the_composer_root_fits_the_smallest_window_that_draws_the_device` exists to hold.
 #[cfg(test)]
 pub const COMPOSER_ROOT_H: f64 = DRAWER_HEADER_H
     + 3.0 * ROW_H
@@ -719,7 +719,7 @@ pub const ACT_MEASURE: f64 = REFUSAL_MEASURE - 2.0 * PAGE_MARGIN;
 ///
 /// **Written as the expression rather than as 48**, so a re-measured [`BODY_ADVANCE`] or a
 /// re-measured body moves every sentence that has to fit rather than leaving a stale number here.
-/// The label is `width: frame.width` (`ui/bench.slint:827`), and the frame is the body plus one
+/// The label is `width: frame.width` (`ui/bench.slint:967`), and the frame is the body plus one
 /// [`CRADLE_BAND`] on each side:
 ///
 /// ```text
@@ -1025,8 +1025,7 @@ mod tests {
     /// the moment it closed, which is what it said about itself.
     ///
     /// What replaces it here is the arithmetic that makes the pane possible at all: at the window
-    /// minimum, with the shelf taking [`SHELF`] off the bottom, there is room for §9.5's primary
-    /// Row **and** its two sentences. That is the claim [`MIN_HEIGHT`] is making by being a floor —
+    /// minimum there is room for §9.5's primary Row **and** its two sentences. That is the claim [`MIN_HEIGHT`] is making by being a floor —
     /// *the height below which even §9.5's replacement pane cannot be laid out* — and nothing was
     /// checking it. The drawing itself is asserted one level up, by
     /// `main::the_short_pane_replaces_the_bench_below_the_threshold_and_not_above_it`, which reads
@@ -1043,7 +1042,7 @@ mod tests {
     #[test]
     fn the_short_pane_fits_the_window_minimum() {
         let s4 = markup_space("s4");
-        let well = MIN_HEIGHT - SHELF;
+        let well = MIN_HEIGHT;
         let column = 2.0 * WELL_AIR + LINE_BODY + s4 + LINE_BODY + s4 + ROW_H;
         assert!(
             column <= well,
@@ -1091,20 +1090,24 @@ mod tests {
     /// well as below it**, and that is asserted here exactly.
     #[test]
     fn the_column_terms_sum_to_the_declared_chrome() {
-        // **Two terms joined this sum and the shelf halved, in the same change.** §7.5's row 1
-        // (the machine's name and state) now sits ABOVE the cradle and row 3's write target
-        // BELOW the caption, beside the thing each describes rather than 88 px of chrome away.
-        // Both take column height where they stand, so both are terms here — a line drawn
+        // **§7.5's shelf was the bottom term and it is gone; §11.4's identifications are the new
+        // one.** Row 1 (the machine's name and state) sits ABOVE the cradle, row 2 (the drop
+        // band's identifications, `LINE_BODY`) directly under it, and row 3's write target BELOW
+        // the caption — each beside the thing it describes rather than 88 px of chrome away. All
+        // three take column height where they stand, so all three are terms here: a line drawn
         // outside the declared column is a line that clips at the window minimum, silently.
+        //
+        // The trade is 44 px out and 20 px in, so the device is **24 px** better off at every
+        // size, which is what moved `PREF_HEIGHT` from 844 to 820.
         let min = MARGIN_TOP_MIN
             + LINE_TITLE
+            + LINE_BODY
             + CRADLE_BAND
             + CRADLE_BAND
             + GAP_1_MIN
             + CRADLE_LABEL
             + LINE_LABEL
-            + GAP_2_MIN
-            + SHELF;
+            + GAP_2_MIN;
         assert_eq!(
             min, CHROME_MIN,
             "the minimum column sums to {min} and CHROME_MIN declares {CHROME_MIN}"
@@ -1112,13 +1115,13 @@ mod tests {
 
         let pref = MARGIN_TOP
             + LINE_TITLE
+            + LINE_BODY
             + CRADLE_BAND
             + CRADLE_BAND
             + GAP_1
             + CRADLE_LABEL
             + LINE_LABEL
-            + GAP_2
-            + SHELF;
+            + GAP_2;
         assert_eq!(
             pref, CHROME_PREF,
             "the preferred column sums to {pref} and CHROME_PREF declares {CHROME_PREF}"
@@ -2673,11 +2676,11 @@ mod tests {
     #[allow(clippy::assertions_on_constants)]
     #[test]
     fn the_drawer_fits_its_own_furniture_at_the_window_minimum() {
-        let body = MIN_HEIGHT - SHELF - DRAWER_HEADER_H - WORK_FOOTER_H;
+        let body = MIN_HEIGHT - DRAWER_HEADER_H - WORK_FOOTER_H;
         assert!(
             body >= DRAWER_MIN_BODY,
             "at the window minimum the drawer has {body} px of body for a page that needs \
-             {DRAWER_MIN_BODY} — {MIN_HEIGHT} minus {SHELF} shelf, {DRAWER_HEADER_H} header and \
+             {DRAWER_MIN_BODY} — {MIN_HEIGHT} minus {DRAWER_HEADER_H} header and \
              {WORK_FOOTER_H} footer"
         );
     }
@@ -2691,7 +2694,7 @@ mod tests {
     ///
     /// The ceiling is derived rather than typed — `HERO_PHYS_1X + CHROME_MIN` is the client height
     /// a `k = 1` window needs, which is `fit::required_client_logical` written out, and the drawer
-    /// is that less the shelf (§9.5's decision: only the shelf's three content rows narrow).
+    /// is the whole of it: §7.5's shelf was the one thing it stopped short of and it is gone.
     ///
     /// **The page's own height is [`COMPOSER_ROOT_H`] and is no longer decomposed here.** It used
     /// to be, with a hand-typed `PLAN: f64 = 110.0` standing in for §11.2's drawing of the plan
@@ -2701,7 +2704,7 @@ mod tests {
     #[allow(clippy::assertions_on_constants)] // a declared total against a declared ceiling, which is the point; a run-time assert names both numbers where a `const` one names neither
     #[test]
     fn the_composer_root_fits_the_smallest_window_that_draws_the_device() {
-        let ceiling = (HERO_PHYS_1X + CHROME_MIN) - SHELF;
+        let ceiling = HERO_PHYS_1X + CHROME_MIN;
         assert!(
             COMPOSER_ROOT_H <= ceiling,
             "the Composer's root is {COMPOSER_ROOT_H:.0} px inside a drawer that is {ceiling:.0} \
@@ -2712,7 +2715,7 @@ mod tests {
         // on the operator's own machine and 722 at the minimum* — a measurement of a display class
         // rather than a constant of this program, so it is written here with the sentence it comes
         // from rather than declared in `geometry.rs` as though the program decided it.
-        let stated = 722.0 - SHELF;
+        let stated = 722.0;
         assert!(
             COMPOSER_ROOT_H <= stated,
             "the Composer's root is {COMPOSER_ROOT_H:.0} px and §11.2's stated 722 px window \
@@ -2740,7 +2743,7 @@ mod tests {
     #[allow(clippy::assertions_on_constants)] // same arrangement as the test above: a run-time assert names both numbers
     #[test]
     fn the_composers_first_level_fits_the_drawer_at_the_stated_minimum() {
-        let stated = 722.0 - SHELF;
+        let stated = 722.0;
         assert!(
             LEVEL_ONE_H <= stated,
             "level ① is {LEVEL_ONE_H:.0} px inside a drawer that is {stated:.0} at §11.2's stated \
@@ -2773,8 +2776,8 @@ mod tests {
 
     /// **The drawer's ROOT page does not fit the drawer, and that is why it scrolls.**
     ///
-    /// `the_drawer_fits_its_own_furniture_at_the_window_minimum` checks the *furniture* — header,
-    /// shelf, footer — and says nothing about what a page puts between them. §21.3's `VerbsPage`
+    /// `the_drawer_fits_its_own_furniture_at_the_window_minimum` checks the *furniture* — header
+    /// and footer — and says nothing about what a page puts between them. §21.3's `VerbsPage`
     /// puts thirteen rows there before the developer switch adds four more, and a disabled
     /// `Pressable` is `ROW_H + FIELD_REASON` = 78 because §9.4's reason slot is reserved under it.
     /// The drawer is 312 px at the declared window minimum, so the page overflows it in **every**
@@ -2810,7 +2813,7 @@ mod tests {
         // developer rows not drawn. If even that does not fit, no state of this page does — and
         // three of §21.6's five are refused whenever the machine is off, at 78 px each.
         let smallest = DRAWER_HEADER_H + (rows - 4) as f64 * ROW_H;
-        let have = MIN_HEIGHT - SHELF;
+        let have = MIN_HEIGHT;
         assert!(
             smallest > have,
             "the root page needs {smallest:.0} px at its very smallest and has {have:.0} at the \
@@ -3147,8 +3150,8 @@ mod tests {
     /// a decision, not an oversight** — §6.7's answer for a symbol is that it is drawn as a `Path`,
     /// not typed. Do not add one to make a test pass.
     /// **The line is punctuation versus symbol**, and it is drawn where §6.7 draws it. A symbol —
-    /// `·`, `×`, `›` — is *drawn as a `Path`*, which `ui/bench.slint` does for the shelf's own MENU
-    /// list. A punctuation mark is text and stays text. `·` and `×` used to be on this list, and
+    /// `·`, `×`, `›` — is *drawn as a `Path`*, which `ui/bench.slint` does for the `why ›`
+    /// chevron. A punctuation mark is text and stays text. `·` and `×` used to be on this list, and
     /// were the two the shelf drew as Paths one row below where Rust typed them.
     const GLYPHS: &[char] = &[
         '—', // em dash — the sentence break this program's prose is built on
@@ -3523,8 +3526,8 @@ mod tests {
         for c in ['—', '…', '§'] {
             assert!(GLYPHS.contains(&c), "`{c}` is used in this program's own prose");
         }
-        // …and the two SYMBOLS the shelf draws as `Path`s are not, because one band cannot have two
-        // answers to one question. §6.7 names `·` as the character the shipped window built into UI
+        // …and the three SYMBOLS the markup draws as `Path`s are not, because one program cannot
+        // have two answers to one question. §6.7 names `·` as the character the shipped window built into UI
         // strings with no coverage gate at all.
         for c in ['·', '×', '›'] {
             assert!(

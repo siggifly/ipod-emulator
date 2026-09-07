@@ -662,91 +662,111 @@ fn no_string_the_bench_draws_carries_a_glyph_the_font_is_not_proven_to_have() {
 ///
 /// §7.5 declared an 88 px shelf with 12 px of padding top and bottom and rows of 26, 20 and 16 —
 /// which summed to **86**, or 87 with the 1 px top rule. The design's own decomposition did not sum
-/// to its own total, and `SHELF` is load-bearing: `CHROME_MIN` and `CHROME_PREF` are both built on
-/// it.
+/// to its own total, and `SHELF` was load-bearing: `CHROME_MIN` and `CHROME_PREF` were both built
+/// on it.
 ///
-/// **Two of those three rows are gone and the shelf is 44 px.** The machine's name and state now
-/// sit above the cradle and the write target below the caption, beside the thing each describes
-/// rather than 88 px of chrome away — so what is left here is one 20 px row, the fidelity fact,
-/// and the padding. The arithmetic this test does is unchanged; only how many rows it adds up is.
+/// **The shelf is deleted and U-1 has moved to what replaced it.** Its last two tenants — the
+/// device's parts and `k` — are `About this iPod` on the drawer's root page and §12.9's own
+/// argument against itself; its other three rows had already gone beside the thing each describes.
+/// What carries a declared total over declared parts now is the **caption above the device**: two
+/// line boxes inside one block, standing on the cradle band, holding §11.4's identifications on the
+/// second line.
 ///
-/// So this measures the leftover from the markup's own derivations rather than asserting it away,
-/// and it fails in **both** directions — an overflow, which would draw a row past the bottom edge,
-/// and a leftover big enough to be a missing term rather than a rounding, which is the shape a
-/// `SHELF_SPARE` invented to absorb it would have.
+/// The same arithmetic and the same two directions of failure:
+///
+///   * **the block is shorter than its rows** — a row drawn outside the box that reserved the
+///     column height for it, which is the 560 px bug at one twentieth the scale;
+///   * **the block is taller than its rows** — a missing term rather than a rounding, which is the
+///     shape a `CAPTION_SPARE` invented to absorb it would have. U-1 says make the decomposition
+///     and the total agree in `src/geometry.rs`, never add a slack constant.
+///
+/// And one thing the shelf never had to be checked for, because it was pinned to the window's own
+/// bottom edge rather than to the device: **`y` has to reserve exactly the height the block
+/// declares.** A block that grew a third line without moving its own top edge would draw it over
+/// the iPod.
 #[test]
-fn the_shelf_rows_and_its_padding_fit_the_declared_shelf() {
+fn the_caption_above_the_device_sums_to_its_rows() {
     let text = bench();
     let names = lengths();
+    let lines = block(&text, "caption := VerticalLayout {");
 
-    // **All three line boxes now come from `src/geometry.rs`.** They were derived locally here —
-    // `Metric.title-size + Metric.s3 / 2` — while that file had a different owner, with a stated
-    // retirement condition of *when `geometry.rs` declares `LINE_TITLE` / `LINE_BODY`*. It does, so
-    // the rows are read out of the generated file the markup itself reads.
-    let row = |what: &str, constant: &str| {
-        assert!(
-            code(&text).iter().any(|l| *l == format!("height: {constant};")),
-            "the shelf's {what} row is no longer the line box `{constant}`"
-        );
-        names[constant]
-    };
-
-    let row2 = row("only", "Geometry.line-body");
-    // The other two are no longer on the shelf, and that is asserted rather than assumed: a row
-    // that came back would be a fact drawn in two places, which is what this change removed.
-    //
-    // **Scoped to the shelf, and the first draft was not.** Both line boxes are still in this file
-    // — `line-title` above the cradle, `line-label` under the caption — because that is exactly
-    // where they moved to. Searching the whole file for them therefore found the relocated rows
-    // and reported them as never having left.
-    let shelf_block = {
-        let at = text.find("shelf := Rectangle").expect("bench.slint declares the shelf");
-        let mut depth = 0i32;
-        let mut end = at;
-        for (i, c) in text[at..].char_indices() {
-            if c == '{' {
-                depth += 1;
-            } else if c == '}' {
-                depth -= 1;
-                if depth == 0 {
-                    end = at + i;
-                    break;
-                }
-            }
-        }
-        &text[at..=end]
-    };
-    for (what, constant) in [("name and state", "Geometry.line-title"),
-                             ("write-target", "Geometry.line-label")] {
-        assert!(
-            !shelf_block.contains(&format!("height: {constant};")),
-            "the shelf has a {what} row again ({constant}); it moved beside the cradle and \
-             drawing it here as well would be one fact in two places"
-        );
-    }
-
-    let pad = |head: &str| {
-        let stmt = statement(&text, head);
+    let declared = |head: &str| {
+        let stmt = lines
+            .iter()
+            .find(|l| l.starts_with(head))
+            .unwrap_or_else(|| panic!("the caption block declares no `{head}`"));
         eval(stmt.split_once(':').unwrap().1.trim().trim_end_matches(';'), &names)
     };
-    let padding = pad("padding-top: Metric.") + pad("padding-bottom: Metric.");
 
-    let shelf = names["Geometry.shelf"];
-    let used = padding + row2;
-    let spare = shelf - used;
+    // The two rows, read off the children rather than named here: whatever the block puts inside
+    // itself is what it has to be tall enough for.
+    //
+    // **Depth, not `skip(1)`.** The block's OWN `height:` is a `height: Geometry.…` line inside the
+    // block's own line range, so a flat filter counted the total as one of its parts and the sum
+    // came out at twice the truth. Only a `height:` at depth two or more belongs to a child.
+    let rows: Vec<f64> = {
+        let mut depth = 0i32;
+        let mut out = Vec::new();
+        for line in &lines {
+            let opens = line.matches('{').count() as i32;
+            let closes = line.matches('}').count() as i32;
+            if depth >= 2 && line.starts_with("height: Geometry.") {
+                out.push(eval(line.split_once(':').unwrap().1.trim().trim_end_matches(';'), &names));
+            }
+            depth += opens - closes;
+        }
+        out
+    };
+    assert_eq!(
+        rows.len(),
+        2,
+        "the caption is {} row(s). §7.5's row 1 is the machine's name and state and §11.4's row 2 \
+         is the identifications; a third one is a new fact on the bench and needs a column term in \
+         `the_column_terms_sum_to_the_declared_chrome` before it needs a line here:\n  {lines:#?}",
+        rows.len()
+    );
+
+    let spacing = declared("spacing:");
+    let used: f64 = rows.iter().sum::<f64>() + spacing * (rows.len() - 1) as f64;
+    let height = declared("height:");
 
     assert!(
-        spare >= 0.0,
-        "the shelf's own parts need {used:.0} px and it declares {shelf:.0}: \
-         padding {padding:.0} + row {row2:.0}. \
-         A row is being drawn past the bottom edge of the window."
+        used <= height,
+        "the caption's rows need {used:.0} px and the block declares {height:.0}: rows {rows:?} \
+         and {spacing:.0} px of spacing. A row is being drawn outside the box that reserves its \
+         column height, so it lands on the iPod."
     );
+    let spare = height - used;
     assert!(
         spare < names["Metric.s1"],
-        "{spare:.0} px of the {shelf:.0} px shelf is unaccounted for — padding {padding:.0} + \
-         row {row2:.0} = {used:.0}. That is a missing term rather than a \
-         rounding, and U-1 says do NOT invent a spare one to absorb it: the decomposition and the \
-         total have to be made to agree in src/geometry.rs."
+        "{spare:.0} px of the caption's {height:.0} px is unaccounted for — rows {rows:?} plus \
+         {spacing:.0} px of spacing is {used:.0}. That is a missing term rather than a rounding, \
+         and U-1 says do NOT invent a spare one to absorb it: the decomposition and the total have \
+         to be made to agree in src/geometry.rs."
+    );
+
+    // **And the block stands on the cradle band.** `y` is the body's top, less the band, less the
+    // block's own height — so the terms after `cradle-band` have to come to exactly what `height`
+    // declares. Evaluated rather than string-matched: `body-y` and `cradle-band` are the two parts
+    // this evaluator cannot resolve, and everything after them is arithmetic over declared lengths.
+    let y = lines
+        .iter()
+        .find(|l| l.starts_with("y: root.body-y - Geometry.cradle-band"))
+        .expect("the caption is positioned from the body's top, less the cradle band");
+    let tail = y
+        .split_once("Geometry.cradle-band")
+        .expect("the cradle band")
+        .1
+        .trim()
+        .trim_end_matches(';');
+    // `0 ` in front, because the tail begins with an operator and the evaluator wants an operand
+    // first — the whole expression is `0 − LINE_TITLE − LINE_BODY`, and the height it reserves is
+    // that negated.
+    let reserved = -eval(&format!("0 {tail}"), &names);
+    assert_eq!(
+        reserved, height,
+        "the caption declares {height:.0} px of height and `y` reserves {reserved:.0} above the \
+         cradle band, so the difference is drawn over the iPod:\n  {y}"
     );
 }
 
@@ -1187,8 +1207,8 @@ fn nothing_is_drawn_inside_the_glass_but_the_machines_own_panel() {
 ///     bench that is §10.1's whole screen — one thing to press, and the fixture says so;
 ///   - the **broken ring** is a *device* refusal (§7.3's three `cannot start` rows), so an empty
 ///     bench keeps `has-devices` and is never drawn with gaps in the cradle;
-///   - the **shelf refusal** is the same: `why ›` on a row with nothing to explain is a control
-///     that teaches nothing.
+///   - the **cradle label's refusal** is the same: `why ›` beside a caption with nothing to
+///     explain is a control that teaches nothing.
 ///
 /// The consequence of getting the first one wrong is that §10.1's one press is drawn `fg-dim`,
 /// which is the colour this design uses for *there is nothing to do here*.
@@ -1208,7 +1228,7 @@ fn an_empty_bench_is_pressable_and_is_not_broken() {
 
     for (what, head) in [
         ("broken ring", "cradle-broken:"),
-        ("shelf's refusal", "shelf-refusal:"),
+        ("cradle label's refusal", "refused:"),
     ] {
         let stmt = statement(&window(), head);
         assert!(
@@ -1371,4 +1391,75 @@ fn the_bodys_cross_dissolve_is_tight_and_moves_nothing() {
         }
     }
     assert!(seen >= 5, "only {seen} `animate` blocks were found across the two files");
+}
+
+/// **The cradle's focus ring is drawn from the modality, not from `has-focus` alone** — §16.7.
+///
+/// The other half of `main::the_focus_ring_follows_the_modality_focus_arrived_by`, and it exists
+/// because that test could not see this. It reads `focus-ring-shown`, which is the boolean the ring
+/// is *supposed* to read — so deleting `&& root.focus-visible` from the ring's own `visible` left
+/// the ring drawn permanently and the behavioural test green. Measured: with the gate reverted it
+/// passed, all four assertions.
+///
+/// So the pair is one claim in two files. That one holds the modality; this one holds that the
+/// drawing asks about it.
+///
+/// **How to make it go red:** delete `&& root.focus-visible` from the ring's `visible`, which is
+/// exactly the revert that fooled the behavioural test.
+#[test]
+fn the_cradles_focus_ring_reads_the_modality_and_not_only_the_focus() {
+    let text = bench();
+
+    let ring = code(&text)
+        .into_iter()
+        .find(|l| l.starts_with("visible: cradle-focus.has-focus"))
+        .expect(
+            "the cradle's focus ring is no longer drawn from `cradle-focus.has-focus`. §16.7 and \
+             §14.1 both say a keyboard user has to be able to see where they are; if the ring has \
+             moved, this test moves with it rather than being deleted",
+        );
+    assert!(
+        ring.contains("focus-visible"),
+        "the cradle's focus ring is `{ring}` — it asks whether the cradle HAS focus and not how \
+         focus ARRIVED, so it is drawn for a pointer user too. §7.2 makes a click on the device \
+         focus the fixture and `window.slint`'s `init` hands it the cradle at launch, so that is a \
+         permanent box around the product: the operator's *additional selected border when i \
+         press on the ipod*"
+    );
+
+    // And the modality is written where the pointer is, not where focus is. A rule that only
+    // watched `focus-gained` would never fire for a click, because §7.2's click goes through
+    // `.focus()` — which Slint reports as `programmatic`.
+    // **Scoped to the drawn device**, because `BenchControl` has a `clicked` of its own seven
+    // hundred lines up and a head-of-line search over the whole file finds that one first — it did.
+    let at_device = block(&text, "device := IPod {");
+    let pointer = ["clicked =>", "wheel-down(dx, dy) =>", "centre-down =>", "hold-pressed =>"];
+    for head in pointer {
+        let line = at_device
+            .iter()
+            .find(|l| l.starts_with(head))
+            .unwrap_or_else(|| panic!("`{head}` is gone from the drawn device; re-derive this test"));
+        assert!(
+            line.contains("focus-visible = false"),
+            "`{line}` is a pointer press that does not record the modality, so a click on that \
+             part of the device leaves the keyboard's ring drawn"
+        );
+    }
+
+    // The keyboard's two routes back, and §16.8 is why there are two: the cradle's own scope never
+    // sees an arrow key, because the root scope claims it for the wheel.
+    assert!(
+        code(&text).iter().any(|l| l.starts_with("focus-gained(reason) =>")),
+        "nothing reads `FocusReason`, so `Tab` cannot be told apart from a click"
+    );
+    assert!(
+        text.contains("public function keyboard-was-used()"),
+        "the bench offers the window no way to say a key was pressed, so §16.8's `↑ ↓ ← →` — the \
+         wheel, and the thing a keyboard user does most here — never restores the ring"
+    );
+    assert!(
+        ui("window.slint").contains("bench.keyboard-was-used();"),
+        "`window.slint`'s root FocusScope does not tell the bench a key was pressed, so one click \
+         costs a keyboard user their focus indicator for the rest of the session"
+    );
 }

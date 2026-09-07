@@ -1,10 +1,15 @@
 // The bench — docs/GUI.md §7. The only surface the program can open on, because there is nowhere
 // else.
 //
-// Four things, in the order the eye meets them: **the well** (full bleed, `bg-sunken`, holding one
-// device and nothing else, ever), **the device** (pinned by its distance above the shelf, never
-// centred), **the cradle** (the fixture around it, which is where every piece of UI state lives),
-// and **the shelf** (88 px, three rows, flush to the bottom edge).
+// Three things, in the order the eye meets them: **the well** (full bleed, `bg-sunken`, holding one
+// device and nothing else, ever), **the device** (pinned by its distance above the bottom edge,
+// never centred), and **the cradle** (the fixture around it, which is where every piece of UI
+// state lives).
+//
+// **There is no fourth.** §7.5's shelf held three rows, ended holding one, and is deleted: its
+// name-and-state row is the caption above the device, its write-target row is the caption below
+// it, and the device summary and `k` it had left are `About this iPod` on the drawer's root page
+// (§21.3) and §12.9's own argument against itself. The 44 px went back to the column.
 //
 // ── The two rules that shape this file ──────────────────────────────────────────────────────────
 //
@@ -25,8 +30,8 @@
 //
 // ── What is deliberately not here ───────────────────────────────────────────────────────────────
 //
-// **The drop band** (§11.4, shelf rows 1–2 crossfading to an identification) and **the `why ›`
-// route's destination**, which is a drawer page. Both wait on work that is not in this phase.
+// **The `why ›` route's destination**, which is a drawer page. §11.4's drop band is here: its
+// count and its *let go* are the caption's first line, its identifications are the second.
 //
 // ── §9.5's pane, which IS here now ──────────────────────────────────────────────────────────────
 //
@@ -34,11 +39,12 @@
 // **replaces** rather than shrinks: §9.6's whole vertical budget is fixed rows, nothing gives, and
 // a squeezed column is the 560 px bug again — so below the threshold the device, the cradle and
 // the cradle label are simply not drawn, and what stands in their place is three things that fit
-// inside `MIN_HEIGHT` less the shelf.
+// inside `MIN_HEIGHT`.
 //
-// The well still **clips**, and that is not the pane and never was: clipping buys that the shelf's
-// write-target row survives a too-short window, which is a strictly better failure than the
-// shipped one and no kind of answer to *there is no way to start an iPod on this display*.
+// The well still **clips**, and that is not the pane and never was: clipping buys that a caption
+// laid out past the bottom edge is clipped rather than drawn over the edge of the client, which is
+// a strictly better failure than the shipped one and no kind of answer to *there is no way to
+// start an iPod on this display*.
 
 import { Ink, Metric, Motion } from "tokens.slint";
 import { Geometry } from "@geometry";
@@ -89,7 +95,7 @@ component Chevron inherits Rectangle {
 //   3. **the primary Row**, which is the whole point of this state and the previous revision did
 //      not have it. The well is the only thing that contains the drawn iPod and the drawn iPod's
 //      centre button is the only start affordance in the entire program — so replacing the well
-//      with a paragraph left §10.4's *bench with no step one*: the shelf still advertising a
+//      with a paragraph left §10.4's *bench with no step one*: the window still advertising a
 //      centre button that is not drawn, and the one offered control (`Fullscreen`) disabled by
 //      §12.6 in exactly the state §9.5 offered it in. This Row carries the cradle's own callback
 //      and the cradle's own sentence.
@@ -124,8 +130,8 @@ component ShortPane inherits Rectangle {
     }
 
     // The well's own surface, because this IS the well while it is drawn (§7.1) — and it clips for
-    // the same reason the well does: what is under this rectangle is the shelf, and the one line
-    // standing between an afternoon and somebody's only image of an iPod they own is on it.
+    // the same reason the well does: this pane replaces a column laid out for a taller window, and
+    // a sentence set past the bottom edge is clipped rather than drawn over the client's edge.
     background: Ink.bg-sunken;
     clip: true;
     accessible-role: AccessibleRole.groupbox;
@@ -197,17 +203,17 @@ component ShortPane inherits Rectangle {
     }
 }
 
-// ─── A control on a shelf row ───────────────────────────────────────────────────────────────────
+// ─── A control on a caption line ────────────────────────────────────────────────────────────────
 //
 // **Not `Pressable`.** That primitive is a 44 px Row with a 34 px reason slot reserved under it,
-// and a shelf row is 16 to 26 px inside an 88 px band — there is nowhere for a reason slot to be.
-// These three controls are also never disabled: the routes into the drawer are always open
-// (§7.5 names four of them), so the slot would have nothing to hold.
+// and a caption line is 16 to 26 px of a column that is already fully spent — there is nowhere for
+// a reason slot to be. Its one use is also never disabled: `why ›` is drawn only when there IS a
+// refusal to explain, so the slot would have nothing to hold.
 //
 // §16.5 all the same, because the trap is the same: **never `enabled:` on the `TouchArea` or the
 // `FocusScope`.** A disabled `TouchArea` forcibly clears `has_hover` and forwards the event to
 // whatever is underneath; a disabled `FocusScope` refuses focus even programmatically.
-component ShelfControl inherits Rectangle {
+component BenchControl inherits Rectangle {
     in property <string> a11y-label;
     in property <string> a11y-description;
     callback activated();
@@ -338,23 +344,65 @@ export component Bench inherits Rectangle {
     // the cradle label is fed from, through `main::Press` — one tail, two prefixes.
     in property <string> press-label;
 
-    // ── The shelf (§7.5) ──
-    in property <string> shelf-name;
-    in property <string> shelf-state;
-    in property <string> shelf-facts;
-    // §7.6: a bench-level refusal goes in row 2 in `fg` rather than `fg-dim`, as one elided line
-    // with a `why ›` control that opens the drawer at the page owning it.
-    in property <bool> shelf-refusal: false;
-    // §7.5's row 2 has three tenants and one line: **the facts, or the Rail's current line, or a
-    // refusal.** `Rail::line()` is where the precedence is decided — a failure outranks work in
-    // progress — and this is its one use site. Empty means the Rail has nothing to say and the
-    // facts stand.
-    in property <string> shelf-rail-line;
-    in property <string> shelf-fidelity;
-    in property <string> shelf-write-target;
+    // ── The caption, above and below the device ──
+    //
+    // §7.5's three shelf rows, each now beside the thing it describes. **The two the shelf had
+    // left are gone rather than relocated**: the device's parts are `About this iPod`'s six facts
+    // on the drawer's root page (§21.3), and `k` is §12.9's own argument against itself — §15
+    // struck the other three numbers out of that slot for being instrumentation on a band with no
+    // exit, and the same reasoning finishes the job. A fact drawn twice on one screen is one fact
+    // too many.
+    in property <string> caption-name;
+    in property <string> caption-state;
+    // §11.4's row 2, and its only tenant. Empty at rest.
+    in property <string> drop-what;
+    // §7.6: this device cannot start, so the cradle label is `blocked_label`'s sentence and the
+    // `why ›` beside it opens the drawer at the page owning the paragraph.
+    in property <bool> refused: false;
+
+    // ── `:focus-visible`, hand-built, because Slint has no such thing ──
+    //
+    // **The cradle's focus ring is drawn when focus arrived by KEYBOARD, and not when it arrived
+    // by pointer.** The operator's report is what this is for: *"i also dont like the border
+    // around the ipod and the additional selected border when i press on the ipod."* The second
+    // half is exactly this ring — pressing the device runs `cradle-focus.focus()` (§7.2: a click
+    // on the body IS focusing the fixture), so a person driving with a mouse got an indicator
+    // meant for somebody driving with `Tab`.
+    //
+    // **Deleting it was not an option** and §16.7 and §14.1 both say why: it is how a keyboard
+    // user knows where they are, and `the_centre_button_is_reachable_from_the_keyboard_with_no_
+    // pointer` is a test this program already passes. So this is the web's `:focus-visible` rule
+    // rather than a hidden ring — the *last input modality* decides, not the focus event:
+    //
+    //   * a pointer press on the drawn device sets it **false**, at the four press edges below —
+    //     `clicked`, `pressed-device`, `wheel-down`, `centre-down` and `hold-pressed`, which are
+    //     the pointer's own callbacks. `centre-down` is also raised from `cradle-focus`'s
+    //     `key-pressed`; that site is a different one and does not clear it, which is why this is
+    //     written at the forwarding sites rather than on the callbacks themselves;
+    //   * `Tab` sets it **true**, through `focus-gained`'s `FocusReason` — Slint gives the reason
+    //     and this is the one place it is worth having;
+    //   * **any key** at the cradle sets it **true**, which is the recovery a rule keyed on the
+    //     focus event alone would not have: click the device, then reach for the keyboard, and the
+    //     ring is back before the first keystroke does anything.
+    //
+    // **`Programmatic` and `WindowActivation` deliberately leave it alone.** `window.slint`'s
+    // `init` hands the cradle focus with `focus-cradle()`, and so does closing the drawer with
+    // `⌘\` — carrying the last modality forward through those is the whole of what makes a
+    // keyboard session keep its ring and a pointer session keep its clean device. It starts
+    // **true**, because a window nobody has touched yet has had no pointer input to hide it for.
+    //
+    // `out` rather than `private`, so `window.slint` can mirror it to Rust for
+    // `the_focus_ring_follows_the_modality_focus_arrived_by`. Nothing outside this component
+    // writes it.
+    out property <bool> focus-visible: true;
+    // The Rail's current line, at bench scale. `Rail::line()` is where the precedence is decided —
+    // a failure outranks work in progress — and this is its one use site. Empty means the Rail has
+    // nothing to say and the write target stands.
+    in property <string> rail-line;
+    in property <string> write-target;
     // §7.5: `warn` only on `writes to <your>.img` — the case where nobody said it was a copy and
     // we did not build the image either.
-    in property <bool> shelf-write-warn: false;
+    in property <bool> write-warn: false;
     in property <bool> drawer-open: false;
     // §12.3, and the sign is load-bearing: **negative means there is no denominator**, so there is
     // no bar — a number that moves instead. A bar with an invented denominator is a lying
@@ -392,6 +440,15 @@ export component Bench inherits Rectangle {
     // moves focus when the window is dragged across it, because focus may well be on a drawer row
     // by then and stealing it mid-drag is worse than leaving it. `Tab` reaches the pane's Row, and
     // `visible` takes the undrawn half out of the tab order (§16.3).
+    // **The keyboard was used somewhere this component cannot see.** §16.8 sends `↑ ↓ ← →` to the
+    // window's ROOT `FocusScope` rather than to the cradle's — they are the wheel, and every scope
+    // below returns `reject` for them — so the one thing a keyboard user does most on this surface
+    // never reaches `cradle-focus.key-pressed`. `window.slint` calls this instead. See
+    // `focus-visible` for what it is for.
+    public function keyboard-was-used() {
+        root.focus-visible = true;
+    }
+
     public function focus-cradle() {
         if (root.too-short) {
             short.take-focus();
@@ -402,14 +459,14 @@ export component Bench inherits Rectangle {
 
     // ── The device's place, and the whole of §7.2 in three lines ──
     //
-    // **Pinned by its distance above the shelf, not centred in the well.** All vertical slack goes
-    // to the top margin, so growing the window moves nothing, shrinking it eats the top margin
-    // first, and anything that pushes from the top costs the well its air rather than the device
-    // its place.
+    // **Pinned by its distance above the bottom edge, not centred in the well.** All vertical
+    // slack goes to the top margin, so growing the window moves nothing, shrinking it eats the top
+    // margin first, and anything that pushes from the top costs the well its air rather than the
+    // device its place.
     //
-    // The column below the body, from §9.6, bottom up: the shelf, `GAP_2`, the cradle label,
-    // `GAP_1`, and `CRADLE_BAND` — the overhang plus the focus ring, which is the term the
-    // previous revision listed once and lost off the top edge.
+    // The column below the body, from §9.6, bottom up: `GAP_2`, the cradle label, `GAP_1`, and
+    // `CRADLE_BAND` — the overhang plus the focus ring, which is the term the previous revision
+    // listed once and lost off the top edge. §7.5's shelf was the bottom term and is gone.
     property <length> body-w: Geometry.body-aspect * root.hero;
     property <length> body-x: (well.width - root.body-w) / 2;
     property <length> body-y: well.height - Geometry.gap-2 - Geometry.cradle-label
@@ -430,7 +487,7 @@ export component Bench inherits Rectangle {
         : Ink.fg-dim;
 
     // §7.4: pressing an inert drawn control puts its sentence on the **cradle label**, held while
-    // the pointer is down and released on pointer-up. Not a four-second message on shelf row 2:
+    // the pointer is down and released on pointer-up. Not a four-second message under the device:
     // that is a self-dismissing timed message replacing content, which is a toast, which principle
     // 5 bans by name — and it would have let a refusal like *the disk is not where it was* be
     // silently overwritten because somebody brushed the wheel.
@@ -465,10 +522,11 @@ export component Bench inherits Rectangle {
         x: 0;
         y: 0;
         width: parent.width;
-        height: parent.height - Geometry.shelf;
+        height: parent.height;
         // See the header: this is not §9.5's pane, and it is not to be mistaken for one. What it
-        // buys is that the shelf's write-target row survives a window too short for the device —
-        // during a drag that has not yet crossed the threshold, and above it at every size.
+        // buys is that a caption laid out past the bottom edge is clipped rather than drawn over
+        // the edge of the client — during a drag that has not yet crossed the threshold, and
+        // above it at every size.
         clip: true;
         // §9.5, and **`visible` rather than `if`** (§16.3), for two reasons that both bite. The
         // subtree holds `cradle-focus` and the drawn device's own hover and press state, and `if`
@@ -484,35 +542,71 @@ export component Bench inherits Rectangle {
         // surface moves both and they cannot come apart. §8.1 item 1: **only `x` animates.**
         // ── What is on the bench, above it (§7.5 row 1, relocated) ──────────────────────────
         //
-        // **The shelf's first row said this, 88 px of chrome away from the thing it describes.**
+        // **§7.5's first row said this, 88 px of chrome away from the thing it describes.**
         // The name of the machine and what it is doing belong beside the machine: a person
         // looking at a booting iPod should not have to look at the bottom of the window to find
         // out that it is booting.
         //
-        // Drawn only when there is something to say. `shelf-name` is empty on an empty bench, and
+        // Drawn only when there is something to say. `caption-name` is empty on an empty bench, and
         // §9.1 forbids a bare *nothing here* — the well's own empty state is the sentence there.
-        HorizontalLayout {
+        //
+        // **Two lines, and the second one is reserved rather than conditional.** §11.4's band is a
+        // count, a *let go* and at most two identifications, and the identifications had nowhere
+        // to go when the shelf did: they are the whole of *what the program thinks it has been
+        // handed*, so deleting the bar without giving them a home would have deleted the answer.
+        // The slot is held open at every size because §11.4's own rule is that **a band that
+        // reflows is a band that moves**, on the one surface drawn while somebody is holding a
+        // mouse button down — and a line that appeared only during a drag would move the name of
+        // the machine every time a file crossed the window edge. It costs `LINE_BODY`, against the
+        // 44 px `SHELF` the column just gave back, so the device is 24 px better off.
+        //
+        // **Named, so one test can address it.** `the_caption_above_the_device_sums_to_its_rows`
+        // is U-1 pointed at what replaced the shelf: the declared height, the two line boxes
+        // inside it and the `y` that stands it on the cradle band all have to agree, or a row is
+        // drawn outside the block that reserved the column height for it.
+        caption := VerticalLayout {
             x: root.body-x;
-            y: root.body-y - Geometry.cradle-band - Geometry.line-title;
+            y: root.body-y - Geometry.cradle-band - Geometry.line-title - Geometry.line-body;
             width: root.body-w;
-            height: Geometry.line-title;
-            spacing: Metric.s2;
-            visible: root.shelf-name != "";
+            height: Geometry.line-title + Geometry.line-body;
+            spacing: 0;
+            visible: root.caption-name != "";
 
-            Text {
-                text: root.shelf-name;
-                font-size: Metric.title-size;
-                font-weight: Metric.weight-title;
-                color: Ink.fg;
-                vertical-alignment: center;
-                overflow: elide;
-                horizontal-stretch: 1;
+            HorizontalLayout {
+                height: Geometry.line-title;
+                spacing: Metric.s2;
+
+                Text {
+                    text: root.caption-name;
+                    font-size: Metric.title-size;
+                    font-weight: Metric.weight-title;
+                    color: Ink.fg;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+
+                Text {
+                    text: root.caption-state;
+                    font-size: Metric.label-size;
+                    font-weight: Metric.weight-label;
+                    color: Ink.fg-dim;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
             }
 
+            // §11.4's row 2. Empty except while a drag is over the window — `main.rs` pushes the
+            // identifications and nothing else ever writes here, so the reserved line is blank at
+            // rest rather than carrying a second copy of a fact drawn somewhere else. That is
+            // §21.3's own demotion applied to the last thing the shelf held: the device's parts
+            // are `About this iPod`'s six facts on the drawer's root page, and they are not
+            // repeated on the bench.
             Text {
-                text: root.shelf-state;
-                font-size: Metric.label-size;
-                font-weight: Metric.weight-label;
+                height: Geometry.line-body;
+                text: root.drop-what;
+                font-size: Metric.body-size;
+                font-weight: Metric.weight-body;
                 color: Ink.fg-dim;
                 vertical-alignment: center;
                 overflow: elide;
@@ -545,7 +639,12 @@ export component Bench inherits Rectangle {
                 border-width: Geometry.focus-ring-w;
                 border-color: Ink.fg;
                 border-radius: root.cradle-r + Geometry.focus-gap;
-                visible: cradle-focus.has-focus;
+                // **Both halves, and the second one is the whole of the fix.** `has-focus` alone
+                // drew this whenever the cradle held focus, which is most of a session — the
+                // window hands it the cradle at `init` and a click on the device gives it back —
+                // so a transient indicator was a permanent box around the product. See
+                // `focus-visible` above for why the answer is a modality rather than a timer.
+                visible: cradle-focus.has-focus && root.focus-visible;
             }
 
             // The whole ring — one outline, 2 px, tracing the body's footprint 10 px out.
@@ -716,7 +815,24 @@ export component Bench inherits Rectangle {
                 // honoured only for a press this scope took — which is the same rule, and the same
                 // sentence, as the root scope's.
                 property <bool> held;
+                // **`Tab` arrived here, so the ring is wanted.** Slint's own focus system moves on
+                // `Tab` and reports why through `FocusReason`, which is the one place this program
+                // needs it: `tab-navigation` is a keyboard user landing on the cradle and is the
+                // case §16.7 exists for. `programmatic` and `window-activation` are left alone on
+                // purpose — `window.slint`'s `init` and `⌘\` both use the first, and neither is a
+                // statement about which device somebody is driving with.
+                focus-gained(reason) => {
+                    if (reason == FocusReason.tab-navigation) {
+                        root.focus-visible = true;
+                    }
+                }
                 key-pressed(e) => {
+                    // **Any key, not only the two below**, and it is the half a rule keyed on the
+                    // focus event alone would miss: after a click the ring is off, and a person who
+                    // then reaches for the keyboard should see where they are BEFORE the keystroke
+                    // does anything rather than after. Arrow keys reach the root scope rather than
+                    // this one, so they set it there.
+                    root.focus-visible = true;
                     if (e.text == " " || e.text == Key.Return) {
                         if (!self.held) {
                             self.held = true;
@@ -798,44 +914,88 @@ export component Bench inherits Rectangle {
                 held-play: root.held-play;
                 held-select: root.held-select;
 
-                pressed-device => { root.pressed-centre(); }
+                // **Every press edge below clears `focus-visible` first.** These five are the
+                // pointer's own callbacks and nothing else raises them, which is what makes this
+                // the honest place to record the modality: `centre-down` is raised from
+                // `cradle-focus.key-pressed` as well, and clearing it there would hide the ring
+                // from the keyboard user it exists for.
+                pressed-device => { root.focus-visible = false; root.pressed-centre(); }
                 // §7.2 deletes device-switching from the bench — while there is a machine the bench
                 // draws it and only it, and other devices are inspected on the Devices drawer page
                 // — so a press on the body is not *select this one* any more; there is nothing else
                 // to select. It focuses the fixture, which is the thing §7.3 makes the Button.
                 // **A callback for the old meaning is not kept**: a callback nobody wires is the
                 // shape §16.9 deletes.
-                clicked => { cradle-focus.focus(); }
-                wheel-down(dx, dy) => { root.wheel-down(dx, dy); }
+                //
+                // The modality is cleared **before** `.focus()`, and the order does not actually
+                // matter — the focus that follows is `FocusReason.programmatic`, which
+                // `focus-gained` deliberately passes over — but writing it first says what the
+                // press meant rather than relying on that.
+                clicked => { root.focus-visible = false; cradle-focus.focus(); }
+                wheel-down(dx, dy) => { root.focus-visible = false; root.wheel-down(dx, dy); }
                 wheel-moved(dx, dy) => { root.wheel-moved(dx, dy); }
                 wheel-up => { root.wheel-up(); }
                 wheel-scrolled(dy) => { root.wheel-scrolled(dy); }
-                centre-down => { root.centre-down(); }
+                centre-down => { root.focus-visible = false; root.centre-down(); }
                 centre-up => { root.centre-up(); }
-                hold-pressed => { root.hold-pressed(); }
+                hold-pressed => { root.focus-visible = false; root.hold-pressed(); }
                 hold-released => { root.hold-released(); }
             }
         }
 
-        // ── The cradle label ──
+        // ── The cradle label, and §7.6's `why ›` beside it ──
         //
         // 24 px, `body` 14 / 20, centred, under the fixture. It is the cradle's, not the device's,
         // which is why it moves with the frame's x rather than with the well's centre.
-        Text {
+        //
+        // **`why ›` came here from the shelf and it came to the right place.** §7.6 called it a
+        // compromise in as many words: the reason belongs next to the control (principle 4), and
+        // `Verdict::No.why` runs two to four sentences, which did not fit a shelf row — so the
+        // shelf elided a summary and offered a route to the paragraph. This line is where the
+        // refusal is now WORDED — `machine::cradle` returns `blocked_label`'s sentence for a
+        // device that cannot start — so the route out of it is one slot away from the thing it
+        // explains rather than 88 px of chrome below it.
+        //
+        // **`if`, not `visible`** (§16.3): the cell is ~35 px and this row is one elided line at a
+        // measure the device's own width sets. §16.3's anti-shuffle argument does not reach it —
+        // the label is `horizontal-stretch: 1` and takes whatever is left, so nothing below moves
+        // when the control appears. What moves is the label's own centring, and a refusal arriving
+        // is a state change the reader has to notice.
+        HorizontalLayout {
             x: frame.x;
             y: frame.y + frame.height + Geometry.gap-1;
             width: frame.width;
             height: Geometry.cradle-label;
-            text: root.held-sentence != "" ? root.held-sentence : root.cradle-label;
-            font-size: Metric.body-size;
-            font-weight: Metric.weight-body;
-            color: Ink.fg-dim;
-            horizontal-alignment: center;
-            vertical-alignment: center;
-            overflow: elide;
+            spacing: Metric.s2;
             // **No `animate x` here.** `frame.x` is already eased, so a second animation on this
             // binding would chase an already-moving target and the label would trail the device it
             // belongs to. One animated property on this surface, and this reads it.
+
+            Text {
+                text: root.held-sentence != "" ? root.held-sentence : root.cradle-label;
+                font-size: Metric.body-size;
+                font-weight: Metric.weight-body;
+                color: Ink.fg-dim;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                overflow: elide;
+                horizontal-stretch: 1;
+            }
+
+            if root.refused: BenchControl {
+                a11y-label: "why";
+                a11y-description: "opens the drawer at the page that owns this refusal";
+                activated => { root.why(); }
+
+                Text {
+                    text: "why";
+                    font-size: Metric.label-size;
+                    font-weight: Metric.weight-label;
+                    color: Ink.accent;
+                    vertical-alignment: center;
+                }
+                Chevron { ink: Ink.accent; }
+            }
         }
 
         // ── What just happened, and what it is writing to (§7.5 row 2 and row 3, relocated) ──
@@ -846,19 +1006,19 @@ export component Bench inherits Rectangle {
         // more important of the two: it is the line standing between an afternoon and somebody's
         // only image of an iPod they own, so it is what this says whenever there is no news.
         //
-        // **This is the one row of the shelf that could not simply be deleted.** The other four
-        // are drawn elsewhere or are diagnostics; `write_target` is drawn nowhere else in the
-        // program, and deleting the bar without giving it a home would have removed a safety
+        // **This is the one row of §7.5's shelf that could not simply be deleted.** The other
+        // four are drawn elsewhere or are diagnostics; `write_target` is drawn nowhere else in
+        // the program, and deleting the bar without giving it a home would have removed a safety
         // sentence rather than a piece of chrome.
         Text {
             x: frame.x;
             y: frame.y + frame.height + Geometry.gap-1 + Geometry.cradle-label;
             width: frame.width;
             height: Geometry.line-label;
-            text: root.shelf-rail-line != "" ? root.shelf-rail-line : root.shelf-write-target;
+            text: root.rail-line != "" ? root.rail-line : root.write-target;
             font-size: Metric.label-size;
             font-weight: Metric.weight-label;
-            color: root.shelf-write-warn && root.shelf-rail-line == "" ? Ink.warn : Ink.fg-dim;
+            color: root.write-warn && root.rail-line == "" ? Ink.warn : Ink.fg-dim;
             horizontal-alignment: center;
             vertical-alignment: center;
             overflow: elide;
@@ -893,137 +1053,41 @@ export component Bench inherits Rectangle {
         }
     }
 
-    // ── §7.5 The shelf — 88 px, three rows, flush to the bottom, full width ──
+    // ── §9.2's one line of work, and it is all that is left of the shelf ──
     //
-    // The band, the rule and the content rows all span the whole client now. The rows used to
-    // narrow with the drawer, and §9.5's reason for that was real: a drawer running the full
-    // client height above the shelf otherwise left the bottom-right 420 × 88 belonging to
-    // nothing. §21.2's drawer overlays and still stops above the shelf, so that corner belongs to
-    // the shelf and is drawn by it — the band is continuous and nothing covers it.
-    shelf := Rectangle {
+    // §7.5's band held three rows and ended holding one: the device's parts and `k`. Both are now
+    // somewhere better — the parts are `About this iPod`'s six facts on the drawer's root page
+    // (§21.3, *demoted, not deleted*), and `k` is §12.9's own argument against itself, which §15
+    // already applied to the other three numbers that slot carried. So the band goes, and with it
+    // its gradient, its top rule, its `content-info` landmark and the 44 px the column was giving
+    // up to draw a second copy of what the drawer says.
+    //
+    // **The bar is not chrome and does not go.** It is the only drawn indication that a fetch or a
+    // build is running — the cradle label says so in words, and §9.2 asks the bench to mirror the
+    // Rail — and it cost no height on the shelf's top rule for exactly the reason it costs none
+    // here: 3 px painted OVER the bottom of the well, not a band under it. Nothing is laid out
+    // against it, so the device does not move when work starts.
+    //
+    // `linear` and never eased — it is data, and a bar that overshoots is lying (§8's table). No
+    // `animate` at all: the value moves when data moves.
+    Rectangle {
         x: 0;
-        y: parent.height - Geometry.shelf;
-        width: 100%;
-        height: Geometry.shelf;
-        background: @linear-gradient(180deg, Ink.bg-band-top 0%, Ink.bg-band-bottom 100%);
-        accessible-role: AccessibleRole.content-info;
-        accessible-label: "the shelf";
-
-        // The 1 px top rule — the only kind of separation that exists here. **No shadows
-        // anywhere** (§6.1): a shadow is the visual grammar of floating, and nothing floats.
-        Rectangle {
-            x: 0;
-            y: 0;
-            width: 100%;
-            height: 1px;
-            background: Ink.line.with-alpha(0.5);
-        }
-
-        // §7.5: the 3 px linear `accent` bar draws **on** the top rule when there is progress, and
-        // therefore costs no height. `linear` and never eased — it is data, and a bar that
-        // overshoots is lying (§8's table). No `animate` at all: the value moves when data moves.
-        Rectangle {
-            x: 0;
-            y: 0;
-            width: parent.width * root.progress;
-            height: Geometry.progress-h;
-            background: Ink.accent;
-            visible: root.progress >= 0;
-            accessible-role: AccessibleRole.progress-indicator;
-            accessible-label: "progress";
-            // **The Rail's line, not the device's facts.** It read `shelf-facts` — the device
-            // summary — which is not what this bar is about and was never going to be: an
-            // assistive technology asking a progress indicator for its value would have been told
-            // `A 5.5G, 30 GB, black · Apple 25.1.3`. `ui/rail.slint`'s own bar answers
-            // `root.e.measure`, and `shelf-rail-line` is the same sentence at bench scale — real
-            // bytes, `4.1 MB of 6.5 MB`, which is what §9.2 asks the bench to mirror in one line.
-            //
-            // Invisible until now, because nothing bound `progress` and the bar was never drawn.
-            accessible-value: root.shelf-rail-line;
-            accessible-value-minimum: 0;
-            accessible-value-maximum: 1;
-        }
-
-        // **No `alignment` on any row below.** Setting one on a layout makes `horizontal-stretch`
-        // inert, which is the defect that once put Help and About next to Resources instead of at
-        // the far edge.
-        //
-        // The vertical layout does carry `alignment: start`, and there is a leftover it makes
-        // visible rather than hides: 12 + 26 + 20 + 16 + 12 is **86**, or 87 with the top rule,
-        // against a declared `SHELF` of 88. The design's own decomposition does not sum to its own
-        // total. Two pixels sit below row 3, inside the bottom padding, and
-        // `the_shelf_rows_and_its_padding_fit_the_declared_shelf` measures the leftover rather than
-        // asserting it away. **Do not invent a spare term to absorb it** — that is a second source
-        // of truth inside the section whose rule is that constants live in one place. It is an
-        // operator question, and it is written down as one.
-        VerticalLayout {
-            x: 0;
-            y: 0;
-            width: parent.width;
-            height: 100%;
-            padding-left: Metric.s5;
-            padding-right: Metric.s5;
-            padding-top: Metric.s3;
-            padding-bottom: Metric.s3;
-            spacing: 0;
-            alignment: start;
-
-
-            // Row 2 — the facts, **or the reason**, or the current Rail line; and the one number a
-            // bug report can quote.
-            HorizontalLayout {
-                height: Geometry.line-body;
-                spacing: Metric.s3;
-
-                Text {
-                    text: root.shelf-rail-line != "" ? root.shelf-rail-line : root.shelf-facts;
-                    font-size: Metric.body-size;
-                    font-weight: Metric.weight-body;
-                    // §7.6: a refusal is `fg`, not `fg-dim`. It is not a label.
-                    color: root.shelf-refusal ? Ink.fg : Ink.fg-dim;
-                    vertical-alignment: center;
-                    overflow: elide;
-                    horizontal-stretch: 1;
-                }
-
-                // §7.6, and it is a compromise worth naming as one: `Verdict::No.why` runs two to
-                // four sentences, which is three lines at this measure, and a shelf tall enough to
-                // hold that is 134 px. So the line elides and this opens the drawer at the page
-                // that owns the refusal, where the paragraph and its `Fix` live **under the
-                // control that caused them**.
-                // **`if`, not `visible`.** `visible: false` still reserves the cell (§16.3), and this
-                // one is ~35 px held open permanently on a row whose leading slot is the elided
-                // refusal itself. §16.3's anti-shuffle argument does not reach it either: the row's
-                // leading slot is `horizontal-stretch: 1` and simply takes whatever is left, so
-                // nothing below moves when this appears — the refusal it belongs to is what moves,
-                // and a refusal arriving is a state change the reader has to notice.
-                if root.shelf-refusal: ShelfControl {
-                    a11y-label: "why";
-                    a11y-description: "opens the drawer at the page that owns this refusal";
-                    activated => { root.why(); }
-
-                    Text {
-                        text: "why";
-                        font-size: Metric.label-size;
-                        font-weight: Metric.weight-label;
-                        color: Ink.accent;
-                        vertical-alignment: center;
-                    }
-                    Chevron { ink: Ink.accent; }
-                }
-
-                Text {
-                    text: root.shelf-fidelity;
-                    font-size: Metric.mono-size;
-                    font-family: Metric.mono-family;
-                    color: Ink.fg-dim;
-                    vertical-alignment: center;
-                    horizontal-alignment: right;
-                    overflow: elide;
-                }
-            }
-
-        }
+        y: parent.height - Geometry.progress-h;
+        width: parent.width * root.progress;
+        height: Geometry.progress-h;
+        background: Ink.accent;
+        visible: root.progress >= 0;
+        accessible-role: AccessibleRole.progress-indicator;
+        accessible-label: "progress";
+        // **The Rail's line, not the device's facts.** It read the device summary — which is not
+        // what this bar is about and was never going to be: an assistive technology asking a
+        // progress indicator for its value would have been told `A 5.5G, 30 GB, black · Apple
+        // 25.1.3`. `ui/rail.slint`'s own bar answers `root.e.measure`, and `rail-line` is the same
+        // sentence at bench scale — real bytes, `4.1 MB of 6.5 MB`, which is what §9.2 asks the
+        // bench to mirror in one line.
+        accessible-value: root.rail-line;
+        accessible-value-minimum: 0;
+        accessible-value-maximum: 1;
     }
 
     // **Declared LAST, and that is the whole of it working.** Slint paints siblings in
@@ -1035,7 +1099,7 @@ export component Bench inherits Rectangle {
     // Last rather than merely after `well`, because `short` covers the same corner in the
     // too-short state, which is the one state this control has to survive.
     //
-    // **The drawer needs a control on the bench, and until the shelf went it had two.**
+    // **The drawer needs a control on the bench, and until §7.5's shelf went it had two.**
     // `MENU ›` and the write-target row both opened it; `Control + \` was the only other route.
     // Deleting the shelf without this would have left the drawer reachable by keyboard alone —
     // the same defect as a row drawn over a page with no slot: a surface you can see and cannot

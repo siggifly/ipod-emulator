@@ -1,8 +1,8 @@
 // The window — docs/GUI.md is the design this implements.
 //
 // **The iPod is not a picture inside the program. It is the program.** One well, one device drawn at
-// its own true size, one fixture holding it, one shelf under it that speaks, one drawer beside it
-// that holds everything else. Pressing the device's own centre button is what starts it.
+// its own true size, one fixture holding it that speaks, one drawer over it that holds everything
+// else. Pressing the device's own centre button is what starts it.
 //
 // **There is no chrome bar, no tab strip, no Start button and no settings screen** (§4). Every one
 // of those is a thing standing between a person and the object they came to look at, and all four
@@ -126,7 +126,7 @@ export component MainWindow inherits Window {
     in property <string> working-label;
     in-out property <int> selected: 0;
     in property <image> screen-source;
-    // §12.2's `Running`, and it drives the shelf and the readouts that are about **executing**.
+    // §12.2's `Running`, and it drives the caption and the readouts that are about **executing**.
     in property <bool> running: false;
     // §12.2's **glass** column, which is a different question and used to share `running`'s answer.
     //
@@ -267,8 +267,13 @@ export component MainWindow inherits Window {
     // whether it gets the same slot. Same pad, same width: that is the reconciliation, and it goes
     // red the moment `Field` stops passing its `pad` down.
     out property <length> padded-field-reason-w: slot-probe-padded-field.reason-measure;
-    // §7.5's row-2 trailing slot: the one number a bug report can quote.
-    in property <string> fidelity;
+    // **§16.7's focus ring, as a fact Rust can read.** The ring itself is a `Rectangle`'s `visible`
+    // deep inside the bench, and `ElementHandle` needs Slint debug info that `build.rs` emits in
+    // debug profiles only — while every cargo invocation in both CI workflows is `--release`. So
+    // `the_focus_ring_follows_the_modality_focus_arrived_by` reads the boolean the ring reads,
+    // which is the same arrangement as the two measurement probes above. Mirrored, never written:
+    // `bench.slint`'s `focus-visible` is `out` and this component only looks at it.
+    out property <bool> focus-ring-shown: bench.focus-visible;
 
     // ── §11.4's drop band ──
     //
@@ -336,7 +341,7 @@ export component MainWindow inherits Window {
     in property <string> ledger-disk;
     in property <string> ledger-note;
     in property <bool> ledger-warn: false;
-    // §9.2, §12.3: the shelf's 3 px bar, drawn ON the shelf's top rule so it costs no height.
+    // §9.2, §12.3: the 3 px bar, drawn OVER the bottom of the well so it costs no height.
     //
     // **The sign is load-bearing: negative means there is no denominator**, so there is no bar — a
     // number that moves instead. A bar with an invented denominator is a lying instrument, and a
@@ -473,7 +478,7 @@ export component MainWindow inherits Window {
     callback hold-pressed();
     callback hold-released();
     // **§16.8's four machine rows, as one question asked of Rust.** `↑` `↓` are the wheel always,
-    // `←` `→` are the wheel while there is a machine and the shelf when there is not, `M P N B` are
+    // `←` `→` are the wheel while there is a machine and the device list when there is not, `M P N B` are
     // the four labels and `H` is the hold switch. The whole table lives in `main::keyed` rather
     // than being written out as eight comparisons here, because it is the same table the drawn
     // controls obey and a second copy of it in markup is a second copy to drift.
@@ -609,6 +614,12 @@ export component MainWindow inherits Window {
         // Everything else bubbles (`return reject`): Space and Return belong to whichever control
         // has focus, and ↑/↓ belong to the machine's wheel, always.
         key-pressed(event) => {
+            // **A key reached the window, so the pointer is not what somebody is driving with.**
+            // `bench.slint`'s `focus-visible` is the whole of the argument; this is the half that
+            // has to be raised here, because §16.8 routes `↑ ↓ ← →` — the wheel, and the one thing
+            // a keyboard user does most on this surface — to the ROOT scope rather than to the
+            // cradle's, so the cradle's own `key-pressed` never sees them.
+            bench.keyboard-was-used();
             if (event.text == Key.Escape) {
                 root.escape-pressed();
                 return accept;
@@ -816,11 +827,9 @@ export component MainWindow inherits Window {
                 }
             }
 
-            // §7. Full width, always: §9.5's decision is that the shelf's band and its 1 px top rule
-            // span the whole client and only the shelf's three content rows narrow, because a drawer
-            // that is full client height above an 88 px shelf otherwise leaves the bottom-right
-            // 420 × 88 belonging to nothing. So the bench is handed the inset and narrows its own
-            // well; it is never given a smaller width.
+            // §7, and §21.2: full width, always. The drawer overlays rather than pushes, so the
+            // well is the client at every size and there is no inset to hand down. With §7.5's
+            // shelf gone the bench paints every pixel of the client on its own.
             bench := Bench {
                 x: 0;
                 y: 0;
@@ -906,24 +915,26 @@ export component MainWindow inherits Window {
                 // it has been handed. Three properties, three slots, one boolean — and row 3, the
                 // one line standing between an afternoon and somebody's only image of an iPod they
                 // own, is deliberately not in this list.
-                shelf-name: root.dropping ? root.drop-count : root.current.name;
-                shelf-state: root.dropping ? root.drop-let-go : root.current.state;
-                shelf-facts: root.dropping ? root.drop-what : root.current.summary;
-                // §7.5's row 2 has three tenants and one line. `Rail::line()` decides between the
-                // last two — a failure outranks work in progress — and Rust pushes the answer.
-                //
-                // **A fourth tenant would have won the row and it is refused here**, which is the
-                // one thing the band could not have been given as three properties alone: row 2
-                // reads `shelf-rail-line` in preference to `shelf-facts`, so a drag over a window
-                // with a download in progress would have drawn `4.1 MB of 6.5 MB` where the
-                // identifications go, and the band would have looked broken rather than absent.
-                shelf-rail-line: root.dropping ? "" : root.rail-line;
-                // …and the same for the refusal, which is not a third string but a `why ›` control
-                // and an `fg` colour: both belong to the device the band is standing in front of.
-                shelf-refusal: !root.dropping && root.has-devices && !root.current.startable;
-                shelf-fidelity: root.fidelity;
-                shelf-write-target: root.current.write-target;
-                shelf-write-warn: root.current.write-target-is-warning;
+                caption-name: root.dropping ? root.drop-count : root.current.name;
+                caption-state: root.dropping ? root.drop-let-go : root.current.state;
+                // §11.4's row 2, and it has exactly one tenant now. **The device summary that used
+                // to share this slot is gone rather than moved**: it is `About this iPod`'s six
+                // facts on the drawer's root page, and drawing it here as well would be the one
+                // fact on two surfaces that #30 exists to end. So there is no precedence left to
+                // decide — the line is the identifications while a drag is over the window and is
+                // empty otherwise.
+                drop-what: root.dropping ? root.drop-what : "";
+                // The line under the device. `Rail::line()` decides between its two tenants — a
+                // failure outranks work in progress — and Rust pushes the answer. Forced empty
+                // while a drag is over the window, so a download's `4.1 MB of 6.5 MB` cannot
+                // displace the write target on the one surface drawn with a mouse button down.
+                rail-line: root.dropping ? "" : root.rail-line;
+                // §7.6's `why ›`, beside the sentence the cradle label is already carrying for the
+                // same device. Not while a drag is over the window: the band is standing in front
+                // of the device it belongs to.
+                refused: !root.dropping && root.has-devices && !root.current.startable;
+                write-target: root.current.write-target;
+                write-warn: root.current.write-target-is-warning;
 
                 // **The point of the whole program.** The drawn centre button, and the cradle's
                 // keyboard route to the same callback, both land here; Rust resolves the device and
@@ -934,9 +945,9 @@ export component MainWindow inherits Window {
                 open-drawer => {
                     root.drawer-toggled();
                 }
-                // §7.6: the shelf elides a refusal to one line and this opens the drawer at the page
-                // that owns it, where the paragraph and its next steps live **under the control that
-                // caused them**. Today that is Work, which is the page the Rail is on — and the
+                // §7.6: the cradle label carries the refusal as one elided line and the `why ›`
+                // beside it opens the drawer at the page that owns it, where the paragraph and its
+                // next steps live **under the control that caused them**. Today that is Work, which is the page the Rail is on — and the
                 // index goes with it, because opening Work on an empty Rail is a route the design
                 // describes as leading to the explanation leading instead to *"Nothing is
                 // happening."* Rust files the refusal for this device before it opens the page.
@@ -958,7 +969,7 @@ export component MainWindow inherits Window {
                 hold-released => { root.hold-released(); }
             }
 
-            // §7.5, and it rides the **drawer's** leading edge rather than the window edge — which
+            // §7.5's handle, and it rides the **drawer's** leading edge rather than the window edge — which
             // is what makes it read as the drawer's own handle rather than as a tab stuck to the
             // frame. It used to ride the well's trailing edge, which was the same line of
             // arithmetic while the two edges were the same edge; §21.2 separated them, and the
@@ -966,14 +977,16 @@ export component MainWindow inherits Window {
             handle := DrawerHandle {
                 open: root.drawer-open;
                 x: client.width - root.drawer-out - Geometry.handle-w;
-                y: (client.height - Geometry.shelf - Geometry.handle-h) / 2;
+                y: (client.height - Geometry.handle-h) / 2;
                 toggled => {
                     root.drawer-toggled();
                 }
             }
 
-            // §4: 420 px, right-anchored, full client height **above the shelf**. Parked one full
-            // width off the right edge when closed, so `x` is the only thing that ever moves.
+            // §4: 420 px, right-anchored, the **full** client height. It stopped 44 px short of
+            // the bottom while §7.5's shelf was there; the shelf is gone, so the reason is gone
+            // with it and the drawer runs to the window's own edge. Parked one full width off the
+            // right edge when closed, so `x` is the only thing that ever moves.
             //
             // **Declared after the bench, so it draws over it** (§21.2). Slint paints siblings in
             // declaration order and it always did; what changed is that the bench no longer gets

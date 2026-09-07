@@ -1261,6 +1261,11 @@ fn closing_the_window_quits_rather_than_hiding_it() {
 /// `short` covers the same corner in the too-short state, which is the one state the control's own
 /// comment says it has to survive, so "after `well`" is not enough — it has to be last.
 ///
+/// **`shelf := Rectangle` was the third name on this list and it is deleted, not overlooked.** It
+/// never covered the hamburger — it was a 44 px band at the bottom and the control is top-trailing
+/// — so its place here was that it was the last thing declared, which is the property the `Act` now
+/// holds on its own. What is left is the two elements that genuinely stand under the control.
+///
 /// **How to make it go red:** move the `Act` above `well := Rectangle`.
 #[test]
 fn the_drawer_control_is_declared_after_everything_it_overlaps() {
@@ -1268,7 +1273,7 @@ fn the_drawer_control_is_declared_after_everything_it_overlaps() {
     let act = src
         .find("icon: \"menu\";")
         .expect("the bench still carries a hamburger");
-    for covering in ["well := Rectangle", "short := ShortPane", "shelf := Rectangle"] {
+    for covering in ["well := Rectangle", "short := ShortPane"] {
         let at = src
             .find(covering)
             .unwrap_or_else(|| panic!("{covering} is gone; this test needs re-deriving"));
