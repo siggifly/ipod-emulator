@@ -173,6 +173,11 @@ export struct VerbRow {
     escape-hatch: string,
     chevron: bool,
     rule-above: bool,
+    // §22.4: this row is a switch, so it draws one and is announced as one. Exactly one row is.
+    switch: bool,
+    // Which way it is thrown. Read only under `switch` — `verbs::Row` documents why it is a plain
+    // bool beside a plain bool rather than a second nullable field.
+    on: bool,
 }
 
 // One part. `fact` is `Provenance::line()` and nothing in the window may construct the word
@@ -875,6 +880,17 @@ export component Row inherits Pressable {
     /// none, and an empty `Image` draws nothing — which is §13.2's rule for a title that ships no
     /// artwork: never a blank rectangle, never a stock icon.
     in property <image> thumb;
+    /// §22.4: this row is a **switch**, so it draws one in the trailing gutter and is announced as
+    /// one. Exactly one row in the window sets it — `verbs::Verb::Power` — and `verbs.rs` is what
+    /// decides, because the row's two labels are its two positions.
+    ///
+    /// It lives on `Row` rather than in `verbs.slint` because the trailing gutter is drawn here:
+    /// the value column's two fixed widths already sum to the page's inner width by construction,
+    /// so an element written at the use site lands in `Pressable`'s row cell and cannot be
+    /// positioned — which is the finding `thumb` below carries in its own note.
+    in property <bool> is-switch: false;
+    /// Which way it is thrown. Read only under `is-switch`.
+    in property <bool> on: false;
 
     inert: root.heading;
     pad: Geometry.page-margin;
@@ -901,10 +917,18 @@ export component Row inherits Pressable {
         Text {
             x: 0;
             // The chevron's gutter, reserved on every row whether or not one is drawn — and the
-            // thumbnail's, on the rows that carry one. Both live at the trailing edge, and a row
-            // that set `value` and `thumb` at once would draw them over each other; subtracting
-            // here is what stops that being possible rather than being a rule somebody remembers.
-            width: parent.width - Metric.s4 - (root.thumb.width > 0 ? thumb.width : 0px);
+            // thumbnail's, on the rows that carry one, and §22.4's switch on the one that is one.
+            // All three live at the trailing edge, and a row that set two of them at once would
+            // draw them over each other; subtracting here is what stops that being possible rather
+            // than being a rule somebody remembers.
+            //
+            // **A switch row spends the chevron's gutter on the switch rather than adding to it.**
+            // A chevron is a claim that pressing goes one level deeper and a switch is a claim that
+            // it toggles; no row is both — `verbs::Verb::opens_a_page` answers false for `Power` —
+            // so reserving both left 84 px for the value and drew `the centre …`. Read it off
+            // `_out/gui/menu.png` before this line existed.
+            width: parent.width - (root.is-switch ? knob.width + Metric.s2 : Metric.s4)
+                 - (root.thumb.width > 0 ? thumb.width : 0px);
             height: 100%;
             text: root.value;
             font-size: Metric.body-size;
@@ -926,6 +950,41 @@ export component Row inherits Pressable {
             width: Metric.s3;
             height: Metric.s3;
             visible: root.chevron;
+        }
+
+        // ── §22.4's switch, in the gutter this column already reserves ───────────────────────
+        //
+        // **One control with two positions, drawn as one.** §21.6 spent five rows and four
+        // refusals on what a person thinks of as off and on; this is the whole of what replaces
+        // them. The track carries the position in its fill and the knob carries it in its
+        // position, because a fill alone is a colour a colour-blind reader has to decode and a
+        // position alone is 12 px of travel.
+        //
+        // **Every length is a `Metric` name and every offset is an expression of one** — the pill
+        // is `s6 × s4`, the knob `s3`, and the inset is `(track − knob) / 2` rather than the 2 px
+        // it works out to. `no_geometry_literal_survives_in_the_markup` is what makes that a rule
+        // and not a preference.
+        knob := Rectangle {
+            visible: root.is-switch;
+            width: Metric.s6;
+            height: Metric.s4;
+            x: parent.width - self.width;
+            y: (parent.height - self.height) / 2;
+            border-radius: self.height / 2;
+            border-width: 1px;
+            border-color: root.enabled ? Ink.line : Ink.fg-disabled;
+            background: root.on && root.enabled ? Ink.accent : Ink.bg-sunken;
+
+            Rectangle {
+                width: Metric.s3;
+                height: Metric.s3;
+                border-radius: self.height / 2;
+                y: (parent.height - self.height) / 2;
+                x: root.on
+                    ? parent.width - self.width - (parent.height - self.height) / 2
+                    : (parent.height - self.height) / 2;
+                background: Ink.bg;
+            }
         }
 
         // ── §13's cover, in the gutter this column already reserves ──────────────────────────
@@ -954,6 +1013,26 @@ export component Row inherits Pressable {
             image-rendering: smooth;
         }
     }
+}
+
+// ─── §22.4's switch row ─────────────────────────────────────────────────────────────────────────
+//
+// **A `Row` that is announced as a switch, and that is the whole of the difference.** Everything
+// drawn — the label, the key in the value column, the sub-line, the reason slot, the pill and its
+// knob — is `Row`'s, reached by `is-switch: true`; what cannot be reached that way is the role,
+// because Slint requires `accessible-role` to be a **constant expression** and refuses
+// `root.is-switch ? … : …` at compile time. A constant in a derived component is how a conditional
+// role is spelled here.
+//
+// So a person using VoiceOver hears `Turn off · switch · on` rather than a list item whose label
+// happens to be a verb — which is §22.4's own argument (*a person's model of an iPod is off and
+// on*) made true of the announcement as well as the drawing.
+export component SwitchRow inherits Row {
+    is-switch: true;
+
+    accessible-role: AccessibleRole.switch;
+    accessible-checkable: true;
+    accessible-checked: root.on;
 }
 
 // One measured number, flattened for the markup — `readout::Gauge`. Every string on it is
