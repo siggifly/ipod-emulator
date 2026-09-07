@@ -81,6 +81,7 @@ pub enum Verb {
     Restart,
     // ── §21.3: the rest of the list ──
     Files,
+    Panel,
     ThisIpod,
     Settings,
     // ── the developer switch's four ──
@@ -93,7 +94,7 @@ pub enum Verb {
 impl Verb {
     /// Every verb, in the order the page draws them. A sweep that walked a subset and believed it
     /// had walked the set is the shape this exists to prevent.
-    pub const ALL: [Verb; 17] = [
+    pub const ALL: [Verb; 18] = [
         Verb::Apple,
         Verb::Rockbox,
         Verb::Doom,
@@ -105,6 +106,7 @@ impl Verb {
         Verb::Kill,
         Verb::Restart,
         Verb::Files,
+        Verb::Panel,
         Verb::ThisIpod,
         Verb::Settings,
         Verb::Parts,
@@ -145,6 +147,7 @@ impl Verb {
             Verb::Kill => "Kill",
             Verb::Restart => "Restart",
             Verb::Files => "Files on the drive…",
+            Verb::Panel => "Panel in its own window",
             Verb::ThisIpod => "This iPod",
             Verb::Settings => "Settings",
             Verb::Parts => "Parts",
@@ -160,7 +163,7 @@ impl Verb {
         match self {
             Verb::Apple | Verb::Rockbox | Verb::Doom | Verb::Diagnostics | Verb::Games => 0,
             Verb::Start | Verb::Suspend | Verb::Resume | Verb::Kill | Verb::Restart => 1,
-            Verb::Files | Verb::ThisIpod | Verb::Settings => 2,
+            Verb::Files | Verb::Panel | Verb::ThisIpod | Verb::Settings => 2,
             Verb::Parts | Verb::Readout | Verb::Work | Verb::Reference => 3,
         }
     }
@@ -298,13 +301,14 @@ pub fn view(s: &Settings, d: Option<&Device>, seen: &mut Presence, caps: Caps, n
         let mut row = match verb {
             Verb::Apple => boot_row(s, d, seen, now, Verb::Apple),
             Verb::Rockbox => rockbox_row(s, d, seen, caps, now),
-            Verb::Doom => doom_row(),
+            Verb::Doom => doom_row(s, d, caps, now),
             Verb::Diagnostics => diagnostics_row(s, d, seen, now),
             Verb::Games => games_row(now),
             Verb::Start | Verb::Suspend | Verb::Resume | Verb::Kill | Verb::Restart => {
                 control_row(verb, d, now)
             }
             Verb::Files => files_row(d),
+            Verb::Panel => panel_row(now),
             Verb::ThisIpod => this_ipod_row(s, d),
             Verb::Settings => Row::go(Verb::Settings, ""),
             Verb::Parts => Row::go(Verb::Parts, ""),
@@ -432,28 +436,119 @@ fn rockbox_row(s: &Settings, d: Option<&Device>, seen: &mut Presence, caps: Caps
     }
 }
 
-/// **Doom is refused, and the refusal is a measurement.**
+/// **Doom, and it is a press rather than a refusal now.**
 ///
-/// `research/06` reaches Doom's own menu and stops there: `rockdoom.c:294` needs
-/// `/.rockbox/doom/rockdoom.wad` beside a game IWAD, the base WAD is a prebuilt asset rather than
-/// anything a build produces, and both of the URLs Rockbox's own source names are dead. So this is
-/// §9.4's second kind — *not finished, by us* — and it carries **no escape hatch**, because there
-/// is no command in this repository that installs it either. §9.4's own rule for that case is to
-/// say so rather than point at a phantom.
+/// §21.0's table recorded this row as *disabled, with its reason* — `Doom needs rockdoom.wad and an
+/// IWAD; nothing fetches them` — and that sentence was **true of the window and false of the
+/// program**. `ipod_machine::doom` has held the catalogue, the URLs, both SHA-256s and the shortcut
+/// file since 2026-09-01, and `ipod-boot doom-assets` installs all three; nothing in the window
+/// called it. A module that knows exactly where three files live and cannot put them on a disk is
+/// the same defect class as a flag with no mechanism behind it, and the row was reporting the
+/// mechanism's absence rather than its own.
 ///
-/// §21.3's sketch drew this row live with the note *installs on first use*. That is the thing the
-/// design would like it to be and it is not what this program can do: nothing here fetches a WAD,
-/// and a row that promised to would fail on the Rail after two downloads.
+/// **The chain is iPod → Rockbox → plugin → game, and the row refuses at whichever link is
+/// missing** — naming the row above, which is where that link is made. §21.3's rule: a refusal
+/// another surface already says is fetched from that surface rather than re-worded here.
 ///
-/// **The sentence on screen is one line and this doc holds the rest**, because §9.4's slot is
-/// 372 px and the paragraph above measured **1 214**. `research/06` is where the whole of it is,
-/// with the two dead URLs written down.
-fn doom_row() -> Row {
-    Row::no(
+/// **What a live press does, in one go**: fetch `rockdoom.wad` (285 KB) and Freedoom 0.13.0
+/// (24 MB), verify both, write them plus `shortcuts.txt` onto the volume, and start the machine.
+/// The boot is part of the press because Doom is a thing to *play* — `Queue::doom`'s own
+/// `Run::Doom` hands over the way §10's first run does.
+///
+/// **It does not claim to know whether Doom is already on the drive, and that is deliberate.**
+/// `doom::missing` opens the FAT32 volume and walks it; this row is rebuilt on every machine tick,
+/// so asking would put a filesystem walk behind the frame rate. The press is idempotent instead —
+/// `get_watched` skips a download it already has, and the three writes replace themselves — so the
+/// sentence is true whether it is the first press or the fifth.
+///
+/// **Licensing, because this is a public repository.** Doom's own IWADs are commercial and cannot
+/// be named, fetched or shipped here. Rockbox's own manual names the substitute — `doom.tex`: *"A
+/// free alternative for Doom 2 is FreeDoom … This can be used in place of `doom2.wad`"* — and
+/// Freedoom is BSD-licensed. We fetch from source and host nothing.
+fn doom_row(s: &Settings, d: Option<&Device>, caps: Caps, now: Now) -> Row {
+    let Some(d) = d else {
+        return Row::no(
+            Verb::Doom,
+            "There is no iPod yet — the row above makes one.".into(),
+            true,
+        );
+    };
+    if let Some(m) = now.machine.filter(|m| *m == d.name) {
+        return Row::no(Verb::Doom, devices::running_rule(m), true);
+    }
+    // **Rockbox first, and the sentence names the row that installs it.** `doom.rock` ships inside
+    // the Rockbox release, so without Rockbox there is no plugin for the WADs to feed — and the
+    // row above is one press from having one.
+    if !s.recipe_of(d).oses.contains(&Os::Rockbox) {
+        return Row::no(
+            Verb::Doom,
+            format!("Doom is a Rockbox plugin, and Rockbox is not on {} yet — the row above puts it there.", d.name),
+            true,
+        );
+    }
+    // …and if the bootloader on this iPod would not reach Rockbox, installing Doom's files onto the
+    // volume would put 24 MB somewhere nothing is going to look. Same question the row above asks,
+    // asked once.
+    if let Some(why) = loader_refusal(s, d, Verb::Rockbox) {
+        return Row::no(Verb::Doom, why, true);
+    }
+    if s.disk_of(d).and_then(|r| r.ok()).is_none() {
+        return Row::no(
+            Verb::Doom,
+            format!("{} has no drive to put Doom on.", d.name),
+            true,
+        );
+    }
+    if !caps.download {
+        return Row::no(
+            Verb::Doom,
+            "this build has no `curl` to download Doom's levels with".into(),
+            false,
+        )
+        .escape("ipod-boot doom-assets DISK.img");
+    }
+    Row::go(
         Verb::Doom,
-        "Doom needs rockdoom.wad and an IWAD; nothing fetches them.".into(),
-        false,
+        "downloads 24 MB, then boots Rockbox — Doom is in Shortcuts",
     )
+}
+
+/// §21.7's second view of the panel, in a window of its own.
+///
+/// **A second view, never a second machine.** §15 rules out *"a second window, tear-off panels,
+/// multiple machines"* because there is exactly one machine by design; §21.7 narrows that rather
+/// than overturning it — that argument is about a second *machine* and does not touch a second view
+/// of one framebuffer. The iPod keeps its screen, both draw the same texture, and closing the
+/// popped-out window can therefore strand nothing.
+///
+/// **Refused when there is nothing on the panel**, which is §12.6's own rule for fullscreen and is
+/// the same rule for the same reason: a window that opened onto a dark rectangle would be a control
+/// offered and answered in the same breath. `Life::alive` is the question — a machine that is
+/// booting has something on the glass and one that is off does not.
+///
+/// **The key is drawn whether or not the row can be pressed**, which is §21.6's *keep their keys*
+/// applied one band along: a key that appeared only in the state where it works would be
+/// discoverable exactly when it is no longer needed.
+fn panel_row(now: Now) -> Row {
+    let row = Row {
+        value: "Ctrl-Cmd-P".into(),
+        ..Row::go(
+            Verb::Panel,
+            "the screen on its own — fullscreen it on a second display",
+        )
+    };
+    if now.life.alive() {
+        return row;
+    }
+    Row {
+        value: row.value.clone(),
+        ..Row::no(
+            Verb::Panel,
+            "There is nothing on the panel yet."
+                .into(),
+            true,
+        )
+    }
 }
 
 /// §12.5's boot target, and its refusal when the ROM cannot carry it.

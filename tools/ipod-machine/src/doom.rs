@@ -110,46 +110,73 @@ pub const DOOM_DIR: &str = "/.rockbox/doom";
 /// Writes to `disk` and never to the cache; returns what it put where, so the caller can print it
 /// rather than claim success.
 pub fn install(disk: &Path, cache: &Path, w: &mut dyn crate::firmware::Watch) -> Result<Vec<String>, String> {
-    std::fs::create_dir_all(cache).map_err(|e| format!("{}: {e}", cache.display()))?;
-    let mut done = Vec::new();
-
-    // Fetch first, both of them, before touching the drive: a half-installed volume is worse than
-    // an untouched one, and the network is the part that fails.
     let mut payloads: Vec<(&'static str, Vec<u8>)> = Vec::new();
     for wad in CATALOGUE {
-        // `get_watched` reports a `Trouble` alongside its message so a caller can retry
-        // differently on a network fault than on a hash mismatch. Nothing here can act on that
-        // distinction, so the message is kept and the tag dropped rather than pretended about.
-        let got = crate::firmware::get_watched(wad.file, wad.url, wad.bytes, wad.sha256, cache, w)
-            .map_err(|(_, e)| e)?;
-        let bytes = std::fs::read(&got).map_err(|e| format!("{}: {e}", got.display()))?;
-        if wad.file.ends_with(".zip") {
-            // Freedoom ships both IWADs in one archive; the plugin wants the Doom 2 one under Doom
-            // 2's name. Matched case-insensitively on the leaf, because the archive has carried a
-            // top-level directory in some releases and pinning the full path would break silently.
-            let zip = crate::ipsw::Zip::open(&got)?;
-            let m = zip
-                .members
-                .iter()
-                .find(|m| {
-                    m.name
-                        .rsplit('/')
-                        .next()
-                        .is_some_and(|leaf| leaf.eq_ignore_ascii_case("freedoom2.wad"))
-                })
-                .ok_or_else(|| format!("{}: no freedoom2.wad inside", wad.file))?
-                .clone();
-            let inner = zip.extract(&m)?;
-            crate::firmware::checked("freedoom2.wad", FREEDOOM2.0, FREEDOOM2.1, &inner)?;
-            payloads.push((wad.install_as, inner));
-        } else {
-            payloads.push((wad.install_as, bytes));
-        }
+        payloads.push(fetch(wad, cache, w)?);
     }
+    write_files(disk, &payloads)
+}
 
+/// One catalogue entry, fetched, verified, and turned into the bytes that go on the drive.
+///
+/// **Split out of [`install`] so a caller can report each download separately** and is not a second
+/// copy of any of it. The window's Rail draws a plan of steps and shows real bytes against each one;
+/// with the loop buried inside `install` the whole of it was one step, so 24 MB of Freedoom arrived
+/// under a bar that had already been full for two minutes. `tools/ipod-gui`'s worker calls this once
+/// per entry with a reporter of its own; `install` calls it in a loop, which is what
+/// `ipod-boot doom-assets` still does.
+///
+/// **The archive case is why this returns bytes rather than a path.** Freedoom ships both of its
+/// IWADs in one zip and the plugin wants the Doom 2 one under Doom 2's name, so what goes on the
+/// drive is not the file that was downloaded.
+pub fn fetch(
+    wad: &Wad,
+    cache: &Path,
+    w: &mut dyn crate::firmware::Watch,
+) -> Result<(&'static str, Vec<u8>), String> {
+    std::fs::create_dir_all(cache).map_err(|e| format!("{}: {e}", cache.display()))?;
+    // `get_watched` reports a `Trouble` alongside its message so a caller can retry differently on
+    // a network fault than on a hash mismatch. Nothing here can act on that distinction, so the
+    // message is kept and the tag dropped rather than pretended about.
+    let got = crate::firmware::get_watched(wad.file, wad.url, wad.bytes, wad.sha256, cache, w)
+        .map_err(|(_, e)| e)?;
+    if !wad.file.ends_with(".zip") {
+        let bytes = std::fs::read(&got).map_err(|e| format!("{}: {e}", got.display()))?;
+        return Ok((wad.install_as, bytes));
+    }
+    // Matched case-insensitively on the leaf, because the archive has carried a top-level
+    // directory in some releases and pinning the full path would break silently.
+    let zip = crate::ipsw::Zip::open(&got)?;
+    let m = zip
+        .members
+        .iter()
+        .find(|m| {
+            m.name
+                .rsplit('/')
+                .next()
+                .is_some_and(|leaf| leaf.eq_ignore_ascii_case("freedoom2.wad"))
+        })
+        .ok_or_else(|| format!("{}: no freedoom2.wad inside", wad.file))?
+        .clone();
+    let inner = zip.extract(&m)?;
+    // **Its own hash, not the archive's** — see [`FREEDOOM2`]. An archive that verifies can still
+    // be unpacked wrongly, and 28 MB of the wrong bytes fails inside Doom's renderer.
+    crate::firmware::checked("freedoom2.wad", FREEDOOM2.0, FREEDOOM2.1, &inner)?;
+    Ok((wad.install_as, inner))
+}
+
+/// The three writes: both WADs into `/.rockbox/doom/`, and the shortcut one level up.
+///
+/// **Nothing is fetched here and nothing touches the network**, which is what makes it the half a
+/// caller can put on its own step: everything that can fail slowly has already happened, and what
+/// is left is a FAT32 volume and 28 MB of bytes already in hand.
+///
+/// Returns what it put where, so the caller can print it rather than claim success.
+pub fn write_files(disk: &Path, payloads: &[(&'static str, Vec<u8>)]) -> Result<Vec<String>, String> {
+    let mut done = Vec::new();
     let mut v = crate::fat::Fat32::open(disk)?;
     let dir = v.mkdir_p(DOOM_DIR)?;
-    for (name, bytes) in &payloads {
+    for (name, bytes) in payloads {
         v.write_file(dir, name, bytes)?;
         done.push(format!("{DOOM_DIR}/{name}  {} bytes", bytes.len()));
     }

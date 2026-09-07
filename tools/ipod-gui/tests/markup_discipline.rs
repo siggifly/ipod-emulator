@@ -1025,6 +1025,13 @@ fn every_ipod_boot_capability_is_reachable_in_the_window_or_listed_as_a_gap() {
         ("facts", "the iPod's expanded row — `Made of`, its identity, and `Show identity`"),
         ("retail", "`Start` on an iPod — `BootTarget::Os`, which is the default recipe"),
         ("from-idle", "`Start` resumes a parked machine — §12.4's restore point"),
+        // **Retired by its own stated condition, 2026-09-07.** The gap entry below this list read
+        // *Retired when the window's Rockbox install can offer Doom's assets beside it*, and
+        // §21.3's `Doom` row is that: `verbs::doom_row` refuses at whichever link of iPod →
+        // Rockbox → plugin is missing and names the row above that makes it, and a live press runs
+        // `Queue::doom` — both downloads, the three writes, and the boot. A met condition acted on
+        // rather than left standing, which is AGENTS.md §4's whole point about a bypass ledger.
+        ("doom-assets", "§21.3's `Doom` row — `Queue::doom` fetches both WADs, writes them and the shortcut onto the volume, and hands over to the boot"),
     ];
 
     // ── What the window cannot do, and what it would take ─────────────────────────────────────
@@ -1054,16 +1061,6 @@ fn every_ipod_boot_capability_is_reachable_in_the_window_or_listed_as_a_gap() {
           carries `osos, rsrc, aupd`, and `rsrc` holds `VIDEOC~1/BOOT/VMCS.BIN` (201,376 B) with \
           the whole codec library beside it. So the co-processor's firmware and every operating \
           system come out of the firmware DOWNLOAD; only Diagnostics and Disk Mode need a dump."),
-        ("doom-assets",
-         "2026-09-03. Fetches the three files Rockbox's Doom needs and cannot distribute — \
-          rockdoom.wad, Freedoom's doom2.wad and a shortcuts.txt — verifies them against recorded \
-          hashes, and writes them onto a drive that already has Rockbox. A gap rather than a \
-          developer shortcut: a person who has installed Rockbox and picked DOOM has done nothing \
-          unusual, and the plugin's own failure is `W_GetNumForName: TANGTABL not found` from \
-          inside the renderer, which teaches nothing. Retired when the window's Rockbox install \
-          can offer Doom's assets beside it. Until then the boot matrix reports the row BLOCKED \
-          with the three names, which is the honest state and is why this is listed rather than \
-          quietly routed."),
         ("flash-update",
          "2026-09-01. Runs Apple's `aupd` updater and then the boot that proves it took. Retired \
           with `Start as…`."),
@@ -1222,22 +1219,28 @@ fn every_ipod_boot_capability_is_reachable_in_the_window_or_listed_as_a_gap() {
 fn closing_the_window_quits_rather_than_hiding_it() {
     let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/main.rs"))
         .expect("main.rs");
-    let at = src
-        .find("on_close_requested")
-        .expect("the window still installs a close handler");
-    // The handler's body, bounded generously — it is long, and the quit is at its end.
+    // **Comments stripped BEFORE the search, and the second version of this test needed that too.**
     //
-    // **Comments stripped, and the first version of this test needed it.** The doc comment above
-    // the fix names `quit_event_loop` twice while explaining why it is there, so a plain `contains`
-    // matched its own prose: the call was deleted and the test still passed. That is the trap this
-    // file's own `code()` helper exists for — "so the prose above a fixture cannot stand in for the
-    // fixture" — met again, one file over.
-    let body: String = src[at..(at + 6000).min(src.len())]
+    // The first version stripped them only from the body, having been caught once by the doc
+    // comment above the fix naming `quit_event_loop` twice — so a plain `contains` matched its own
+    // prose, the call was deleted, and the test stayed green. The half it did not fix is the
+    // *offset*: `find("on_close_requested")` still read the raw file, so the first PROSE mention of
+    // the name anywhere earlier in `main.rs` became the handler as far as this test was concerned.
+    //
+    // §21.7's panel arm wrote *"the window's own close button does the same thing through
+    // `on_close_requested`"* six thousand lines above the real handler, and this went red on a
+    // handler that had not been touched. Same trap, same file, one line up. Stripping first is what
+    // makes the search read code and only code.
+    let code: String = src
         .lines()
         .map(|l| l.split("//").next().unwrap_or(""))
         .collect::<Vec<_>>()
         .join("\n");
-    let body = body.as_str();
+    let at = code
+        .find("on_close_requested")
+        .expect("the window still installs a close handler");
+    // The handler's body, bounded generously — it is long, and the quit is at its end.
+    let body = &code[at..(at + 6000).min(code.len())];
     assert!(
         body.contains("quit_event_loop"),
         "the close handler hides the window and never quits the event loop, so the process \
@@ -1283,4 +1286,102 @@ fn the_drawer_control_is_declared_after_everything_it_overlaps() {
              has to be reachable"
         );
     }
+}
+
+/// **§21.7's second view is a view of the ONE panel, and every part of that is checked here.**
+///
+/// Issue #21. §15 rules out *"a second window, tear-off panels, multiple machines"* because there
+/// is exactly one machine by design; §21.7 narrows that to allow a second *view* of one panel, and
+/// the difference between the two is entirely in what this window is allowed to contain. A second
+/// window that grew a wheel, a cradle or a control would be the tear-off §15 refuses, one element
+/// at a time — so the constraint is asserted rather than remembered.
+///
+/// **It is a source sweep and not a behavioural test, and that is a limit worth stating.** Slint's
+/// testing backend runs one window per thread; two real windows is not something this suite can
+/// stand up, so what is proved here is the SHAPE — one image, no controls, keys forwarded to the
+/// one definition — and `geometry::the_panel_scale_is_the_largest_whole_multiple_that_fits` proves
+/// the arithmetic it draws at. What neither covers is a person dragging it to a second display,
+/// which is `docs/GUI.md` §21.7's own *done when* and is checked by hand.
+///
+/// **How to make it go red:** give the panel window a `TouchArea`, or point its `key` callback at
+/// anything but `invoke_machine_key`.
+#[test]
+fn the_popped_out_panel_is_a_view_of_the_one_panel_and_not_a_second_front_end() {
+    // **Comments stripped first.** This file's own `code()` helper exists for exactly the trap the
+    // first cut of this test fell into: `panel.slint`'s header says *the iPod and its wheel stay on
+    // the main window*, and a sweep for the word `wheel` over the raw file found that sentence and
+    // reported the window as drawing one. A gate that reads prose is a gate that fails on its own
+    // explanation — `closing_the_window_quits_rather_than_hiding_it`, one page up, was caught by
+    // the same shape twice.
+    let src = code(&ui("panel.slint")).join("\n");
+    let main = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/main.rs"))
+        .expect("main.rs");
+
+    // ── One image, and §12.6's drawing rule on it ─────────────────────────────────────────────
+    assert_eq!(
+        src.matches("Image {").count(),
+        1,
+        "the popped-out window draws {} images. It has one job and it is the framebuffer",
+        src.matches("Image {").count()
+    );
+    assert!(
+        src.contains("image-rendering: pixelated;"),
+        "§12.6: the panel is drawn hard-edged. A smoothed 320x240 is the scaler that section \
+         refuses by name"
+    );
+    for banned in ["image-fit: cover", "image-fit: fill"] {
+        assert!(
+            !src.contains(banned),
+            "`{banned}` stretches the panel off its own aspect; `draw-w` and `draw-h` are what fit \
+             it, in whole numbers"
+        );
+    }
+
+    // ── No controls. This is the line between a second view and a tear-off ────────────────────
+    //
+    // A `FocusScope` is not a control — it is how the window takes a key — and it is the one thing
+    // in the list below that belongs here.
+    for banned in ["TouchArea", "Pressable", "Row {", "Act {", "Button"] {
+        assert!(
+            !src.contains(banned),
+            "the popped-out window draws a `{banned}`. §15 rules out a tear-off panel and §21.7 \
+             narrows that to a second VIEW: a control here would be a second one for something the \
+             main window already has, and the two would need keeping in step"
+        );
+    }
+    assert!(
+        !src.contains("IPod {") && !src.contains("wheel-"),
+        "the popped-out window draws the wheel. §21.7: the iPod and its wheel stay on the main \
+         window — this is the screen on a television and nothing else"
+    );
+
+    // ── The keys go to §16.8's one definition ─────────────────────────────────────────────────
+    assert!(
+        main.contains("m.invoke_machine_key(text, down)"),
+        "the popped-out window's keys do not reach `machine_key`, so this window has a second \
+         answer to what `M` does — which is the whole of what §16.8 exists to prevent"
+    );
+
+    // ── The frame is the main window's, on the main window's tick ─────────────────────────────
+    assert!(
+        main.contains("w.set_source(main.get_screen_source());"),
+        "the popped-out window is given a texture from somewhere other than the main window's \
+         glass, so the two can show different frames — the one way a second view of one panel \
+         could lie"
+    );
+    assert!(
+        main.contains("pump_panel(&panel, &w);"),
+        "nothing feeds the second view on the machine's tick, so it holds the frame it opened on"
+    );
+
+    // ── …and it never computes its own scale ──────────────────────────────────────────────────
+    //
+    // §12.6's table was written in logical pixels against a `k` derived in physical ones and the
+    // document contradicted itself for a revision. The way that cannot happen again is that the
+    // markup does no arithmetic: `draw-w` and `draw-h` arrive already multiplied.
+    assert!(
+        !src.contains("panel-px-w *") && !src.contains("* Geometry.panel-px-w"),
+        "the panel's markup multiplies its own size. `geometry::panel_k` is the one place that \
+         scale is decided, and §12.6 is why there is exactly one"
+    );
 }

@@ -592,17 +592,79 @@ fn main() -> Result<(), slint::PlatformError> {
 fn refresh_titles(model: &Rc<VecModel<TitleRow>>, settings: &Settings) -> bool {
     let named = settings.games.as_deref();
     let found = named.map(ipod_machine::titles_under).unwrap_or_default();
-    let rows: Vec<TitleRow> = found
-        .into_iter()
-        .map(|(name, path)| TitleRow {
-            name: name.into(),
-            path: path.display().to_string().into(),
-        })
-        .collect();
+    let rows: Vec<TitleRow> = found.into_iter().map(|(name, path)| title_row(&name, &path)).collect();
     model.set_vec(rows);
     // `is_dir` rather than `exists`: a shelf replaced by a *file* of the same name is gone as far
     // as this page is concerned, and saying so is more use than reporting it as empty.
     named.is_some_and(|p| !p.is_dir())
+}
+
+/// One title, as §13's list draws it: its own name, its own cover, and whether it runs here.
+///
+/// **Everything on the row is read out of the title's own `Manifest.plist`** — issue #29's whole
+/// point, and the reason it is reading a file rather than designing a list. Apple put the name and
+/// the artwork in there because the iPod itself draws them, so a list built from them is the list
+/// Apple shipped.
+///
+/// **`PlatformID` is the refusal, and it is answerable before anything is loaded.** A title lists
+/// one build per iPod generation; `research/01` settles that platform **1** is the 5G/5.5G by a
+/// natural experiment across all fifty-six archives, and that is the only generation this emulator
+/// is. A title with no entry for it cannot run here, and saying so from the manifest is the
+/// difference between a row that is refused with a reason and a press that fails inside the loader
+/// — which is the same rule §11.3's Composer follows for an impossible iPod.
+///
+/// **A missing cover is not an error and not a placeholder.** §13.2: *never a blank rectangle,
+/// never a stock icon.* An empty `Image` is what `games.slint` draws nothing for, and the row falls
+/// back to being a row — which is what every title without artwork already looked like.
+fn title_row(name: &str, path: &std::path::Path) -> TitleRow {
+    use ipod_machine::title;
+
+    let manifest = title::manifest(path);
+    // **The manifest's name wins, and `titles_under` has already applied that rule** — it falls
+    // back to the directory name where there is no manifest. Read here rather than re-derived, so
+    // the two cannot answer differently for one title.
+    let mut row = TitleRow {
+        name: name.into(),
+        path: path.display().to_string().into(),
+        cover: slint::Image::default(),
+        runs: true,
+        reason: slint::SharedString::new(),
+    };
+    let Some(m) = manifest else {
+        // No manifest at all: a directory somebody assembled by hand around an `Executables/`.
+        // `titles_under` accepts it as a title and so does this — there is nothing to refuse it
+        // with, and refusing it for the absence of a file Apple writes would refuse the one shape
+        // a person can make themselves.
+        return row;
+    };
+    let Some(build) = m.build_for(title::PLATFORM_5G) else {
+        row.runs = false;
+        // **Short, because §9.4's slot elides.** The first draft ran to 76 characters and the
+        // picture cut it mid-clause at *an iPod 5G…* — `_out/gui/games.png` before this. The two
+        // facts a person needs are what the title ships and what this machine is; the reasoning
+        // between them is what goes.
+        row.reason = match m.platform_ids().as_slice() {
+            [] => "Its manifest lists no builds at all.".to_string(),
+            ids => format!(
+                "Built for {}. This emulator is an iPod 5G, platform {}.",
+                ids.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(" and "),
+                title::PLATFORM_5G
+            ),
+        }
+        .into();
+        return row;
+    };
+    if let Some(at) = title::artwork_path(path, build) {
+        // A cover that will not decode is drawn as no cover. It is the title's file rather than
+        // ours, the reader names the number that was wrong, and a page that refused a playable
+        // title over its picture would be the tail wagging the dog.
+        if let Ok(art) = title::artwork(&at) {
+            let mut buf = SharedPixelBuffer::<slint::Rgba8Pixel>::new(art.w, art.h);
+            buf.make_mut_bytes().copy_from_slice(&art.rgba);
+            row.cover = slint::Image::from_rgba8(buf);
+        }
+    }
+    row
 }
 
 /// variant is `#[cfg(test)]` — so this is a seam in the wiring, not a switch in the program.
@@ -697,6 +759,15 @@ fn wire(
 
     let rail = Rc::new(RefCell::new(rail::Rail::new()));
     let stack = Rc::new(RefCell::new(nav::Stack::new()));
+    // §21.7's second view of the panel. **`None` until somebody asks for it**, and dropped when
+    // they close it: a window nobody opened costs nothing, and there is no state in it to keep —
+    // both windows draw the one `screen-source`, so the popped-out one holds a texture and a size
+    // and nothing else. That is what makes closing it unable to strand anything.
+    let panel: Rc<RefCell<Option<PanelWindow>>> = Rc::new(RefCell::new(None));
+    // §21.7's `⌃⌘P`. The ordinal is `Verb::ALL`'s and is pushed rather than typed in the markup,
+    // so a verb added above `Panel` moves the key with the row instead of leaving it pointing at
+    // whatever took its place.
+    window.set_panel_verb(verbs::Verb::Panel.ordinal());
     let work = Rc::new(RefCell::new(work::Queue::new()));
 
     // ── §11.2's Composer: one recipe, and it is private ─────────────────────────────────────────
@@ -921,10 +992,16 @@ fn wire(
         // §12.3's denominator and §12.4's park time are the two things a running machine teaches
         // the library, and this is the tick that sees both — see `pump_machine`.
         let settings = settings.clone();
+        let panel = panel.clone();
         let weak = window.as_weak();
         Rc::new(move || {
             let Some(w) = weak.upgrade() else { return };
             let learned = pump_machine(&w, &live, &devices, &settings.borrow());
+            // §21.7: whatever `pump_machine` just put on the glass goes to the second view on the
+            // same tick, so the two windows cannot come to be showing different frames — which is
+            // the one way a second view of one panel could lie. It is a no-op when nothing is
+            // popped out.
+            pump_panel(&panel, &w);
             // ── The two things a running machine teaches the library ────────────────────────────
             //
             // Written here rather than inside the tick, so the function that draws sixty times a
@@ -2317,6 +2394,7 @@ fn wire(
         let work = work.clone();
         let live = live.clone();
         let next_boot = next_boot.clone();
+        let panel = panel.clone();
         let ticking_machine = ticking_machine.clone();
         let repaint_all = repaint_all.clone();
         let weak = window.as_weak();
@@ -2435,10 +2513,67 @@ fn wire(
                     ticking_machine();
                 }
 
+                // ── §21.3's `Doom`, and it is issue #18's one row ──────────────────────────
+                //
+                // **Steps 1 to 5 of the chain, as far as one press honestly reaches.** The chain is
+                // iPod → Rockbox → plugin → game; `verbs::doom_row` refuses at whichever link is
+                // missing and names the row above that makes it, so a press that arrives here has
+                // an iPod with Rockbox on it and a drive to write to. What is left is the two
+                // downloads, the three writes and the boot — `Queue::doom` plans all three and
+                // `Run::Doom` hands over to the machine when they are ticked, which is why nothing
+                // starts anything here.
+                //
+                // **What this press does NOT do is drive Rockbox's menu.** Reaching Doom's title
+                // screen from the main menu is Shortcuts ▸ DOOM ▸ Play Game, and `research/06`
+                // measured why a scripted descent cannot be trusted: Rockbox accelerates the wheel,
+                // and two runs of the same forward descent — 24 clicks and 18 — landed on
+                // `Shortcuts` and on `Settings`. `shortcuts.txt` is what makes the descent three
+                // items instead of a hunt, and the row's own sentence names them.
+                verbs::Verb::Doom => {
+                    let name = {
+                        let s = settings.borrow();
+                        let index = usize::try_from(w.get_selected()).unwrap_or(0);
+                        s.devices.get(index).map(|d| d.name.clone())
+                    };
+                    // No device is a refusal the row already draws; a press with none is the same
+                    // no-op an unknown ordinal gets.
+                    if let Some(name) = name {
+                        let press = {
+                            let mut s = settings.borrow_mut();
+                            let mut r = rail.borrow_mut();
+                            work.borrow_mut().doom(&mut s, &mut r, &name, caps.download)
+                        };
+                        match press {
+                            work::Press::Refused(f) => {
+                                rail.borrow_mut().failed("install", "Doom", f);
+                            }
+                            // `Busy` has already said so on the Rail — `doom` notes it itself.
+                            work::Press::Busy => {}
+                            _ => ticking_machine(),
+                        }
+                        sync_rail(&w, &rows, &rail.borrow(), caps, work.borrow().shape());
+                    }
+                }
+
+                // ── §21.7: the panel, pulled out ──────────────────────────────────────────
+                //
+                // **A toggle rather than an open**, because the row is the only control there is:
+                // pressing it a second time is how somebody who opened it by accident puts it
+                // away, and the window's own close button does the same thing through
+                // `on_close_requested`.
+                verbs::Verb::Panel => {
+                    let open = panel.borrow().is_some();
+                    if open {
+                        close_panel(&panel);
+                    } else {
+                        open_panel(&panel, &w);
+                    }
+                }
+
                 // Drawn, refused, and it says why — §14.1. A press reaches here only through an
                 // `activated` on a `Pressable` that is `enabled: false`, which §16.5 keeps alive so
                 // it can be focused and announced. Nothing to do is the honest answer.
-                verbs::Verb::Doom | verbs::Verb::Files | verbs::Verb::Reference => {}
+                verbs::Verb::Files | verbs::Verb::Reference => {}
             }
             repaint_all();
         });
@@ -3032,6 +3167,22 @@ fn wire(
             let Some(t) = titles.row_data(i as usize) else {
                 return;
             };
+            // **A refused row is refused on press as well.** §16.5 keeps a disabled `Pressable`'s
+            // `TouchArea` and `FocusScope` alive so it can be focused and announced, so `activated`
+            // still arrives here — and a title with no `PlatformID 1` build would otherwise be
+            // loaded by a press on a row drawn greyed out with a sentence saying it cannot be. The
+            // sentence is the row's own, not a second wording: `title_row` decided it.
+            if !t.runs {
+                rail.borrow_mut().failed(
+                    "start",
+                    &t.name,
+                    rail::Failure::saying(rail::Class::Missing, "running a title", t.reason.to_string()),
+                );
+                if let Some(w) = weak.upgrade() {
+                    sync_rail(&w, &rows, &rail.borrow(), caps, work.borrow().shape());
+                }
+                return;
+            }
             let dir = std::path::PathBuf::from(t.path.to_string());
             // **The row carries the title's folder, and the executable is found from it.** Not
             // stored on the row: `title_exe` sorts, so a folder holding two answers the same way
@@ -5809,6 +5960,121 @@ fn select_d(hero_logical: f64) -> f32 {
     2.0 * wheel::WheelRing::new(0.0, 0.0, outer).select
 }
 
+// ── §21.7: the panel, in a window of its own ────────────────────────────────────────────────────
+//
+// **One machine, two windows onto its framebuffer.** §15 rules out a second *machine*; §21.7
+// narrows that to allow a second *view*, and these three functions are the whole of it: open one,
+// close one, and give it the same texture the drawn iPod is being given on the same tick.
+//
+// **There is no state here to lose**, which is what makes closing it safe by construction rather
+// than by care: the popped-out window holds a texture reference and a size, and the texture is the
+// main window's. Nothing is transferred, so nothing can be stranded.
+
+/// Open the second view, or bring it to the front if it is already there.
+///
+/// **Every callback it needs is registered here**, because the window is built here — there is no
+/// second `wire` for it and there must not be. Its keys go to the main window's `machine-key`,
+/// which is §16.8's one definition: a second key table would be a second answer to *what does `M`
+/// do*, and §16.8 exists to stop that.
+fn open_panel(held: &Rc<RefCell<Option<PanelWindow>>>, main: &MainWindow) {
+    if let Some(w) = held.borrow().as_ref() {
+        // Already out. Showing it again is how a press on the row reaches a window that is behind
+        // something else, and it costs nothing when it is already in front.
+        let _ = w.show();
+        return;
+    }
+    let Ok(w) = PanelWindow::new() else {
+        // A window that cannot be created is a platform refusing, not a program fault — and there
+        // is nothing here to say about it that is not already true of the main window existing.
+        return;
+    };
+    // **The frame it opens on, before the first tick.** Without this the window is `bg-sunken` for
+    // up to a frame, which reads as a machine that stopped.
+    push_panel_frame(&w, main);
+    {
+        let weak = main.as_weak();
+        w.on_key(move |text, down| {
+            let Some(m) = weak.upgrade() else { return false };
+            // §16.8's one definition, invoked rather than repeated.
+            m.invoke_machine_key(text, down)
+        });
+    }
+    {
+        let weak = w.as_weak();
+        w.on_toggle_fullscreen(move || {
+            let Some(w) = weak.upgrade() else { return };
+            let now = w.window().is_fullscreen();
+            w.window().set_fullscreen(!now);
+        });
+    }
+    {
+        let weak = w.as_weak();
+        w.on_escape_pressed(move || {
+            let Some(w) = weak.upgrade() else { return };
+            // **Outwards, in one order** — §16.8's rule for `Esc`, applied to the surface it is
+            // pressed on: leave fullscreen first, and only close the window once there is no
+            // fullscreen to leave. A key that did both at once would take a person from a
+            // television to nothing.
+            // **`slint::Window`'s own accessor, not a markup property.** `full-screen` is a
+            // builtin on `Window` and the compiler generates no getter or setter for it, so the
+            // Rust side of this is `i-slint-core`'s `is_fullscreen` / `set_fullscreen`
+            // (`api.rs:588,593`) — which is also the API `⌃⌘F` below drives, so there is one
+            // writer of the state rather than a property and a call that can disagree.
+            if w.window().is_fullscreen() {
+                w.window().set_fullscreen(false);
+                return;
+            }
+            let _ = w.hide();
+        });
+    }
+    let _ = w.show();
+    *held.borrow_mut() = Some(w);
+}
+
+/// Put the second view away.
+fn close_panel(held: &Rc<RefCell<Option<PanelWindow>>>) {
+    if let Some(w) = held.borrow_mut().take() {
+        let _ = w.hide();
+    }
+}
+
+/// Give the popped-out window this tick's frame, and the size to draw it at.
+///
+/// **§12.6's rule, in the one function that computes it** — `geometry::panel_k`. The same rule the
+/// fullscreen inside this window uses, so entering fullscreen does not change the scale it was
+/// already drawing at, and a person learns one behaviour rather than two.
+///
+/// **Physical in, logical out.** `panel_k` takes the backing store because §12.6's own table was
+/// computed in logical pixels against a `k` derived in physical ones and contradicted itself for a
+/// revision; the size handed back to the markup is logical because that is what a `length` is.
+fn push_panel_frame(w: &PanelWindow, main: &MainWindow) {
+    let size = w.window().size();
+    let sf = f64::from(w.window().scale_factor()).max(f64::MIN_POSITIVE);
+    let k = f64::from(geometry::panel_k(f64::from(size.width), f64::from(size.height)));
+    w.set_source(main.get_screen_source());
+    w.set_description(main.get_panel_description());
+    w.set_draw_w(((k * geometry::PANEL_PX_W) / sf) as f32);
+    w.set_draw_h(((k * geometry::PANEL_PX_H) / sf) as f32);
+}
+
+/// The tick's half of the above: if a second view is open, it gets this frame too.
+///
+/// **Called where the glass is written and nowhere else**, so the two windows cannot come to be
+/// showing different frames — which is the one way a second view could lie.
+fn pump_panel(held: &Rc<RefCell<Option<PanelWindow>>>, main: &MainWindow) {
+    let mut slot = held.borrow_mut();
+    let Some(w) = slot.as_ref() else { return };
+    // **A window the operator closed with its own close button is gone**, and this is where that
+    // is noticed: Slint's default close handler hides the window, so the handle outlives the
+    // window and would go on being fed frames for ever. Dropping it here is what makes the row's
+    // toggle agree with what is on screen.
+    if !w.window().is_visible() {
+        slot.take();
+        return;
+    }
+    push_panel_frame(w, main);
+}
+
 /// Where the drawer is, as three `in` properties the markup never writes.
 fn push_nav(window: &MainWindow, stack: &nav::Stack) {
     window.set_drawer_open(stack.open());
@@ -7996,6 +8262,275 @@ pub(crate) mod tests {
         let d = std::env::temp_dir().join(format!("ipod-gui-test-{what}-{}", std::process::id()));
         std::fs::create_dir_all(&d).expect("a temp directory");
         d
+    }
+
+    /// **§13's list is read out of each title's manifest: its own name, its own cover, and whether
+    /// it runs on the iPod this emulator is.**
+    ///
+    /// Issue #29, and the operator's 0.5 ask: *"we should show the game list nicely in the UI
+    /// ideally fetching info on them from the files if we have graphics and info."* We do have
+    /// both, and this is reading a file rather than inventing a list — Apple put the name and the
+    /// artwork in `Manifest.plist` because the iPod itself draws them.
+    ///
+    /// **Two fixtures and no real title**, per AGENTS.md §2: `resources/` holds shipping binaries
+    /// and other people's identifiers, and the shape is what is under test. The control that the
+    /// shape is the shape Apple ships is
+    /// `ipod_machine::title::tests::every_real_title_on_this_machine_answers_a_name_and_a_five_g_
+    /// build`, which reads all twenty and prints none of them.
+    ///
+    /// **How to make it go red:** have `title_row` return `runs: true` unconditionally. It fails on
+    /// *a title with no 5G build is offered as runnable* — which is the press that would otherwise
+    /// reach `start_title` with an executable built for a different iPod.
+    #[test]
+    fn a_title_row_carries_its_own_name_its_cover_and_whether_it_runs_here() {
+        use ipod_machine::title;
+
+        let dir = temp_dir("title-rows");
+        // A manifest of the shape Apple ships. Nothing is copied out of `resources/`.
+        let write = |name: &str, platform: u32, art: Option<&[u8]>| {
+            let at = dir.join(name);
+            std::fs::create_dir_all(at.join("Executables")).unwrap();
+            std::fs::write(at.join("Executables").join("game.bin"), b"not an eapp").unwrap();
+            let cover = if art.is_some() { "cover.raw.lcd5" } else { "" };
+            std::fs::write(
+                at.join("Manifest.plist"),
+                format!(
+                    "<plist><dict><key>Name</key><string>{name} the Game</string>\
+                     <key>Platforms</key><array><dict>\
+                     <key>ExecutablePath</key><string>Executables/game.bin</string>\
+                     <key>LaunchingArtwork</key><string>{cover}</string>\
+                     <key>PlatformID</key><integer>{platform}</integer>\
+                     <key>PlatformVersion</key><integer>1</integer>\
+                     </dict></array></dict></plist>"
+                ),
+            )
+            .unwrap();
+            if let Some(bytes) = art {
+                std::fs::write(at.join("cover.raw.lcd5"), bytes).unwrap();
+            }
+            at
+        };
+
+        // A 2 × 2 cover in the format all twenty of the real ones are: 320 × 216 there, tiny here,
+        // same header. `title::artwork`'s own tests hold the decoding; this holds that the row
+        // carries the result.
+        let mut cover = Vec::new();
+        cover.extend_from_slice(&2u32.to_le_bytes());
+        cover.extend_from_slice(&2u32.to_le_bytes());
+        cover.extend_from_slice(&4u32.to_le_bytes());
+        cover.extend_from_slice(b"565L");
+        cover.extend_from_slice(&[0u8; 16]);
+
+        let runs = write("Widget", title::PLATFORM_5G, Some(&cover));
+        let elsewhere = write("Gizmo", 3, None);
+
+        // ── The title that runs here ──────────────────────────────────────────────────────────
+        let row = title_row(&ipod_machine::manifest_name(&runs).unwrap(), &runs);
+        assert_eq!(
+            row.name.to_string(),
+            "Widget the Game",
+            "the row is named from the directory rather than from the manifest, which is the \
+             opaque-id problem `titles_under` exists to solve"
+        );
+        assert!(row.runs, "a title with a 5G build is refused: {:?}", row.reason);
+        assert_eq!(row.reason.to_string(), "", "a runnable title carries a refusal");
+        assert_eq!(
+            (row.cover.size().width, row.cover.size().height),
+            (2, 2),
+            "the cover the manifest names did not reach the row"
+        );
+
+        // ── …and the one that does not ────────────────────────────────────────────────────────
+        let row = title_row(&ipod_machine::manifest_name(&elsewhere).unwrap(), &elsewhere);
+        assert!(
+            !row.runs,
+            "a title with no 5G build is offered as runnable. `research/01` settles that platform \
+             1 is the 5G/5.5G and that is the only one this emulator is, so pressing this would \
+             hand `start_title` an executable built for another machine"
+        );
+        assert!(
+            row.reason.contains("Built for 3"),
+            "the refusal does not name what the title actually ships: {:?}",
+            row.reason
+        );
+        assert!(
+            row.reason.contains("5G"),
+            "the refusal does not say what this emulator is, so it states a fact about the title \
+             and none about why that matters here: {:?}",
+            row.reason
+        );
+        assert_eq!(
+            row.cover.size().width,
+            0,
+            "a title with no artwork got a cover from somewhere. §13.2: never a blank rectangle, \
+             never a stock icon — an empty image is what draws nothing"
+        );
+
+        // ── A directory with an executable and no manifest at all ─────────────────────────────
+        //
+        // `titles_under` accepts it — that is the one shape a person can assemble by hand — so the
+        // row does too, named from the folder, and refusing it for the absence of a file Apple
+        // writes would refuse the only title anybody can make themselves.
+        let bare = dir.join("Handmade");
+        std::fs::create_dir_all(bare.join("Executables")).unwrap();
+        std::fs::write(bare.join("Executables").join("a.bin"), b"x").unwrap();
+        let row = title_row("Handmade", &bare);
+        assert!(row.runs, "a hand-assembled title is refused: {:?}", row.reason);
+        assert_eq!(row.cover.size().width, 0);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **§21.3's `Doom` row refuses at the link of the chain that is missing, and runs otherwise.**
+    ///
+    /// Issue #18. The chain is iPod → Rockbox → plugin → game, and every step of it already worked
+    /// on the command line: `ipod_machine::doom` has held the catalogue, both URLs, both SHA-256s
+    /// and the shortcut file since 2026-09-01, and `ipod-boot doom-assets` installs all three. The
+    /// window drew the row **disabled** with *Doom needs rockdoom.wad and an IWAD; nothing fetches
+    /// them* — a sentence that was true of the window and false of the program.
+    ///
+    /// So this asserts the two halves that sentence got wrong:
+    ///
+    ///   * with Rockbox on the drive the row is **live**, and says what the press costs;
+    ///   * without it the row is refused and the refusal names the row that installs Rockbox —
+    ///     §21.3's rule that a refusal another surface already answers is fetched from that
+    ///     surface, not re-worded here.
+    ///
+    /// **And it asserts the old sentence is gone**, because that is the thing that was wrong: a row
+    /// that goes on saying *nothing fetches them* beside a queue that fetches them is the stale
+    /// claim §16.9 deletes, and it is the same defect `Games` had.
+    ///
+    /// **How to make it go red:** restore `fn doom_row() -> Row { Row::no(…) }`. Measured — it
+    /// fails on the first assertion, *`Doom` is refused on an iPod with Rockbox on it*.
+    #[test]
+    fn the_doom_row_refuses_at_the_link_of_the_chain_that_is_missing() {
+        let dir = temp_dir("doom-row");
+        let (mut s, d) = a_composed_device(&dir);
+        let name = d.name.clone();
+        s.devices.push(d);
+
+        let off = machine::Life::Off;
+        let caps = rail::Caps { download: true, ..rail::Caps::default() };
+        let rows = |s: &Settings| {
+            let mut seen = ipod_machine::settings::Presence::new();
+            verbs::view(
+                s,
+                s.devices.first(),
+                &mut seen,
+                caps,
+                verbs::Now {
+                    settings: s,
+                    life: &off,
+                    machine: None,
+                    park_bytes: None,
+                    thread: false,
+                    titles: 0,
+                    games_gone: false,
+                    developer: false,
+                },
+            )
+        };
+        let doom = |rows: &[verbs::Row]| {
+            rows.iter()
+                .find(|r| r.verb == verbs::Verb::Doom)
+                .expect("the Doom row is drawn")
+                .clone()
+        };
+
+        // ── Rockbox is not on it: refused, and the refusal names the row above ────────────────
+        let without = doom(&rows(&s));
+        assert!(
+            !without.enabled,
+            "`Doom` is live on an iPod with no Rockbox. `doom.rock` ships inside the Rockbox \
+             release, so without Rockbox there is no plugin for the WADs to feed"
+        );
+        assert!(
+            without.reason.contains("Rockbox"),
+            "the refusal does not say Rockbox is what is missing: {:?}",
+            without.reason
+        );
+        assert!(
+            without.reason.contains("row above"),
+            "the refusal does not point at the row that installs Rockbox, so it states a problem \
+             and no next step — §9.3's rule: {:?}",
+            without.reason
+        );
+
+        // ── …and with Rockbox installed it is a press ──────────────────────────────────────────
+        //
+        // Written the way the install records it, so this fixture and the shipped path agree about
+        // what *Rockbox is on this drive* means.
+        let disk = s.disk_of(s.devices.first().unwrap()).unwrap().unwrap();
+        if let Some(k) = s.disks.iter_mut().find(|k| k.path == disk) {
+            k.installed.push(compose::Os::Rockbox.label().to_string());
+        }
+        let with = doom(&rows(&s));
+        assert!(
+            with.enabled,
+            "`Doom` is refused on an iPod with Rockbox on it: {:?}. `Queue::doom` fetches both \
+             WADs and writes them, and `ipod-boot doom-assets` has done exactly that since \
+             2026-09-01",
+            with.reason
+        );
+
+        // **The old sentence is gone.** It is the claim the row was making about the program
+        // rather than about this iPod, and it was false when it was written.
+        assert!(
+            !with.reason.contains("nothing fetches")
+                && !with.sub.contains("nothing fetches"),
+            "the row still says nothing fetches Doom's assets, beside a queue that fetches them"
+        );
+        // …and it says what the press costs, which is 24 MB and a boot.
+        assert!(
+            with.sub.contains("24 MB"),
+            "`Doom` does not say what pressing it downloads: {:?}",
+            with.sub
+        );
+        assert!(
+            with.sub.contains("Rockbox"),
+            "`Doom` does not say that pressing it starts Rockbox, which is where the press ends \
+             up and is the only thing a person sees: {:?}",
+            with.sub
+        );
+        assert!(
+            !with.chevron,
+            "`Doom` draws a chevron, which is a claim that pressing it goes one level deeper. It \
+             runs a plan and boots a machine"
+        );
+
+        // ── The machine rule outranks all of it ────────────────────────────────────────────────
+        //
+        // Writing 28 MB onto the volume of a drive a machine is reading is the one thing that
+        // cannot be allowed whatever else is true.
+        let mut seen = ipod_machine::settings::Presence::new();
+        let running = verbs::view(
+            &s,
+            s.devices.first(),
+            &mut seen,
+            caps,
+            verbs::Now {
+                settings: &s,
+                life: &off,
+                machine: Some(&name),
+                park_bytes: None,
+                thread: true,
+                titles: 0,
+                games_gone: false,
+                developer: false,
+            },
+        );
+        let busy = doom(&running);
+        assert!(
+            !busy.enabled,
+            "`Doom` would write 28 MB onto the volume of a drive the machine is reading"
+        );
+        assert!(
+            busy.reason.contains(&name),
+            "the refusal does not name the machine in the way: {:?}",
+            busy.reason
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// **§21.4: the drawer on an empty library, which is the first screen anybody sees.**
@@ -13399,6 +13934,94 @@ pub(crate) mod tests {
     /// **And deduplicated by position**, which is the third thing this query needed — see
     /// [`elements_by_role`], which is where that half now lives, because Parts and Devices ask the
     /// same question of the same role about their own rows.
+    /// **The drawer, open at its root page, populated the way the shipped window populates it.**
+    ///
+    /// §21.3 replaced `MenuPage` — three rows written in markup — with `verbs.rs` building a
+    /// `VecModel` that [`push_verbs`] pushes. `a_window()` fills no model, so the two accessibility
+    /// tests that use this went on opening a drawer with **nothing in it** and asserting counts
+    /// against an empty list. They had been red since §21.3 landed, in debug only, and neither CI
+    /// workflow runs them — see `the_debug_only_accessibility_gate_is_recorded_in_the_design`.
+    ///
+    /// **So the fixture is the shipped path rather than a stand-in**, which is the difference that
+    /// stops it drifting again: `wire` registers the repaint registry, `invoke_drawer_toggled` is
+    /// the callback the hamburger and `⌘\` both raise, and arriving at a page is what pushes it. A
+    /// fixture that filled the model by hand would be a second producer, and a second producer is
+    /// exactly what drifted.
+    ///
+    /// **An EMPTY library, deliberately.** With no iPod every row that needs one is refused with
+    /// its reason, which is the state §14.1 is most about and the richest fixture there is for a
+    /// test whose subject is how a refusal reads to a screen reader. It also makes the row count
+    /// exactly [`verbs::Verb::ALL`] less the developer-only four, with no `About this iPod`
+    /// heading — `push_verbs` leaves the heading empty when there is no device to describe, and a
+    /// heading is drawn as a `Row` and would be counted.
+    fn a_wired_drawer_at_the_root(tag: &str, developer: bool) -> (MainWindow, std::path::PathBuf) {
+        let dir = temp_dir(tag);
+        // **In `Settings`, not `MainWindow::developer`.** §21.3 moved the switch's meaning into
+        // Rust: `verbs::view` skips `developer_only()` rows off `Now::developer`, which is
+        // `settings.developer`. The old test set the markup property, which now gates something
+        // else — and setting it proved nothing about which rows this page draws.
+        let s = Settings { developer, ..Settings::default() };
+        let w = a_window();
+        wire(&w, Rc::new(RefCell::new(s)), args::Machine::default(), Rc::new(drops::Shell::Native));
+        w.show().expect("the headless backend shows a window");
+        // **The window has to have a size or nothing has a geometry**, and `ElementHandle`'s
+        // traversal is geometry — see `elements_by_role` for the mechanism.
+        //
+        // **And tall enough to draw the whole page**, which is not a convenience. §21.3's root page
+        // is about 1 400 px against a window that opens at 820, so at the shipped height the last
+        // rows are outside the `Scroll`'s clip — and `is_visible` is an intersection with the
+        // absolute clip rect, so they are out of the accessible tree as well. Measured: 11 rows
+        // reachable of the 13 the model holds. A test about how a REFUSED row reads cannot be
+        // allowed to skip the refusals that happen to be at the bottom, so the fixture opens a
+        // window that holds all of them. The derivation is
+        // `the_root_pages_lower_half_is_photographed_too`'s, off the row count rather than typed.
+        let tall = geometry::DRAWER_HEADER_H
+            + verbs::Verb::ALL.len() as f64 * (geometry::ROW_H + geometry::FIELD_REASON);
+        w.window().set_size(slint::LogicalSize::new(
+            geometry::PREF_WIDTH as f32,
+            tall as f32,
+        ));
+        // **Opened AT THE ROOT, through the same callback `⌘,` raises.** A bare
+        // `invoke_drawer_toggled` is not enough and the reason is worth writing down: `wire`
+        // decides the drawer's own opening state, and on an empty library §10's first run leaves
+        // it open at **depth 1** — so a toggle closed it, and toggling again reopened it one level
+        // in, where `on_screen(stack, Page::None)` is false and `push_verbs` returns without
+        // pushing anything. The fixture asked for the root page and got a drawer that had never
+        // drawn one.
+        //
+        // `Page::None` at depth 0 IS the root: `nav::Page::None` is *no page*, which is what the
+        // drawer's root slot shows, and `on_verb_act`'s own navigation goes through this callback
+        // for the same reason — arriving at a page is what pushes it.
+        w.invoke_open_page(to_markup(nav::Page::None), 0);
+        let_the_drawer_settle();
+        // **The model, before the accessible tree.** Two things have to be true for a caller's
+        // query to answer anything — the rows exist, and the page drawing them is on stage — and
+        // when §21.3 broke the first one every test using this fixture failed on the second, which
+        // says nothing about where the fault is. This separates them.
+        assert!(
+            w.get_verbs().row_count() > 0,
+            "the drawer is open at its root page and `verbs` is empty (drawer-open {}, depth {}). \
+             `push_verbs` runs from the repaint registry when `on_screen(stack, Page::None)`, so \
+             either the registry did not run or the stack is not where this fixture thinks",
+            w.get_drawer_open(),
+            w.get_drawer_depth()
+        );
+        (w, dir)
+    }
+
+    /// How many rows §21.3's root page draws, read out of the one place that number lives.
+    ///
+    /// **Not 3 and 7.** Those were `MenuPage`'s counts and the tests below went on asserting them
+    /// after §21.3 made the page seventeen verbs — so even a repaired fixture would have asserted
+    /// the wrong thing. A typed count is a second copy of `Verb::ALL`'s length; this reads the
+    /// array, so a fourteenth verb moves it.
+    fn verb_rows_drawn(developer: bool) -> usize {
+        verbs::Verb::ALL
+            .iter()
+            .filter(|v| developer || !v.developer_only())
+            .count()
+    }
+
     fn drawer_rows(w: &MainWindow) -> Vec<i_slint_backend_testing::ElementHandle> {
         elements_by_role(w, i_slint_backend_testing::AccessibleRole::ListItem)
     }
@@ -13782,6 +14405,8 @@ pub(crate) mod tests {
         d_detail: Rc<VecModel<DetailRow>>,
         prefs: settings_page::Prefs,
         shelf: Rc<VecModel<DeviceRow>>,
+        /// §13's list. Retained like every other page's model, for §16.9's reason.
+        titles: Rc<VecModel<TitleRow>>,
         /// §10.3's latch. A library with devices in it is past the first run and an empty one is
         /// not, which is the difference between the welcome bench and the later-empty one.
         welcome: Rc<std::cell::Cell<bool>>,
@@ -13823,6 +14448,7 @@ pub(crate) mod tests {
                 live: Rc::new(RefCell::new(None)),
                 prefs: settings_page::Prefs::new(),
                 shelf: Rc::new(VecModel::default()),
+                titles: Rc::new(VecModel::default()),
                 welcome: latch(first),
                 cost: if first { a_cost() } else { no_cost() },
             }
@@ -13866,6 +14492,20 @@ pub(crate) mod tests {
             w.set_readout_headings(ModelRc::from(self.r_headings.clone()));
             w.set_verbs(ModelRc::from(self.v_rows.clone()));
             w.set_verbs_about(ModelRc::from(self.v_about.clone()));
+            // §13's list, through `refresh_titles` — the same call `wire` makes and the same one
+            // that reads each title's manifest for its name, its cover and its `PlatformID`. A
+            // fixture that filled the model itself would photograph a list this program does not
+            // build.
+            w.set_titles(ModelRc::from(self.titles.clone()));
+            w.set_games_folder_gone(refresh_titles(&self.titles, &self.settings));
+            w.set_games_folder(
+                self.settings
+                    .games
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default()
+                    .into(),
+            );
 
             // The shelf, the cradle, the ghost, and the Devices page's own empty line and its
             // pinned `+ New device` row — which is the control that shipped in the old shot as a
@@ -14243,6 +14883,61 @@ pub(crate) mod tests {
         Shot { at: file, w: width, h: height, rgb }
     }
 
+    /// A library pointed at three fixture titles, two of which run here.
+    ///
+    /// **Fixtures and not the real shelf**, per AGENTS.md §2: `resources/games/` holds shipping
+    /// binaries and other people's identifiers, and a shot is a file this repository writes. What
+    /// the picture has to show is the SHAPE — a name from the manifest, a cover from
+    /// `LaunchingArtwork`, and §14.1's refusal on a title with no `PlatformID 1` build — and the
+    /// shape is public.
+    ///
+    /// The covers are two flat colours at the real aspect. `title::artwork`'s own tests hold the
+    /// decoding against the real 320 x 216 header; what this needs is something that lands on the
+    /// row.
+    fn a_shelf_of_titles(dir: &std::path::Path) -> Settings {
+        let cover = |w: u32, h: u32, px: u16| {
+            let mut out = Vec::new();
+            out.extend_from_slice(&w.to_le_bytes());
+            out.extend_from_slice(&h.to_le_bytes());
+            out.extend_from_slice(&(w * 2).to_le_bytes());
+            out.extend_from_slice(b"565L");
+            for _ in 0..(w * h) {
+                out.extend_from_slice(&px.to_le_bytes());
+            }
+            out
+        };
+        let title = |name: &str, platform: u32, art: Option<Vec<u8>>| {
+            let at = dir.join(name.replace(' ', "_"));
+            std::fs::create_dir_all(at.join("Executables")).expect("a title directory");
+            std::fs::write(at.join("Executables").join("game.bin"), b"not an eapp").ok();
+            let art_name = if art.is_some() { "cover.raw.lcd5" } else { "" };
+            std::fs::write(
+                at.join("Manifest.plist"),
+                format!(
+                    "<plist><dict><key>Name</key><string>{name}</string>\
+                     <key>Platforms</key><array><dict>\
+                     <key>ExecutablePath</key><string>Executables/game.bin</string>\
+                     <key>LaunchingArtwork</key><string>{art_name}</string>\
+                     <key>PlatformID</key><integer>{platform}</integer>\
+                     <key>PlatformVersion</key><integer>1</integer>\
+                     </dict></array></dict></plist>"
+                ),
+            )
+            .expect("a manifest");
+            if let Some(bytes) = art {
+                std::fs::write(at.join("cover.raw.lcd5"), bytes).ok();
+            }
+        };
+        // 320 x 216 is the real shape; these are the same shape at a thirty-second of the size,
+        // which is all a 24 px row draws. `0xF800` is red, `0x001F` is blue.
+        title("Widget", ipod_machine::title::PLATFORM_5G, Some(cover(10, 7, 0xF800)));
+        title("Sprocket", ipod_machine::title::PLATFORM_5G, Some(cover(10, 7, 0x001F)));
+        // The refusal, and it is the whole reason there are three: a title built for another iPod
+        // is drawn greyed with its sentence rather than hidden.
+        title("Gubbins", 3, None);
+        Settings { games: Some(dir.to_path_buf()), ..Settings::default() }
+    }
+
     /// **The furniture every shot of this window stands on**, which is the bench's and not a page's.
     ///
     /// The panel, the fit, the ledger and an empty Rail. They are pushed once per window rather
@@ -14515,6 +15210,9 @@ pub(crate) mod tests {
         let shared = Furniture::new(shared_lib);
         shared.compose_over(&shared_ipod, false);
 
+        // §13's shelf, so the list has something on it to photograph.
+        let games = Furniture::new(a_shelf_of_titles(&temp_dir("shelf")));
+
         // And §11.2's **root**, which nothing had ever taken a picture of either — standing in the
         // one state of the four the shipped program could not reach, because nothing spawned the
         // read that produces it.
@@ -14523,7 +15221,7 @@ pub(crate) mod tests {
 
         // `None` is the bench — the drawer shut. Every other entry names a page, at the level
         // `Page::slot` says draws it, which is the only level `Stack::go` will accept.
-        let pages: [(&str, Option<nav::Page>, &Furniture); 12] = [
+        let pages: [(&str, Option<nav::Page>, &Furniture); 13] = [
             ("bench", None, &full),
             // **§21.4's first run, which is the first thing anybody sees and had no picture.**
             // Every other shot in this list is of a furnished library; this is an empty data
@@ -14541,6 +15239,13 @@ pub(crate) mod tests {
             ("composer-reading", Some(nav::Page::Composer), &reading),
             ("composer-ipod-dumped", Some(nav::Page::ComposerIpod), &dumped),
             ("composer-ipod-shared", Some(nav::Page::ComposerIpod), &shared),
+            // **§13's list had no picture at all**, which is how it came to draw a chevron
+            // promising a page and no cover for titles that ship one. `every_page_this_window_
+            // shoots_is_drawn_with_what_is_on_it` is the gate that reads it; this is the shelf it
+            // reads. The titles are fixtures — AGENTS.md §2 keeps `resources/` out of anything
+            // this repository writes — and one of the three ships no 5G build, so the shot carries
+            // §14.1's refusal beside the two that run.
+            ("games", Some(nav::Page::Games), &games),
         ];
 
         let mut shots: Vec<(&str, Shot)> = pages
@@ -15926,84 +16631,197 @@ pub(crate) mod tests {
     )]
     #[test]
     fn a_disabled_row_states_its_reason_to_an_assistive_technology() {
-        let w = a_window();
-        w.show().expect("the headless backend shows a window");
-        w.window().set_size(slint::LogicalSize::new(
-            geometry::PREF_WIDTH as f32,
-            geometry::PREF_HEIGHT as f32,
-        ));
-        let mut stack = nav::Stack::new();
-        stack.toggle();
-        push_nav(&w, &stack);
-        let_the_drawer_settle();
-
-        // **Three rows by default, and this test needs the other four.** The menu is iPods /
-        // Games / Settings until `Settings::developer` is on; Parts, the Readout, Work and
-        // Reference appear with it. Everything below is about how a DISABLED row reads to an
-        // assistive technology, and the only disabled row left lives behind that switch — so the
-        // switch is part of the fixture rather than something to work around.
-        assert_eq!(
-            drawer_rows(&w).len(),
-            3,
-            "the default menu is not three rows. §13's whole point is that the window is an iPod \
-             first: iPods, Games, Settings, and the instruments only when asked for"
-        );
-        w.set_developer(true);
-        let_the_drawer_settle();
-
-        let rows = drawer_rows(&w);
-        assert_eq!(
-            rows.len(),
-            7,
-            "with the developer switch on, the menu is not seven rows; §9.1 keeps a page you \
-             cannot open present and greyed rather than absent, so that count is the design"
-        );
-
-        let by_label = |want: &str| {
-            rows.iter()
-                .find(|r| r.accessible_label().is_some_and(|l| l == want))
-                .unwrap_or_else(|| panic!("no drawer row labelled {want:?}"))
-        };
-
-        // **`Games` came off this test and `Reference` took its place, for the third time.** The
-        // rule the comment here has always stated is the one that keeps moving it: *a row that
-        // goes on saying "the page behind it is not built" beside a page that exists is the stale
-        // claim §16.9 deletes.* `Devices` left this arm when its page landed, and `Games` has now
-        // left it for the same reason — `GamesPage` is composed into the drawer, files a shelf and
-        // starts a title on the bench.
+        // **Every row the producer refused, cross-checked against the accessible tree by label.**
         //
-        // **It stayed here for the whole life of the page it names**, which is why
-        // `every_drawer_row_that_names_a_page_can_open_it` now exists: this test asserts the
-        // ACCESSIBLE READING of a refusal and is perfectly happy for that refusal to be false, so
-        // it was holding the bug in place rather than catching it. The operator found it by
-        // looking. `Reference` is the honest occupant: `ReferencePage` exists in no markup file.
-        let unbuilt = by_label("Reference");
+        // It named four labels and asserted a count of three, which is how it went on passing
+        // judgment on a page it could not see: §21.3 renamed `iPods` to `This iPod`, moved `Work`
+        // and `Parts` behind the developer switch, and multiplied the disabled rows carrying
+        // reasons — and none of that reached this test because the drawer it opened was empty.
+        //
+        // So the subject is now the whole page rather than a hand-written list of it: whatever
+        // `verbs::view` refused has to READ as refused and has to say why. A row that stops being
+        // refused leaves this test by itself, and a new refused row joins it by itself.
+        for developer in [false, true] {
+            let (w, dir) = a_wired_drawer_at_the_root(
+                if developer { "a11y-dev" } else { "a11y" },
+                developer,
+            );
+
+            let want = verb_rows_drawn(developer);
+            let rows = drawer_rows(&w);
+            assert_eq!(
+                rows.len(),
+                want,
+                "the root page draws {} rows and `Verb::ALL` says {want} (developer {developer}). \
+                 §14.1 keeps a row you cannot press present and refused rather than absent, so \
+                 that count is the design and not a coincidence",
+                rows.len()
+            );
+
+            let by_label = |want: &str| {
+                rows.iter()
+                    .find(|r| r.accessible_label().is_some_and(|l| l == want))
+                    .unwrap_or_else(|| panic!("no drawer row labelled {want:?}"))
+            };
+
+            // The model the page was pushed, which is what says which rows OUGHT to read refused.
+            let model = w.get_verbs();
+            let mut refused = 0;
+            let mut live = 0;
+            for i in 0..model.row_count() {
+                let r = model.row_data(i).expect("the row");
+                let seen = by_label(&r.label);
+                assert_eq!(
+                    seen.accessible_enabled(),
+                    Some(r.enabled),
+                    "the `{}` row is `enabled: {}` in the model and reads {:?} to an assistive \
+                     technology — §16.7's whole point is that the two are one answer",
+                    r.label,
+                    r.enabled,
+                    seen.accessible_enabled()
+                );
+                if r.enabled {
+                    live += 1;
+                    continue;
+                }
+                refused += 1;
+                // §9.4 and §19.1: a control refused without saying why is the hidden option §14.1
+                // exists to reject, and a screen reader is where that is easiest to lose — the
+                // reason is drawn under the row in 34 px, and `accessible-description` is the only
+                // route to it for somebody who cannot see the 34 px.
+                let said = seen.accessible_description().unwrap_or_default();
+                assert!(
+                    !said.is_empty(),
+                    "the `{}` row is disabled and tells an assistive technology nothing about \
+                     why. The window draws *{}* under it and a screen reader is offered silence",
+                    r.label,
+                    r.reason
+                );
+                assert_eq!(
+                    said.to_string(),
+                    r.reason.to_string(),
+                    "the `{}` row announces a different sentence from the one it draws",
+                    r.label
+                );
+            }
+
+            // **The two controls, and without them the loop above is vacuous.** A page where
+            // nothing is refused passes every assertion in it; so does one where nothing is live,
+            // by proving only that `accessible-enabled` is stuck at `false`.
+            assert!(
+                refused > 0,
+                "no row on the root page is refused, so the loop above asserted nothing. With an \
+                 empty library §21.3's page is mostly refusals — if that has stopped being true, \
+                 this fixture needs a device that cannot start rather than no device at all"
+            );
+            assert!(
+                live > 0,
+                "every row on the root page reads refused, so `accessible-enabled` is answering \
+                 one value for everything and the assertions above cannot tell the two apart"
+            );
+
+            // …and the one row whose refusal is about this program rather than about the library.
+            // `ReferencePage` exists in no markup file, so it is refused whatever is on disk —
+            // which makes it the anchor that survives a change of fixture.
+            if developer {
+                let unbuilt = by_label("Reference");
+                assert_eq!(
+                    unbuilt.accessible_enabled(),
+                    Some(false),
+                    "the `Reference` row claims to work; the page behind it is not built"
+                );
+                assert!(
+                    !unbuilt.accessible_description().unwrap_or_default().is_empty(),
+                    "the `Reference` row is disabled and says nothing about why, which is §19.1's \
+                     finding with the label changed"
+                );
+            }
+
+            std::fs::remove_dir_all(&dir).ok();
+        }
+    }
+
+    /// **Which assertions this project accepts are never executed by CI, and why.**
+    ///
+    /// Issue #32 asks for a recorded decision rather than only green tests, and this is the record
+    /// with a gate under it. `docs/GUI.md` §16.7.1 carries the prose; this holds the set to what
+    /// the prose names, so a seventh cannot join it silently.
+    ///
+    /// **The issue said two and there are six.** That is this test's first finding, and it is why
+    /// the set is asserted rather than described: the two #32 names are the two that had gone
+    /// *red*, and four more sit under the same attribute, green, unrun by either workflow. Nobody
+    /// had counted.
+    ///
+    /// **The constraint is upstream and it is not a policy choice.** `ElementQuery` needs Slint's
+    /// debug info; `build.rs` emits `SLINT_EMIT_DEBUG_INFO` only when `PROFILE` is `debug`. Without
+    /// it the query finds *nothing* rather than refusing — an instrument reporting an absence it
+    /// could not observe, which is AGENTS.md §6's whole subject — so ignoring is the honest
+    /// behaviour, and running them in release would mean emitting debug info into the shipped
+    /// build. Both workflows are `--release` because every measurement in `research/` is.
+    ///
+    /// **What is refused is the set growing quietly.** §21.3 left two of these red for a day and
+    /// three agents in turn reported them as *pre-existing, not mine, does not gate CI* — all three
+    /// times correctly.
+    ///
+    /// **How to make it go red:** add `#[cfg_attr(not(debug_assertions), ignore)]` to a seventh
+    /// test, or take one off. Measured red both ways while this was written — a first cut of the
+    /// scan is what found the other four.
+    #[test]
+    fn the_debug_only_accessibility_gate_is_recorded_in_the_design() {
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/main.rs"))
+            .expect("src/main.rs");
+
+        // **The attribute, not the phrase.** A first cut searched the file for
+        // `not(debug_assertions),` anywhere and matched this test's own doc comment and the string
+        // literal below it, reporting `""` and `drop` among the test names. So the shape is what is
+        // matched: a line that is exactly the condition, under a line that opens the `cfg_attr`.
+        let lines: Vec<&str> = src.lines().collect();
+        let mut gated: Vec<String> = Vec::new();
+        for (i, line) in lines.iter().enumerate() {
+            if line.trim() != "not(debug_assertions)," {
+                continue;
+            }
+            if i == 0 || lines[i - 1].trim() != "#[cfg_attr(" {
+                continue;
+            }
+            let name = lines[i..]
+                .iter()
+                .find_map(|l| l.trim().strip_prefix("fn "))
+                .and_then(|l| l.split('(').next())
+                .expect("a gated attribute with no test under it");
+            gated.push(name.to_string());
+        }
+        gated.sort();
+
+        // **Six, and only the first two are the ones #32 names.** The other four have carried this
+        // attribute since they were written and are green in debug. They are listed because *never
+        // executed by CI* is the property being recorded, not *broken*.
+        let declared = [
+            "a_closed_drawer_is_out_of_the_accessible_tree",
+            "a_disabled_row_states_its_reason_to_an_assistive_technology",
+            "every_ipod_in_the_list_has_its_own_start_control",
+            "every_page_this_window_shoots_is_drawn_with_what_is_on_it",
+            "the_bench_has_a_drawn_control_that_opens_the_drawer",
+            "the_short_pane_replaces_the_bench_below_the_threshold_and_not_above_it",
+        ];
         assert_eq!(
-            unbuilt.accessible_enabled(),
-            Some(false),
-            "the `Reference` row claims to work; the page behind it is not built"
-        );
-        assert!(
-            !unbuilt.accessible_description().unwrap_or_default().is_empty(),
-            "the `Reference` row is disabled and says nothing about why, which is §19.1's finding \
-             with the label changed"
+            gated,
+            declared,
+            "the set of tests CI never runs has changed. Every one of them is an assertion this \
+             project accepts is unexecuted by both workflows, so the set is written down in \
+             docs/GUI.md §16.7.1 and here rather than discovered later. Add it to both, or make it \
+             run in release"
         );
 
-        // The control: the pages that ARE built have to read differently, or `accessible-enabled`
-        // is not being set from anything and every answer above is the same answer.
-        for built in ["Work", "iPods", "Parts", "Settings", "Games"] {
-            assert_eq!(
-                by_label(built).accessible_enabled(),
-                Some(true),
-                "the `{built}` row reads as disabled beside the page that draws it"
-            );
-        }
-        // …and no row states a gap that has been closed.
-        for live in ["iPods", "Parts", "Settings", "Games"] {
-            assert_eq!(
-                by_label(live).accessible_description().unwrap_or_default().to_string(),
-                "",
-                "the `{live}` row still explains why the page it opens does not exist"
+        // …and the design names them, in the section that owns accessibility. A list that lives
+        // only in a test is a list only somebody running tests ever reads.
+        let gui = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/GUI.md"))
+            .expect("docs/GUI.md");
+        for name in declared {
+            assert!(
+                gui.contains(name),
+                "docs/GUI.md does not name `{name}`, which is a test neither CI workflow runs. \
+                 §16.7.1 is where the list lives"
             );
         }
     }
@@ -16038,46 +16856,23 @@ pub(crate) mod tests {
     )]
     #[test]
     fn a_closed_drawer_is_out_of_the_accessible_tree() {
-        let w = a_window();
-        w.show().expect("the headless backend shows a window");
-        // **The window has to have a size or nothing has a geometry**, and `ElementHandle`'s
-        // traversal is geometry: `ItemRc::is_visible` is an intersection of the item's absolute rect
-        // with its absolute clip rect (`i-slint-core-1.17.1/item_tree.rs:399-408`) and never looks
-        // at the `visible` property itself — `visible: false` is lowered to a `Clip` element
-        // (`passes/visible.rs`), which is what empties that rect. With no size every rect is zero,
-        // every intersection degenerates the same way, and the query answers the same for a drawn
-        // element and a hidden one.
-        w.window().set_size(slint::LogicalSize::new(
-            geometry::PREF_WIDTH as f32,
-            geometry::PREF_HEIGHT as f32,
-        ));
-
-        // Closed — which is the state `push_nav` starts in, not something set here.
-        push_nav(&w, &nav::Stack::new());
-        assert!(!w.get_drawer_open(), "the drawer did not start closed");
-        assert!(
-            drawer_rows(&w).is_empty(),
-            "the drawer is closed and {} of its rows are still in the accessible tree, 420 px off \
-             the right edge",
-            drawer_rows(&w).len()
-        );
-
-        // The control: opened, the very same query finds them — otherwise this test would pass
-        // against a drawer that had been deleted.
-        let mut stack = nav::Stack::new();
-        stack.toggle();
-        push_nav(&w, &stack);
-        let_the_drawer_settle();
+        // **Opened through the shipped callback, on the shipped model.** The old fixture built a
+        // bare `MainWindow` and moved a `nav::Stack` by hand, which was enough while the drawer's
+        // rows were markup literals. §21.3 made them a `VecModel` nothing filled, so the "control"
+        // below — *opened, the very same query finds them* — was querying an empty drawer and the
+        // test failed on the assertion that exists to stop it passing against a deleted drawer.
+        let (w, dir) = a_wired_drawer_at_the_root("closed-drawer", false);
+        assert!(w.get_drawer_open(), "the fixture did not open the drawer");
         assert!(
             !drawer_rows(&w).is_empty(),
-            "opening the drawer does not put its rows in the accessible tree either, so the check \
-             above was not looking at anything"
+            "an open drawer has no rows in the accessible tree, so every check below is looking \
+             at nothing. This is the assertion that went red when §21.3 replaced `MenuPage` with a \
+             model, and it is the one worth keeping first"
         );
 
-        // …and closing it again takes them back out, once the slide has finished. Mid-slide they
-        // stay — that is what *on stage* means and why the window supplies it rather than `open`.
-        stack.toggle();
-        push_nav(&w, &stack);
+        // Closed again, and the rows go with it — once the slide has finished. Mid-slide they
+        // stay: that is what *on stage* means and why the window supplies it rather than `open`.
+        w.invoke_drawer_toggled();
         assert!(
             !drawer_rows(&w).is_empty(),
             "the drawer blanked the instant it was told to close, so it slides out empty"
@@ -16085,9 +16880,21 @@ pub(crate) mod tests {
         let_the_drawer_settle();
         assert!(
             drawer_rows(&w).is_empty(),
-            "the drawer finished closing and {} of its rows are still announced",
+            "the drawer finished closing and {} of its rows are still announced, 420 px off the \
+             right edge",
             drawer_rows(&w).len()
         );
+
+        // …and it comes back, so the emptiness above is the drawer being closed rather than the
+        // model having been cleared on the way out.
+        w.invoke_drawer_toggled();
+        let_the_drawer_settle();
+        assert!(
+            !drawer_rows(&w).is_empty(),
+            "re-opening the drawer leaves it empty, so what the check above measured was the rows \
+             going away for good"
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// **The gate is a boolean, not a geometric accident — and this is the half that says so.**
@@ -18564,11 +19371,14 @@ pub(crate) mod tests {
         // The five §16.8 / §7.4 input callbacks are pressed by a **dispatched event** rather than
         // by `invoke_`, which is the stronger route and the only one that proves the window's own
         // key and pointer handling. Each names the test that dispatches it.
-        const NOT_INVOKED: [(&str, &str); 5] = [
-            (
-                "machine-key",
-                "the_keys_that_are_the_machines_reach_it_and_the_arrows_keep_their_other_job",
-            ),
+        // **`machine-key` left this list when §21.7's second window arrived**, and the gate is what
+        // said so: `open_panel` registers the popped-out window's `key` callback as
+        // `m.invoke_machine_key(text, down)` — §16.8's one definition, invoked rather than
+        // repeated — so the name now has an `invoke_` and the exemption is stale. It is still
+        // dispatched as a real event by
+        // `the_keys_that_are_the_machines_reach_it_and_the_arrows_keep_their_other_job`; what
+        // changed is that it is no longer *only* dispatched.
+        const NOT_INVOKED: [(&str, &str); 4] = [
             ("wheel-moved", "a_drag_on_the_drawn_ring_turns_the_machines_wheel"),
             ("wheel-scrolled", "a_scroll_over_the_drawn_ring_turns_the_machines_wheel"),
             ("centre-down", "a_press_on_the_drawn_centre_button_reaches_the_machine"),
@@ -19198,7 +20008,7 @@ pub(crate) mod tests {
     /// five `Made of` lines were undrawn and so was the one control §7.2 puts on this page.
     ///
     /// It also pins the four bindings that were reading the **bench's** two fields: `enabled` and
-    /// `reason` came from `DeviceRow.startable` / `.cradle-label`, which `window.slint:873` and
+    /// `reason` came from `DeviceRow.startable` / `.cradle-label`, which `window.slint:895` and
     /// `:890` read for the drawn iPod, and `machine-rule` was a literal `true`.
     #[test]
     fn the_devices_page_opens_a_row_and_reaches_its_start() {
@@ -20252,7 +21062,7 @@ pub(crate) mod tests {
     /// `Action::unwired` is asked of all six verbs whether or not a group offers them.
     ///
     /// **`consequence` is in it now, and it is the half that was missing.**
-    /// `primitives.slint:686` is `text: root.enabled ? root.consequence : root.reason` — one slot,
+    /// `primitives.slint:697` is `text: root.enabled ? root.consequence : root.reason` — one slot,
     /// two producers — and only one of them was ever measured. So `removal_consequence` shipped at
     /// **880 px** in a 324 px slot and `devices.png` drew *The entry goes. Its iPod A446, seed
     /// 6182160 and its drive …*, cut off before the clause that says nothing is deleted, which is
@@ -20556,6 +21366,26 @@ pub(crate) mod tests {
                                 Slot::Page,
                                 &format!("verbs.rs: `{}`'s reason", r.verb.label()),
                                 &r.reason,
+                            );
+                            // **And the `sub`, which is the SAME slot and was not swept.**
+                            //
+                            // §21.3's rows carry a second line inside the same hit region — what
+                            // pressing costs — and it is drawn at the row's full measure exactly as
+                            // a refusal is. Nothing measured it, and two of them shipped eliding
+                            // mid-clause on the day this was added: `Doom`'s read *…and starts
+                            // Rockbox — it…* and `Panel`'s *…at whole-number scale — fullscre…*.
+                            // Both were caught by looking at `_out/gui/menu.png`, which is not a
+                            // gate.
+                            //
+                            // **Escape hatches are exempt and that is deliberate.** §9.4 puts a
+                            // command on the row it belongs to — `ipod-boot fat DISK.img tree` —
+                            // and a command line is `mono`, is not prose, and elides on purpose
+                            // rather than being reworded to fit. `escape` is measured nowhere for
+                            // the same reason a path is not.
+                            say(
+                                Slot::Page,
+                                &format!("verbs.rs: `{}`'s sub", r.verb.label()),
+                                &r.sub,
                             );
                         }
                     }

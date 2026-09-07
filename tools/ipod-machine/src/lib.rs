@@ -59,6 +59,8 @@ pub mod pack;
 pub mod png;
 pub mod rsrc;
 pub mod splash;
+/// §13's title list: a `.ipg`'s manifest, its cover art, and which iPods it runs on.
+pub mod title;
 
 pub mod inspect;
 pub mod install;
@@ -1420,7 +1422,7 @@ pub fn titles_under(dir: &std::path::Path) -> Vec<(String, std::path::PathBuf)> 
 
 
 /// Expand a 16-bit A1R5G5B5 or RGB565 pixel to RGBA8, colour-keying magenta.
-fn expand16(v: u16, rgb565: bool) -> [u8; 4] {
+pub(crate) fn expand16(v: u16, rgb565: bool) -> [u8; 4] {
     let (r, g, b) = if rgb565 {
         (
             ((v >> 11) & 0x1F) as u8,
