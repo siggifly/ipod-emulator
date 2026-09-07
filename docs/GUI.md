@@ -3219,6 +3219,44 @@ the snapshot` now deletes files**, because there are now files: it cleared a tim
 pair on disk, which would have left `Config::may_restore` — which asks the files, not the library —
 resuming a machine somebody had just discarded.)*
 
+*(**The restore point is taken when the boot ends, in both modes — 2026-09-07, and this reverses
+a decision rather than filling a gap.** Until now the automatic snapshot was written only when
+`work_on_copy` was on, which is **off by default** because writing to the drive is what the hardware
+does. So a stock device wrote a restore point at exactly one instant — a graceful window close — and
+a person who force-quits, or closes the window while the boot is still running, or has the program
+die under them, paid the whole boot again. That is what meeting a program for the first time
+actually looks like.*
+
+*The reason it was not written here was stated in `emu.rs` and never measured: working directly*
+*"the machine goes on running and goes on writing to the user's own drive, so a restore point taken*
+*here describes a drive that has already moved". It does not. On a drive `ipod-boot make-disk` built*
+*from Apple's 20.1.3 IPSW, through the window's own start path, the machine goes quiet at
+**253 258 689** instructions having issued **544** ATA commands, and sixty million instructions
+later — the whole idle tail — it has issued **545**, the extra one a `STANDBY IMMEDIATE` spinning
+the drive down. RetailOS at its language picker does not write. Where it ever does,
+`Config::pair_is_whole` says so at the next launch and costs the cold boot that would have been paid
+anyway; the failure direction is unchanged.*
+
+*Measured end to end on Apple's own NOR dump and `ipod8g-retail.PRISTINE.img`, by
+`a_boot_leaves_its_own_restore_point_and_this_needs_resources`, which parks **nothing**: the cold
+boot is **41.8 s** and ends at 871 073 072 instructions / 769 ATA / 75 267 lit pixels, and the next
+launch — a fresh thread, no park anywhere — reaches `Running` in **0.15 s** at 871 074 459
+instructions with `booted_at` `None`. The snapshot is 14 213 820 bytes on disk, packed 11:1 from
+159 132 869.*
+
+*It is taken on `boot_end`'s **observed** arm only — the machine seen to go quiet — and never on its
+`snap_at` fallback, which is reached precisely by the machines that never came up: a ROM and a drive
+from two different generations sitting on `Connect to your computer`, firmware spinning for ever, a
+drive that never answers. A restore point over one of those would resume into it on every launch
+afterwards, and a person who had never heard of §11.4's `Discard the snapshot` would own an iPod
+that could not be cold-booted again.*
+
+*Two things this section asked for are **still** not there, and neither moved in this pass: the
+**numerator**, so the cradle still reads `parking` and stops; and **`Cmd::Resume`**, so §12.5's rule
+below is untouched — a machine built and powered off inside one session still gets back to its
+snapshot only by the window dropping the thread and building a new one, which is where the restore
+lives.)*
+
 ### 12.5 Power and boot targets
 
 `Cmd::PowerOff | PowerOn | PowerCycle | Boot(BootTarget)` live on the drawer's **root** page —

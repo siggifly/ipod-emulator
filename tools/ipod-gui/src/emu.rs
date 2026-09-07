@@ -2518,24 +2518,18 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool, deaths: &mut Deaths) -> 
             break;
         }
 
-        // The cold boot's finish line. Written once, then the machine keeps running — the snapshot
-        // is a side effect of getting here, not a reason to stop.
+        // An explicit re-snapshot, asked for at any instant rather than at the boot's end.
         //
-        // **Working directly, this instant is the wrong one to write at.** The machine goes on
-        // running and goes on writing to the user's own drive, so a restore point taken here
-        // describes a drive that has already moved by the time anything could use it: 1.6 GB
-        // written to produce a pair that `pair_is_whole` will correctly refuse. Direct mode's
-        // restore point is written when the machine stops, where nothing can write next. What this
-        // instant still means in both modes is that the cold boot is over, which is the phase
-        // change below.
+        // **The automatic one is no longer here.** It used to be `executed >= snap_at`, which is
+        // 1.6 G instructions — a point chosen because it is a good place to resume *from*, not
+        // because it is where the boot ends, and on a 5.5G that is five times further on than the
+        // language picker. It is taken at the boot's end now, at the bottom of this loop, where
+        // `boot_end` already decides that same question once for the phase.
         let asked = link.resnap.swap(false, Ordering::Relaxed);
-        let reached_snap_at = want_snapshot && executed >= cfg.snap_at;
-        if reached_snap_at || asked {
+        if asked {
             want_snapshot = false;
-            if cfg.work_on_copy || asked {
-                let at = write_restore_point(cfg, &m, (fb_seq > 0).then_some(&fb[..]));
-                link.parked.store(at.unwrap_or(0), Ordering::Relaxed);
-            }
+            let at = write_restore_point(cfg, &m, (fb_seq > 0).then_some(&fb[..]));
+            link.parked.store(at.unwrap_or(0), Ordering::Relaxed);
             link.out.lock().unwrap().phase = Phase::Running;
         }
 
@@ -2606,6 +2600,9 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool, deaths: &mut Deaths) -> 
             }
         }
 
+        // Set under the lock below, acted on after it is released: `write_restore_point` is a
+        // ~150 MB write and the window reads `Out` sixty times a second.
+        let mut booted_now = false;
         let mut out = link.out.lock().unwrap();
         let dropped = out.stats.input_dropped;
         out.stats = Stats {
@@ -2668,6 +2665,16 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool, deaths: &mut Deaths) -> 
             if let Some(measured) = boot_end(settled, executed, cfg.snap_at) {
                 out.phase = Phase::Running;
                 out.booted_at = measured;
+                // **Only the OBSERVED arm, and the difference is not a nicety.** `boot_end`'s two
+                // answers are *the machine went quiet at n* and *nothing was measured, `snap_at`
+                // is the fallback* — and the second one is reached exactly by the machines that
+                // never came up: a boot ROM and a drive from two different generations sitting on
+                // `Connect to your computer`, firmware spinning for ever, a drive that never
+                // answers. Snapshotting one of those would resume into it on every launch
+                // afterwards, and a person who had never heard of `Discard the snapshot` would own
+                // an iPod that could not be cold-booted again. A machine that was never seen to
+                // finish starting has nothing worth restoring to.
+                booted_now = measured.is_some();
             }
         }
         if stop != Stop::BudgetExhausted && stop != Stop::Idle {
@@ -2682,6 +2689,33 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool, deaths: &mut Deaths) -> 
             // so the thread stays alive holding the failure on screen rather than exiting and
             // leaving the power controls inert.
             return wait_after_stop(link);
+        }
+        drop(out);
+
+        // ── The boot's end is where the restore point is taken, in BOTH modes ──────────────────
+        //
+        // **This reverses what this file used to say**, which was that working directly *"this
+        // instant is the wrong one to write at — the machine goes on running and goes on writing to
+        // the user's own drive, so a restore point taken here describes a drive that has already
+        // moved"*. The reasoning was sound and the premise was never measured. It is now, on a
+        // drive `ipod-boot make-disk` built from Apple's own 20.1.3 IPSW, booted by the window's
+        // own path: the machine goes quiet at **253 258 689** instructions having issued **544**
+        // ATA commands, and by **313 387 958** — sixty million instructions later, the whole idle
+        // tail — it has issued **545**, the extra one a `STANDBY IMMEDIATE` spinning the drive
+        // down. RetailOS sitting at its language picker does not write. So the pair taken here
+        // stays whole, and where it does not `pair_is_whole` says so at the next launch and costs
+        // the cold boot that would have been paid anyway.
+        //
+        // **What it buys is the whole of "you only boot once".** The park at `Link::save_on_quit`
+        // is still there and still writes a fresher one, but it only ever fires on a *graceful*
+        // close — and a person meeting this program for the first time force-quits it, or closes
+        // the window while the boot is still running, or has it die under them. Every one of those
+        // used to throw the boot away. The cost of not throwing it away is one ~150 MB write at the
+        // one instant the machine is guaranteed to be idle.
+        if booted_now && want_snapshot {
+            want_snapshot = false;
+            let at = write_restore_point(cfg, &m, (fb_seq > 0).then_some(&fb[..]));
+            link.parked.store(at.unwrap_or(0), Ordering::Relaxed);
         }
     }
     Outcome::Quit
@@ -4351,6 +4385,282 @@ mod tests {
             "a park with no frame left the PREVIOUS park's picture beside a new snapshot"
         );
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **A cold boot leaves its own restore point behind, working DIRECTLY on the drive — so the
+    /// second launch is a resume whether or not anybody parked.**
+    ///
+    /// This is the whole of *"you only boot once"*, and until this pass it was false: the automatic
+    /// snapshot was gated on `cfg.work_on_copy`, which is **off by default** because it is what the
+    /// hardware does. A direct-mode machine therefore wrote a restore point at exactly one instant —
+    /// a graceful window close — and a person who force-quits, or closes the window while the boot
+    /// is still running, or has the program die under them, paid the whole boot again. Every one of
+    /// those is what meeting a program for the first time actually looks like.
+    ///
+    /// **The measurement that made it safe to write here** is on the run loop's own comment: the
+    /// machine goes quiet at 253 258 689 instructions having issued 544 ATA commands and by
+    /// 313 387 958 has issued 545, the extra one a `STANDBY IMMEDIATE`. RetailOS at its language
+    /// picker does not write to the drive, so the pair taken at this instant stays whole — which is
+    /// the thing the old comment asserted was impossible without ever measuring it.
+    ///
+    /// `#[ignore]`, and the name says which kind: it needs `resources/`, which is not in git.
+    ///
+    /// ```text
+    /// cargo test --release -p ipod-gui --bin ipod-emulator \
+    ///     a_boot_leaves_its_own_restore_point_and_this_needs_resources -- --ignored --nocapture
+    /// ```
+    ///
+    /// **How to make it go red**: put `if cfg.work_on_copy` back in front of the
+    /// `write_restore_point` call at the bottom of `session`'s loop. The boot is unaffected and
+    /// still reaches `Running` — the machine is fine, and the promise on the next launch is the
+    /// thing that is gone, which is precisely why this asserts `Restore::Whole` rather than
+    /// asserting that the boot happened.
+    #[test]
+    #[ignore = "needs resources/: Apple's ROM dump and a real drive image, neither of which is in git"]
+    fn a_boot_leaves_its_own_restore_point_and_this_needs_resources() {
+        let res = ipod_machine::settings::repo_root().join("resources");
+        let rom = res.join("roms/retail_5g_MA146_HwVr000B0005_internal_rom_000000-0FFFFF.bin");
+        let pristine = res.join("drives/ipod8g-retail.PRISTINE.img");
+        assert!(
+            rom.is_file() && pristine.is_file(),
+            "this test was asked for by name and {} / {} are not both on this machine. See \
+             tools/ipod-boot/DISK-IMAGES.md.",
+            rom.display(),
+            pristine.display()
+        );
+
+        let dir = std::env::temp_dir().join(format!("ipod-restore-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Never the source: the reference image is `chmod 444` on purpose and RetailOS writes to
+        // its volume during boot. `cp -c` carries the mode across, so the clone is made writable.
+        let work = dir.join("work.img");
+        clone_disk(&pristine, &work).expect("a writable clone of the reference drive");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&work, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+
+        // `machine_config`'s fields, reproduced — and `work_on_copy` false, which is the default and
+        // the whole point of the test. A copy-mode machine has written a snapshot here since before
+        // this pass; the direct-mode one is what was missing.
+        let cfg = Config {
+            nor: ipod_machine::nor::Source::File(rom),
+            disk: work.clone(),
+            workdisk: work.clone(),
+            frozen: dir.join("m.frozen"),
+            snapshot: Some(dir.join("m.snap")),
+            work_on_copy: false,
+            clock: ipod_machine::CLOCK,
+            click_gap: 300_000,
+            snap_at: SNAP_AT,
+            boot: BootTarget::Os,
+            ..Default::default()
+        };
+        // Nothing has booted yet, so there is nothing to restore — stated rather than assumed,
+        // because every assertion below is about a file appearing and a file that was already
+        // there would make all of them pass for the wrong reason.
+        assert_eq!(
+            crate::machine::Restore::of(&cfg),
+            crate::machine::Restore::Never,
+            "the scratch directory came with a restore point in it"
+        );
+
+        let link = Link::new();
+        let cold_started = Instant::now();
+        let thread = {
+            let (cfg, link) = (cfg.clone(), link.clone());
+            std::thread::Builder::new()
+                .name("ipod-restore-test".into())
+                .spawn(move || run(cfg, link))
+                .expect("the machine thread starts")
+        };
+        struct Stopper(Arc<Link>);
+        impl Drop for Stopper {
+            fn drop(&mut self) {
+                self.0.quit.store(true, Ordering::Relaxed);
+            }
+        }
+        let _stop = Stopper(link.clone());
+
+        // Waited for by phase, not by an instruction count: a booted 5G halts, so its instruction
+        // count barely moves and an anchor in instructions never arrives. Ten minutes is a bound on
+        // a hang, not an expectation.
+        let deadline = Instant::now() + std::time::Duration::from_secs(600);
+        loop {
+            let (phase, lit, stats) = {
+                let out = link.out.lock().unwrap();
+                (out.phase.clone(), out.fb_nonzero, out.stats)
+            };
+            match phase {
+                Phase::Running => {
+                    println!(
+                        "  cold boot: {:.1} s wall, {} instructions, {} ata, {lit} lit pixels",
+                        cold_started.elapsed().as_secs_f64(),
+                        stats.executed,
+                        stats.ata_commands
+                    );
+                    assert!(
+                        lit > 1000,
+                        "the panel is {lit} pixels short of a picture. A restore point taken over a \
+                         machine that never drew is a resume to a blank screen, which is worse than \
+                         a cold boot — check the ROM-and-drive pair with `ipod-boot facts`."
+                    );
+                    break;
+                }
+                Phase::Stopped(why) => panic!("the machine died before it booted: {why}"),
+                _ => {}
+            }
+            assert!(
+                Instant::now() < deadline,
+                "ten minutes and the machine had not left `Booting`: {} instructions, {} ata",
+                stats.executed,
+                stats.ata_commands
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+
+        // The write happens just after the phase flips and takes about a second for ~150 MB, so the
+        // pair is waited for rather than read on the same tick. Anything that is not "it appeared"
+        // lands on the assertions below with the reason in them.
+        let until = Instant::now() + std::time::Duration::from_secs(120);
+        while Instant::now() < until && crate::machine::Restore::of(&cfg) != crate::machine::Restore::Whole
+        {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+
+        // ── What the next launch asks, asked here while this machine is still running ───────────
+        let snap = cfg.snapshot.clone().expect("a restore point path");
+        assert!(
+            snap.exists(),
+            "the boot ended and no restore point was written, so the next launch pays the whole \
+             boot again — which is the defect this test exists for"
+        );
+        assert!(
+            cfg.stamp().is_some_and(|p| p.exists()),
+            "the RAM half is on disk and the half that pairs it with the drive is not, so \
+             `pair_is_whole` will refuse it and the write bought nothing"
+        );
+        assert!(
+            cfg.may_restore(true),
+            "both halves are on disk and `may_restore` still says cold-boot"
+        );
+        assert_eq!(
+            crate::machine::Restore::of(&cfg),
+            crate::machine::Restore::Whole,
+            "the cradle would draw `cold boot` over a device that has a whole pair beside it"
+        );
+        // §12.4's picture, so the glass shows what it stopped on rather than reading as off.
+        let png = cfg.parked_frame().expect("a snapshot has a parked frame path");
+        assert!(png.exists(), "no parked frame, so a resumable device draws a dark glass");
+        assert_eq!(
+            std::fs::read(&png).unwrap()[..8],
+            *b"\x89PNG\r\n\x1a\n",
+            "that is not a PNG"
+        );
+        // Non-zero, and the atomic is what the window reads to record `Device::parked_at`.
+        assert!(
+            link.parked.load(Ordering::Relaxed) > 0,
+            "the pair reached the disk and the window was not told, so the shelf says `never parked`"
+        );
+
+        // ── The second launch, which is the whole point ─────────────────────────────────────────
+        //
+        // The first thread is stopped WITHOUT parking — `save_on_quit` is never set — so the only
+        // restore point on disk is the one the boot itself took. That is deliberate: parking is the
+        // path that already worked, and a test that parked would prove the old behaviour.
+        link.quit.store(true, Ordering::Relaxed);
+        let _ = thread.join();
+        drop(_stop);
+
+        let cold_instructions = 871_000_000u64;
+        let link2 = Link::new();
+        let started = Instant::now();
+        let thread2 = {
+            let (cfg, link2) = (cfg.clone(), link2.clone());
+            std::thread::Builder::new()
+                .name("ipod-resume-test".into())
+                .spawn(move || run(cfg, link2))
+                .expect("the second machine thread starts")
+        };
+        struct Stopper2(Arc<Link>);
+        impl Drop for Stopper2 {
+            fn drop(&mut self) {
+                self.0.quit.store(true, Ordering::Relaxed);
+            }
+        }
+        let _stop2 = Stopper2(link2.clone());
+
+        // **Not discriminated on the phase.** `Link::new` starts at `Phase::Booting { target: 0 }`
+        // and `session` only overwrites it once the machine is built and the snapshot read, so a
+        // reader that treats any `Booting` as a cold boot is reading the *default* — which is what
+        // the first draft of this test did, and it failed against a restore that was working.
+        // `Out::booted_at` is the honest signal: `boot_end` fills it in, and its own doc says it is
+        // `None` for a restored machine, *"a resume is not a cold boot"*.
+        let deadline = Instant::now() + std::time::Duration::from_secs(300);
+        let (resumed_in, resumed_booted_at) = loop {
+            let (phase, booted_at) = {
+                let out = link2.out.lock().unwrap();
+                (out.phase.clone(), out.booted_at)
+            };
+            match phase {
+                Phase::Running => break (started.elapsed(), booted_at),
+                Phase::Stopped(why) => panic!("the resumed machine died: {why}"),
+                Phase::Booting { .. } | Phase::Off => {}
+            }
+            assert!(Instant::now() < deadline, "five minutes and the resume had not finished");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
+        assert!(
+            resumed_booted_at.is_none(),
+            "the second launch measured a cold boot ending at {resumed_booted_at:?}, so it paid \
+             the boot again rather than restoring the pair `Restore::of` called whole"
+        );
+        // **`Phase::Running` is published BEFORE the first slice runs**, so `Out::stats` is still
+        // `Stats::default()` at the instant the loop above breaks and reading the instruction count
+        // there gets a zero — which is the "before believing a zero, run the control" shape, met by
+        // waiting for the first publication rather than by relaxing the assertion.
+        let stats_by = Instant::now() + std::time::Duration::from_secs(30);
+        let resumed_stats = loop {
+            let s = link2.out.lock().unwrap().stats;
+            if s.executed > 0 {
+                break s;
+            }
+            assert!(
+                Instant::now() < stats_by,
+                "thirty seconds after the resume and the run loop had published no statistics at \
+                 all, so the machine is not executing"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
+        println!(
+            "  resumed in {:.2} s at {} instructions ({} ata), booted_at {resumed_booted_at:?}",
+            resumed_in.as_secs_f64(),
+            resumed_stats.executed,
+            resumed_stats.ata_commands
+        );
+        // A restored machine carries the snapshot's instruction count. A cold boot would be near
+        // zero here and climbing, which is the same claim as the phase check above made against a
+        // number rather than against a label.
+        assert!(
+            resumed_stats.executed > cold_instructions / 2,
+            "the resumed machine is at {} instructions, which is the start of a boot rather than \
+             the end of one — the snapshot's own count is about {cold_instructions}",
+            resumed_stats.executed
+        );
+        // The bound is generous on purpose: this is a 14 MB read, an unpack and a memory restore,
+        // and the number that matters is that it is not the ~40 s boot above. It has measured
+        // about 1 s. Anything approaching the boot means the restore silently fell through to one.
+        assert!(
+            resumed_in < std::time::Duration::from_secs(20),
+            "the resume took {:.1} s, which is boot-shaped rather than restore-shaped",
+            resumed_in.as_secs_f64()
+        );
+
+        link2.quit.store(true, Ordering::Relaxed);
+        let _ = thread2.join();
         let _ = std::fs::remove_dir_all(&dir);
     }
 
