@@ -136,6 +136,16 @@ export component IPod inherits Rectangle {
     //
     // With no machine `Stats::buttons` is 0 and stays 0, so Rust raises and drops these itself over
     // `tight`. §7.4 says both halves for exactly this reason.
+    // §21.8, issue #28: **where the wheel is being touched**, as an SVG path over a 100 × 100
+    // viewbox. Empty when nothing is on it.
+    //
+    // **A string and not an angle**, and that is the same rule this file keeps everywhere else: the
+    // hit test is `wheel.rs`'s and is never re-derived here, so neither is the drawing's polar
+    // arithmetic. `wheel::ghost_path` is one function with a return value and a test; four
+    // `Math.sin` expressions in a markup file would be a second copy of `point_at`'s convention in
+    // a place nothing can check. `main.rs` pushes it on every machine tick.
+    in property <string> wheel-ghost;
+
     in property <bool> held-menu: false;
     in property <bool> held-next: false;
     in property <bool> held-prev: false;
@@ -324,7 +334,23 @@ export component IPod inherits Rectangle {
             // sentence: `hold-released` is what clears §7.4's held refusal off the cradle label,
             // so a contact torn down rather than lifted would leave *the hold switch works once
             // the iPod runs* standing over the bench for ever.
+            // **The target is taller than the drawing, and it stops where the screen starts.**
+            //
+            // The switch is `HOLD_H` — 0.024 of body height, which is under 16 logical pixels at
+            // hero and about ten at a thumbnail. That is a mouse target somebody has to aim at and
+            // it is not a touch target at all, which matters more here than anywhere else on the
+            // drawing: `button_hold()` going off->on is the only route into Doom's menu, so this is
+            // the control that starts the one game the program ships with.
+            //
+            // Bigger than its drawing is what the centre button already does two hundred lines
+            // down, and for the same reason. What is new is the **bound**: it grows downward to
+            // `glass.y` and no further, so a press on the top corner of the screen is a press on
+            // the screen. Sideways it does not grow at all — past the body's trailing edge is the
+            // well, and a switch you could throw by clicking beside the iPod would be worse than a
+            // small one.
             hold-touch := TouchArea {
+                y: 0;
+                height: Geometry.screen-top * h - Geometry.bezel-ratio * h;
                 pointer-event(ev) => {
                     if (ev.kind == PointerEventKind.down) { root.hold-pressed(); }
                     if (ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel) {
@@ -431,6 +457,37 @@ export component IPod inherits Rectangle {
                     if (root.pressable) { root.wheel-scrolled(ev.delta-y / 1px); }
                     return accept;
                 }
+            }
+
+            // ── Where the wheel is being touched (§21.8, issue #28) ──
+            //
+            // **In trackpad mode the finger is invisible**: the pointer is captured, the cursor is
+            // gone, and the only evidence that anything is being received is the machine reacting.
+            // When it does not react — because it is still booting — there is no way to tell *the
+            // wheel is not receiving me* from *the wheel is receiving me and the iPod is busy*.
+            // That cost the operator a session, and it is the shape `AGENTS.md` §6 is about one
+            // level up: an instrument that cannot show a non-zero reads the same as one at zero.
+            //
+            // **This is UI state on the object, which §6.5 otherwise forbids** — *"a glossy blue
+            // disc is UI state painted on the object, and a screenshot of it is no longer a picture
+            // of an iPod"*. It is drawn in the wheel's own material rather than in a UI colour for
+            // exactly that reason: what appears is the surface lightening under a finger, which is
+            // what a real wheel does under a light, and a screenshot of it is still a picture of an
+            // iPod with a thumb on it. A coloured cursor here would not be.
+            //
+            // Declared before the four marks so it sits under them: a fingertip covers the MENU
+            // label on the real part, but a mark that hid the label would take away the one thing
+            // the ring is for.
+            if root.wheel-ghost != "": Path {
+                width: 100%;
+                height: 100%;
+                viewbox-width: 100;
+                viewbox-height: 100;
+                commands: root.wheel-ghost;
+                // The wheel's own material, one step brighter or darker than it is. `dark-chassis`
+                // rather than a fixed direction, for the reason every other highlight in this file
+                // takes it: `brighter` on a white iPod is invisible.
+                fill: dark-chassis ? #ffffff26 : #0000001c;
             }
 
             // MENU is a word on the real device, so it is a word here. The other three are marks.

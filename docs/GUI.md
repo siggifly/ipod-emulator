@@ -3718,7 +3718,7 @@ Each for a stated reason, not for lack of time.
 | **Games** (§13) | 0.6. The framework work is not done and the keystore is in a private repository. The design lands now so the shape is right when it does. `bind_native()` already resolves imports; `eapp-inspect` already reads a title's table |
 | **iPodLinux as an offered system** | `Os::OFFERED` is 2. Its kernel boot is clean and ZeroLauncher stalls at "Finishing Up…" after a 101 MB download. Offered as a **disabled project state with its escape hatch**, never hidden — and §20 moves the escape hatch off a `make`d vendor binary onto the fetched `ipodlinux::LOADER`, which is what makes it an escape hatch rather than a second dead end |
 | **Target disk mode as a working target** | a USB feature, and USB is unmodelled. `Lost(0xe19b0000)` after 127 952 instructions. Offered as a **disabled project state** |
-| **Audio** | a 1.0 condition. The Wolfson codec is unmodelled |
+| **Audio** | a 1.0 condition. The Wolfson codec is unmodelled. **One carve-out, and it is a different part**: the piezo's click at `0x7000A000` is a PWM register on the PortalPlayer, not the codec, and §21.8 renders it — the two are as related as a car's horn and its stereo |
 | **The ~90 trace instruments, `dis`, `tcb`, `ghidra`, `ipod-film`, the boot recipes, the control socket** | §12.9. Terminal instruments for a person already holding a hypothesis. The bridge is `Copy the command line for this device`, masked by default |
 | **A framebuffer scale, a panel size, a display scale factor and a filter name on shelf row 2** | §12.9, and the same argument one band lower. §17.Q11 asks this slot for `k`; it had grown three more numbers, in mono, on every screen. It reads `2x`, and nothing at `k = 1` |
 | **Instructions per second on shelf row 1** | §12.2. A state slot holds what the machine *is*. A rate is how fast the host is emulating — a fact about this laptop — and the Readout's `MACHINE` block already has it, opt-in |
@@ -5485,6 +5485,8 @@ is the pointing half.
 | **scroll wheel / two-finger trackpad over the ring** | **built** — `ipod.slint`'s ring declares a `scroll-event`, and the MacBook trackpad drives the wheel absolutely per §21.8.1 |
 | touch | to be confirmed against §19.4's `interactive: false` trade |
 | `Esc` → suspend / power off | **built and discoverable** — §21.6's five rows |
+| **throw the hold switch by pointer** | **built** — `ipod.slint`'s `hold-touch`, and its target is taller than its drawing. §21.8.2 |
+| **see where the wheel is being touched** | **built** — a mark on the ring, for every route. §21.8.3 |
 
 **Three rows of this table were `absent` and are now `built`, and the table said otherwise for a
 few hours.** The scroll gap was called *the sharpest of these — a person's first instinct on seeing
@@ -5501,7 +5503,8 @@ centre hold reaches `D_PostEvent` four times and changes nothing. `button_hold()
 
 So the drawn hold switch has to be operable by pointer, not merely drawn, and `H` is not a
 sufficient way to offer it. A person who has been handed a game they cannot start because the one
-control that starts it is an undocumented keystroke has been handed nothing.
+control that starts it is an undocumented keystroke has been handed nothing. **It is built** —
+§21.8.2 below, including the part that was assumed rather than tested.
 
 #### 21.8.1 The trackpad is a click wheel
 
@@ -5693,27 +5696,125 @@ adapter picks the primary and **prefers the one it is already tracking**, by the
 `NSTouch.identity`, so a second finger arriving mid-gesture cannot take the wheel over. The spike
 measured a maximum of one simultaneous touch across 891 events with resting touches refused.
 
-#### Feedback: the sound is the faithful one
+#### Feedback: the guest decides, and the sound is the faithful one
+
+*(Rebuilt 2026-09-07, issue #27. The section this replaces described the actuator being pulsed by
+the window per wheel step, and said the click "should ultimately come from the emulated part". It
+does now.)*
+
+**The operator found the defect by feel.** He turned the wheel on a machine that had not booted,
+felt clicks, and asked: *"why is it happening if the ipod hasnt even booted, shouldnt this being run
+by retailos in a way?"* He is right. On real hardware the click comes out of a **piezo**, driven by
+firmware; an iPod that has not booted is silent, and so is one whose keyclick setting is off. The
+window counting its own wheel steps and pulsing per step is a sound the part cannot make.
+
+##### What decides that a click happens
+
+`Piezo::fires` — the number of times the guest has taken `PWM0_CTRL`'s enable bit at `0x7000A000`
+from clear to set. Nothing else. The route is four links and no branches:
+
+```text
+hw/piezo.rs   bit 31 clear -> set          fires += 1, and the tone is timed off the enable bit
+emu.rs        Stats::piezo_clicks          a census, published with the framebuffer
+main.rs       Live::sample, every 16 ms    click::Watch differences it: how many since last look
+trackpad.rs   Feedback::fire               through one rate limit, to every sink
+```
+
+**Every claim in that chain is measured, and research/05 is where.** RetailOS clicks on SELECT —
+twice, at +0.17 s and +0.12 s on presses 1 300 s apart — and MENU, PLAY, NEXT and PREV each fire one
+click within 0.14 s. Rockbox drives the same register the same way, `0x8080005B` to start and
+`0x00000000` to stop against RetailOS's `0x80800055`, from two firmwares sharing no authorship. And
+the **zero** is measured too, which is the half that matters here: the same run with the wheel
+script removed printed no piezo section at all, on a machine that booted and redrew its panel eighty
+times.
+
+Four things fall out of the one change, and none of them needed a case of its own:
+
+1. **Silent before boot**, which is correct.
+2. **RetailOS's own policy**, SELECT included, rather than the window's guess of one tick per step.
+3. **Silent when Rockbox's keyclick is off**, because the guest genuinely is not clicking.
+4. **Every input route.** A two-finger scroll and §16.8's arrow keys turn the same wheel; the *iPod*
+   clicked, so the sinks fire whatever moved it. The sinks are installed by `wire()` rather than by
+   the trackpad mode's `install`, which is what makes that structural rather than incidental.
+
+**`nothing_clicks_before_the_guest_drives_the_piezo_and_then_every_route_does` is the test**, and it
+carries its own control: the wheel is turned by drag, scroll and both arrow keys and the queue is
+drained to show thirty-odd steps did reach the machine, so the silence is a measurement rather than
+an instrument nobody connected.
+
+##### Two sinks, and the faithful one is the speaker
 
 **A real 5G clicks through a piezo — it makes a *sound*.** The linear actuator is what modders fit
-in its place. So an audible click is the faithful behaviour and haptics is the enhancement, and
-`Detents` is a list rather than a single implementation: adding the piezo's click is one `add_sink`,
-and nothing else here changes. That click should ultimately come from the emulated part at
-`0x7000A000` rather than from the window counting steps, which is why nothing in the window
-synthesises audio.
+in its place. So the audible click is the faithful behaviour and haptics is the enhancement, and
+both exist:
 
-The macOS sink is `NSHapticFeedbackManager`, and **it offers three canned patterns and nothing
-else** — `Generic`, `Alignment`, `LevelChange`. No amplitude, no duration, no envelope. `Alignment`
-is the detent-shaped one, and it is the one the operator confirmed feels right. **It is not to be
-changed and there is no version of this that tunes it** — which leaves exactly **two** patterns for
-everything else this program might ever want to say through a fingertip. That is the entire budget
-the section below is spent out of.
+| sink | what it is | what it does with the tone |
+|---|---|---|
+| `trackpad/mac.rs` | `NSHapticFeedbackManager`, pattern `Alignment` | ignores it — the API takes a canned pattern and nothing else |
+| `click/mac.rs` | `NSSound` over a WAV synthesised per tone | **renders it** — see below |
+
+The audible one **does not wait on audio**. §15 defers audio to 1.0 and that is about the Wolfson
+codec: music, the DAC, the I²S stream. The piezo is not the codec — it is one PWM register on the
+PortalPlayer — and the two are as related as a car's horn and its stereo.
+
+**What the sound is made of, and which step is inferred.** Three of the four are measured and one is
+not, and the one that is not is the pitch:
+
+| | where it comes from |
+|---|---|
+| that a click happened | measured — `Piezo::fires` |
+| how long it ran | **measured** — the simulated microseconds bit 31 stayed set, timed by `hw/piezo.rs` |
+| that it is a square wave | the part — a PWM channel driving a piezo is a square wave, not a sine |
+| **what pitch it was** | **inferred**, from Rockbox's `91225/hz` relation over the wave's low byte |
+
+research/05 is explicit that the pitch is the soft step: Apple's four wave constants land on 1073,
+507, 633 and 815 Hz under that relation, and *"four constants from Apple's image landing in the
+audible beeper band under a formula from a different codebase is a coincidence worth recording; it
+is not proof, and no run has yet confirmed a frequency."* Nothing here confirms one either. What
+this does is make the inference **audible**, which is the cheapest way it will ever be falsified: a
+person who has heard a real 5G knows within a second whether it holds.
+
+**The duration was not modelled before and now is.** `AsyncPiezo` programs the length into
+`TIMER2_CFG` and never into this register, so `hw/piezo.rs` times it between the write that sets bit
+31 and the write that clears it — which is a number that can disagree with the static reading and
+say so. It is `None` until a tone has finished, deliberately: a renderer handed `0` cannot tell a
+zero-length click from a click nobody has measured yet, and that is §6's shape. Apple's own `0xBB8`
+— 3 ms, from the call site behind the settings bit — stands in for exactly that gap.
+
+**One departure from the register, stated as one:** the first and last 0.3 ms of the buffer are
+ramped. That is not modelling the disc's mechanical response, which nothing here has measured; it is
+stopping the *host's* DAC from adding a step-edge click louder than the 3 ms tone it brackets.
+
+**The edge marks are silent on the speaker and that is the design.** A `Mark` is a line drawn on a
+rectangle of glass; the actuator can say *you crossed a boundary on your trackpad* without claiming
+anything about the device, and a speaker cannot.
+
+##### What each sink can and cannot claim
+
+The macOS actuator offers **three canned patterns and nothing else** — `Generic`, `Alignment`,
+`LevelChange`. No amplitude, no duration, no envelope. `Alignment` is the click-shaped one and it is
+the one the operator confirmed feels right. **It is not to be changed and there is no version of
+this that tunes it** — which leaves exactly **two** patterns for everything else this program might
+ever want to say through a fingertip. That is the entire budget the section below is spent out of.
 
 **Force Touch hardware only** — MacBook Pro 2015 and later, Air 2018 and later, Magic Trackpad 2 and
 later. Older pads report touches perfectly and cannot actuate. There is no API that says which you
 have and none that reports a failed pulse, so `Detents::present` is a claim about the *build* and
-never about the hardware; a pad with no actuator is silent, and this document is the only place that
-says so. That is exactly the gap a second sink closes.
+never about the hardware; a pad with no actuator is silent. **That is the gap the speaker closes**,
+and it closes it for every Mac that is not a laptop as well.
+
+The speaker can claim slightly more and still not everything: `NSSound::initWithData:` answering
+`nil` is a real failure it reports, and
+`macos_takes_the_container_and_agrees_about_how_long_it_is` is the test that asks macOS to read the
+synthesised WAV back and agree about its length. What it cannot claim is that anything came out of a
+speaker — the volume may be down, the output may be a device nobody is listening to, and `play`
+answers `true` for all of it.
+
+**Neither sink is installed under `cfg(test)`.** Both are AppKit, `wire()` is called by dozens of
+tests on threads the harness owns, and the audible one would play clicks out of the operator's
+speakers during `cargo test`. What that leaves untested is nothing that call could have covered:
+the routing is proven by a counting sink through the same `add_sink`, and each platform sink is
+proven in its own file.
 
 #### Feeling the geometry: the bezel, in software
 
@@ -5807,27 +5908,34 @@ its own control** — the same 40 frames through a detector with no arming band,
 identical otherwise, which is §6's shape. Setting `ARM_MM` to 0.0 is how to make the first assertion
 go red.
 
-#### A dropped detent is worse than a missed edge
+#### A dropped click is worse than a missed edge
 
-One actuator now has two callers, and the two failures are not equally bad. A missed edge is a
-boundary you have to find by feel. **A dropped detent is a wheel that stopped turning**, which is the
-input not working at all. So the priority is structural rather than weighted, and it is enforced in
-the one place it can be:
+One actuator has two callers, and the two failures are not equally bad. A missed edge is a boundary
+you have to find by feel. **A dropped click is something the emulated iPod did that nobody was told
+about**, and it is rare by construction — research/05 measures one per button press on RetailOS and
+one per four detents on Rockbox, so there is never a second one along in a moment to stand in for
+it. So the priority is structural rather than weighted, and it is enforced in the one place it can
+be:
 
-**`Ticks::due` reads `self.detent`, and no mark ever writes that field.** There is no sequence of
-marks — none, one, two hundred in the same microsecond — that can reach the state a detent's
+**`Ticks::due` reads `self.click`, and no mark ever writes that field.** There is no sequence of
+marks — none, one, two hundred in the same microsecond — that can reach the state a click's
 decision is made from, so none can delay, refuse or coalesce one.
 `a_flood_of_edge_marks_cannot_refuse_a_single_detent` is the test, and changing one word in `due`,
-`self.detent` for `self.any`, is how to make it go red. The yielding is all the other way: a **mark**
+`self.click` for `self.any`, is how to make it go red. The yielding is all the other way: a **mark**
 waits on `any`, so it stands off for `TICK_FLOOR` after a pulse of either kind, because two pulses
 closer than that are one blur on a single actuator.
 
-And for the edge that is on by default the contention never arises in the first place, which is a
-property of the geometry rather than of the limiter: a detent comes from `Act::Moved`, and moving
-*across* `CENTRE` is exactly the frame in which the contact starts or ends — `Act::Down` or
-`Act::Up`. `the_centre_edge_never_shares_a_frame_with_a_detent` sweeps in and out at six angles and
-asserts it. `a_band_edge_does_share_its_frame_with_a_detent_which_is_why_it_is_not_on` asserts the
-contrast, which is the argument against that variant made mechanical.
+**The contention is now much rarer than it was, and for a reason that is not this limiter's.** The
+two callers used to arrive on the same event stream — a click per `Act::Moved`, a mark per crossing,
+both at the pad's 124 Hz. Since the click comes off the machine's own census at `main.rs`'s 16 ms
+tick, the two are not even on the same clock. What is preserved is the *guarantee*, because a
+guarantee that holds only while the callers happen to be far apart is not one.
+
+The geometry argument below it stands unchanged and is worth keeping for the same reason: a mark on
+`CENTRE` lands in the frame a contact starts or ends — `Act::Down` or `Act::Up` —
+which `the_centre_edge_never_shares_a_frame_with_a_detent` sweeps in and out at six angles to
+assert, and `a_band_edge_does_share_its_frame_with_a_detent_which_is_why_it_is_not_on` asserts the
+contrast for the variant that is off.
 
 #### Trying the variants without a rebuild
 
@@ -5855,17 +5963,20 @@ in the `off` arm, and the comparison between arms is one number rather than a fe
 
 #### The rate limit, and where the real ceiling is
 
-**The detent is asked for by `main.rs` after the machine has taken the steps**, not by the pad after
-the hand has moved. With no machine on the bench the wheel does not turn, and an actuator clicking
-against an empty bench is a lie told through somebody's fingertip.
+**The click is asked for by `main.rs` after reading the machine's own census**, not by the pad after
+the hand has moved. That is issue #27 above; what it means here is that the floor's argument has
+changed and is now stronger.
 
-One pulse per sample at most, and never within **6 ms** of the last. Apple's own
+One pulse per reading at most, and never within **6 ms** of the last. Apple's own
 `NSAlignmentFeedbackFilter` withholds feedback when the thing being aligned moves too fast, which is
 the platform saying out loud that the actuator has a rate; there is no published figure, so 6 ms is
-the spike's. It sits above the ~39 detents a second an ordinary spin produced and *below* the pad's
-own 124 Hz mean, which is what makes it **never bite at any speed a hand reaches**: samples arrive
-about 8 ms apart, so two consecutive ones are never inside the floor, and the only thing ever
-coalesced is a second detent inside a single sample. 32 of 278 were.
+the spike's. **It cannot bite on a click**, and that is now a property of the caller rather than a
+measurement of a hand: readings are 16 ms apart, so two of them are never inside the floor, and the
+only thing that can be coalesced is a second click found in the same reading — which means the guest
+clicked twice inside 16 ms, against measured policies of one per press and one per four detents.
+
+What the floor still does is hold the **edge marks** off, which is what it is for: those arrive at
+the pad's own 124 Hz and would otherwise stack against a click on one actuator.
 
 **The sampling ceiling is further away than an incremental encoder's, and this corrects the obvious
 worry.** A fast spin is about 4 rotations a second — 384 detents a second — which is three times the
@@ -5975,6 +6086,26 @@ detent, whether 1.5 mm of hysteresis feels like one crossing or like a delay, an
 alone is enough geometry to work the wheel without looking, are all open and all settled the same
 way: by running the variants above, in one sitting, against `IPOD_TRACKPAD_EDGES=off` as the control.
 
+**The one thing that has changed about that question is the noise floor, and whether it was the
+problem cannot be answered here.** The operator reported feeling detents and *not* the edges — and
+at the time the edges were competing against a pulse per wheel step, a stream the hardware never
+made. That stream is gone: the actuator now fires when the guest's piezo does, which on RetailOS is
+about once per button press. So a crossing of `CENTRE` should now arrive into silence rather than
+into a run of ticks. Whether it is therefore *perceptible* is a claim about a fingertip and this
+document will not make it — nobody has felt it. The comparison to run is the same one, and the
+control arm is worth more than it was: with `IPOD_TRACKPAD_EDGES=off` on a machine that is not
+booted, the pad should now be **completely silent**, which it never was before.
+
+**Nor has anybody heard the click.** `macos_takes_the_container_and_agrees_about_how_long_it_is`
+proves macOS reads the synthesised WAV and agrees about its length; it stops short of `play`,
+because a test suite that made noise on the operator's machine is one people stop running. Whether
+1073 Hz for 3 ms out of a laptop speaker resembles a 5G's tick — and whether Rockbox's
+`91225/hz` relation is even the right one — is settled by a person who has heard the real thing.
+
+**Both of those are best judged on one machine in one sitting**, because the two feedbacks share an
+actuator's worth of attention: boot an iPod, press MENU, and either one click arrives or two things
+happen at once.
+
 **The click path has never been exercised by a hand.** The spike's capture contains **zero** click
 lines — nobody pressed the pad during it — so everything above about domes and the centre button is
 routing that is tested in isolation and has not been seen to fire from a real press. It is not an
@@ -6005,6 +6136,123 @@ is the only moment at which a monitor's being alive can be observed without a ha
 it is live *and* whether the surface could be armed. Both halves of the zero, in one line, before
 anybody has pressed anything.
 
+#### 21.8.2 The hold switch, by pointer
+
+*(Built with §21. Verified by pointer 2026-09-07, issue #19.)*
+
+The switch is drawn on the top edge where it is on the hardware, and `ipod.slint`'s `hold-touch`
+raises `hold-pressed` / `hold-released` through `bench.slint` and `window.slint` to a handler that
+queues `WheelEvent::Hold(!hold)`. The position it goes to is read off `Stats::hold` — the **machine's
+own field** — so the switch and the drawing cannot disagree about which way it is thrown, and it is
+a position rather than a press: `hold-released` clears §7.4's held sentence and sends nothing.
+
+**One half of that was assumed rather than tested, and the assumption was the important one.**
+`the_hold_switch_is_the_machines_and_refuses_with_its_reason_when_there_is_none` enters at
+`invoke_hold_pressed()`, which is the window's own callback — so everything between a pixel and that
+callback was uncovered. Deleting `hold-touch` from `ipod.slint` entirely leaves that test **passing**.
+`a_pointer_on_the_drawn_hold_switch_throws_it` dispatches a real pointer event at the switch's own
+coordinates and fails, which is what makes issue #19's *"Done when: the drawn hold switch toggles by
+pointer"* a measured claim rather than a reading of the markup. Its own control is a press one
+switch-height above the body, which must reach nothing — otherwise the arithmetic could be pointing
+anywhere on the chassis and `body-touch` would cover for it.
+
+**The target is taller than the drawing, and it stops where the screen starts.** `HOLD_H` is 0.024
+of body height — under 16 logical pixels at hero, about ten at a thumbnail. That is a mouse target
+somebody has to aim at, and it is not a touch target at all, which matters more here than anywhere
+else on the drawing: `button_hold()` going off→on is the only route into Doom's menu, so this is the
+control that starts the one game the program ships. Bigger than its drawing is what the centre
+button already does; what is new is the **bound** — it grows downward to `glass.y` and no further,
+and not at all sideways, because past the body's trailing edge is the well and a switch you could
+throw by clicking *beside* the iPod would be worse than a small one.
+`the_hold_switchs_target_is_bigger_than_its_drawing_and_stops_at_the_screen` asserts all three: the
+press under the drawing lands, the press on the screen does not, and the press beside the iPod does
+not.
+
+**What is still unproven** is the end of issue #19's own sentence: *"and Doom's menu can be reached
+from a cold start using nothing but the mouse."* That needs a machine with Doom on it and a hand, and
+nothing here can stand in for it.
+
+#### 21.8.3 Where the wheel is being touched
+
+*(Built 2026-09-07, issue #28. `wheel::Grip`, `wheel::ghost_path`, and one `Path` in `ipod.slint`.)*
+
+**In trackpad mode the finger is invisible.** The pointer is captured, the cursor is gone, and the
+only evidence that anything is being received is the machine reacting. When it does not react —
+because it is still booting, as happened — there is no way to tell *the wheel is not receiving me*
+from *the wheel is receiving me and the iPod is busy*. That distinction cost the operator a session,
+and it is §6's shape one level up: **an instrument that cannot show a non-zero is indistinguishable
+from one reading zero.**
+
+##### It is the window's finger, not the machine's position
+
+`Stats::position` is the obvious source and it is the wrong one. The machine's position is a queue
+behind — §16.11's own measurement is a thirty-six-click drag taking 120 ms of the iPod's own time to
+drain — so a mark drawn from it **freezes exactly when the machine is busy**, which is the answer to
+the opposite of the question. Drawn from `wheel::Finger` it says *I am receiving you* whether or not
+anything is consuming it.
+
+The risk that buys is two counters and nothing making them agree, so the arithmetic that makes them
+agree is asserted rather than assumed: `hw/wheel.rs`'s `apply` is
+`position = (position + d).rem_euclid(96)`, and
+`the_steps_sent_to_the_machine_add_up_to_the_position_the_window_draws` walks every route in both
+directions across the wrap and checks that the `Step`s emitted sum to the delta the window moved
+itself by. The machine lands where the ghost already is.
+
+##### What each route knows, and what may therefore be drawn
+
+| route | what the input carries | drawn as |
+|---|---|---|
+| drag on the drawn ring | an angle | a **contact patch**, 34° of the ring |
+| trackpad contact (§21.8.1) | an angle | the same |
+| scroll gesture | a delta, 60 logical px a detent | the same — accumulated, and fine enough that it is not a jump |
+| `↑` `↓` `←` `→` | **one detent, and no position at all** | **one detent**, 3.75° |
+| nothing on the wheel | — | nothing |
+
+**The last row of that table is issue #28's own last requirement**: *nothing is drawn that implies a
+continuous gesture where the input was discrete.* A key asks for a detent, not for somewhere to be,
+so what is drawn is the detent — not a fingertip, and not a glide.
+`a_key_draws_one_detent_and_a_finger_draws_a_fingertip` is the assertion.
+**Nothing animates it**, which is the same requirement kept in the markup: the mark is wherever the
+wheel is on the frame it is drawn, so a pointer moves it at the pointer's rate and a key moves it
+3.75° at once — each of which is what that input did.
+
+**34° is the one number here that is a judgement.** The real arithmetic is wider: a 5G's ring midline
+is at 10.6 mm, so its circumference is 67 mm, and a fingertip's ~10 mm contact patch is **54°** —
+over an eighth of the wheel. A patch that size says *somewhere on the left* and nothing else, and the
+mark's other job is to say where. 34° is nine detents: wide enough to read as a fingertip rather than
+a cursor, narrow enough to point. It is the number to change if it reads wrong.
+
+##### It is drawn in the wheel's own material, which is how it survives §6.5
+
+§6.5 forbids UI state painted on the object — *"a glossy blue disc is UI state painted on the object,
+and a screenshot of it is no longer a picture of an iPod"* — and a mark showing where a finger is, is
+exactly that. So it is drawn as the wheel's own surface **lightening under the finger**, one step
+brighter on a dark chassis and one step darker on a light one, which is what a real wheel does under
+a light. A screenshot of it is still a picture of an iPod with a thumb on it. A coloured cursor would
+not be, and is why the rule is kept rather than waived.
+
+**And it is a thing the real part could never do.** A real click wheel gives no visual feedback at
+all, because your finger is on it and you know where you are. On glass you do not, which is the same
+absence the geometry marks attack from the other side; this is the visual half of the bezel.
+
+##### The arithmetic is Rust's and the markup gets a string
+
+`ipod.slint`'s own rule is that *"the hit test is `wheel.rs`'s and is never re-derived here"*. The
+same rule applies in the other direction: Slint has `Math.sin`, so four trigonometric expressions
+and a string interpolation would compile — and they would be a second copy of `point_at`'s
+convention living where no test can reach. `wheel::ghost_path` returns an SVG annular sector over a
+100 × 100 viewbox, `main.rs`'s `machine_controls` pushes it, and the markup has a `Path`.
+
+**`machine_controls` is the single writer**, which matters for one reason beyond tidiness: it is the
+function *both* no-machine exits already call, so a mark cannot outlive the machine whose wheel it
+was on.
+
+**Every geometric assertion about that string would pass over a path Slint refused to parse**, which
+is a shape this document keeps naming. So
+`where_the_wheel_is_being_touched_is_drawn_on_it` renders the bench three times — hovering, pressed,
+lifted — and counts changed pixels. The third shot is the control: the pointer never moves, so a
+difference between the first two that survived the lift would have been hover and not the ghost.
+
 ### 21.9 What this overturns
 
 Stated, because §18 requires it and because a redesign that does not name its casualties is hiding
@@ -6018,6 +6266,8 @@ them.
 | `Parts` as a destination | a top-level drawer page | §21.3. **Still reachable** — it is where a fetch or a missing part sends you, and `Provide…` has to live somewhere |
 | device page ordering | six facts, then verbs | §21.3 |
 | §15's "no second window" | ruled out entirely | narrowed: no second *machine*, but a second *view* of one panel — §21.7 |
+| §21.8.1's window-generated detents | the window counted wheel steps and pulsed per step | the guest's own piezo decides — §21.8's *Feedback*, issue #27. An iPod that has not booted is silent |
+| §6.5's *no UI state on the object* | absolute | narrowed **once**: where the wheel is being touched, drawn in the wheel's own material — §21.8.3, issue #28. The rule holds everywhere else and the material is why |
 
 The device page's facts, §14.1's disable-with-a-reason, §12.5's refusal sentences, §12.6's
 fullscreen table, the 8-primitive discipline and the glyph rule are all **kept**.

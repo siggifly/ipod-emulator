@@ -45,7 +45,7 @@ pub use hw::wm8758::Wm8758;
 pub use hw::ata::{Ata, PpDmaCtl};
 pub use hw::cop::{Core};
 pub use hw::video::{Bcm, BcmOp};
-pub use hw::piezo::{Piezo, Fire};
+pub use hw::piezo::{Fire, Piezo, Tone};
 pub mod compose;
 pub mod doom;
 pub mod fat;

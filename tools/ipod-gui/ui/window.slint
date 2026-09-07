@@ -173,6 +173,9 @@ export component MainWindow inherits Window {
     // the ~1.6 s of wall time the emulator holds the release, and that is a true and interesting
     // fact about this emulator rather than a lag to hide.
     in property <bool> machine-hold: false;
+    // §21.8, issue #28: where the wheel is being touched, pushed by `machine_controls` on every
+    // machine tick and cleared with the machine.
+    in property <string> wheel-ghost;
     in property <bool> held-menu: false;
     in property <bool> held-next: false;
     in property <bool> held-prev: false;
@@ -847,6 +850,7 @@ export component MainWindow inherits Window {
                 hold-refusal: root.hold-refusal;
                 held-sentence: root.held-sentence;
                 hold: root.machine-hold;
+                wheel-ghost: root.wheel-ghost;
                 held-menu: root.held-menu;
                 held-next: root.held-next;
                 held-prev: root.held-prev;

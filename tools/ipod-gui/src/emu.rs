@@ -766,6 +766,26 @@ pub struct Stats {
     // *no* is dead rather than deferred, so it goes rather than getting a new allow.
     /// Arrivals at each of [`WATCHED`], in that order.
     pub enters: [u64; WATCHED.len()],
+    /// **The click — how many times the guest has driven `PWM0_CTRL`'s enable bit from clear to
+    /// set**, straight off `Piezo::fires`.
+    ///
+    /// **This is what decides that the window clicks**, and it is the whole of issue #27: on real
+    /// hardware the click comes out of a piezo the firmware drives, so an iPod that has not booted
+    /// is silent and one whose keyclick is switched off stays silent. A window that counted its own
+    /// wheel steps instead clicked on a logo screen, which is a sound the part could not make.
+    ///
+    /// It is a **census and not an event**, for the reason `Stats::wheel_sets` is one: a flag reads
+    /// the same at one click and at thirty, and the reader here is a 60 Hz tick that has to be able
+    /// to say how many happened since it last looked.
+    pub piezo_clicks: u64,
+    /// **The last tone that finished** — the wave it ran and how long the enable bit was set, in
+    /// simulated microseconds. `None` until one has finished, which is not the same as a zero-length
+    /// click and must not be rendered as one.
+    ///
+    /// Carried because the *sound* needs it and nothing else can supply it: the pitch is in this
+    /// register's low byte and the duration is in `TIMER2_CFG`, so the length is measured off the
+    /// enable bit by `Piezo` rather than decoded here.
+    pub piezo_tone: Option<(u32, u32)>,
     /// Co-processor activity **since the machine started running in this process**. Both counters
     /// live on `Bcm` and `Machine::restore` builds a fresh one, so after a restore they start at
     /// zero even though the surface they filled is right there on the panel. Labelled accordingly
@@ -1769,6 +1789,10 @@ fn collect(m: &Machine, started: Instant, base: (u64, u32)) -> Stats {
         s.bcm_frames = b.frames;
         s.bcm_commands = b.commands.len();
     }
+    // The click. `piezo` is a plain field rather than an `Option` — it observes and never owns, so
+    // it is attached unconditionally and a run with no clicks reports zero rather than nothing.
+    s.piezo_clicks = m.mem.piezo.fires;
+    s.piezo_tone = m.mem.piezo.tone.map(|t| (t.wave, t.usec));
     s
 }
 

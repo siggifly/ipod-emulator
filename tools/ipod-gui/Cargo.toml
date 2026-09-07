@@ -188,6 +188,11 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
     "NSResponder",
     "NSWindow",
     "NSHapticFeedback",
+    # §21.8's audible click. `NSSound::initWithData:` takes the WAV `src/click.rs` synthesises from
+    # the wave word the guest wrote to `PWM0_CTRL` — the FAITHFUL half of the feedback, and the only
+    # half a Mac with no Force Touch pad has. A feature name inside a crate that is compiled either
+    # way, so it costs no crates, exactly like the nine above it.
+    "NSSound",
     "block2",
 ] }
 objc2-foundation = { version = "0.3", default-features = false, features = [
@@ -195,6 +200,8 @@ objc2-foundation = { version = "0.3", default-features = false, features = [
     "NSSet",
     "NSEnumerator",
     "NSGeometry",
+    # The bytes `NSSound::initWithData:` takes. Same case as the line above: a feature, not a crate.
+    "NSData",
 ] }
 block2 = "0.6"
 

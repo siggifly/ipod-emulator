@@ -43,8 +43,18 @@ use objc2_app_kit::{
 use objc2_foundation::NSString;
 
 use super::{
-    add_sink, note, verbose, Act, Contact, Detents, Frame, Left, Mark, Mode, Phase, Source, Surface,
+    note, verbose, Act, Contact, Detents, Frame, Left, Mark, Mode, Phase, Source, Surface,
 };
+
+/// **The actuator, as a sink for the whole window rather than for the mode.**
+///
+/// It is deliberately *not* installed by [`install`], and that is issue #27's fourth consequence
+/// made structural: what fires it is the emulated piezo, so a wheel turned by a two-finger scroll or
+/// by §16.8's arrow keys clicks exactly as one turned by a finger on the pad. Tying it to the
+/// trackpad mode's installation would have made haptics a feature of a mode nobody has to engage.
+pub fn actuator() -> Option<Box<dyn Detents>> {
+    Some(Box::new(Actuator))
+}
 
 /// **The chord that makes the trackpad the wheel: ⌃⌘T.**
 ///
@@ -157,12 +167,13 @@ impl Source for NsTouch {
 }
 
 /// The feedback half. **The enhancement, not the faithful one** — see [`Detents`]: a real 5G clicks
-/// through a piezo and makes a sound, and this actuator is what modders fit in its place.
+/// through a piezo and makes a sound, and this actuator is what modders fit in its place. The
+/// faithful one is `click/mac.rs`, and both are driven off the same emulated register.
 struct Actuator;
 
 impl Detents for Actuator {
     fn describe(&self) -> &'static str {
-        "the trackpad's actuator (Alignment for a detent, LevelChange for an edge)"
+        "the trackpad's actuator (Alignment for a click, LevelChange for an edge)"
     }
 
     /// **A claim about the build and never about the hardware.** Force Touch pads only — MacBook
@@ -174,7 +185,13 @@ impl Detents for Actuator {
         true
     }
 
-    fn detent(&self) {
+    /// **`Alignment`, and the tone is ignored on purpose.**
+    ///
+    /// The API takes a canned pattern and nothing else — no amplitude, no duration, no envelope —
+    /// so there is no way to spend the wave or the length on it even if there were reason to.
+    /// `Alignment` is the detent-shaped one, it is the one the operator has confirmed feels right,
+    /// and it is not to be changed.
+    fn click(&self, _: Option<crate::click::Tone>) {
         NSHapticFeedbackManager::defaultPerformer().performFeedbackPattern_performanceTime(
             NSHapticFeedbackPattern::Alignment,
             NSHapticFeedbackPerformanceTime::Now,
@@ -184,7 +201,7 @@ impl Detents for Actuator {
     /// **An edge, in the one pattern the detent does not use.**
     ///
     /// The whole design space is three canned patterns — no amplitude, no duration, no envelope —
-    /// and `Alignment` is spoken for: it is the detent, and the operator has confirmed it feels
+    /// and `Alignment` is spoken for: it is the click, and the operator has confirmed it feels
     /// right, so it is not available and not to be changed. That leaves `LevelChange` and
     /// `Generic`, and `LevelChange` is the documented *"you crossed into something"* one, which is
     /// exactly what a boundary is.
@@ -464,7 +481,6 @@ impl Drop for Handle {
 /// rather than assumed away, because a monitor that is not there is a mode that reports nothing,
 /// and *nothing* is the reading `AGENTS.md` §6 says never to believe on its own.
 pub fn install(reach: View, act: Rc<dyn Fn(Act)>) -> Option<Handle> {
-    add_sink(Box::new(Actuator));
     let source = NsTouch { reach, view: RefCell::new(None) };
     let plumbing = Rc::new(Plumbing {
         mode: Mode::new(Box::new(source), act),
