@@ -1740,8 +1740,11 @@ no room: moving the later images by 57344 bytes needs 13952512 of a 13895680-byt
 ```
 
 on every drive it has been tried against — one built here by `ipod-boot make-disk`, and one off real
-hardware. **Reported, not independently reproduced**; the numbers above are one measurement and the
-recipe to re-check it is `ipod-boot install-linux` against a drive of either kind.
+hardware. ~~**Reported, not independently reproduced**~~ — **reproduced 2026-09-07**, on a drive
+built that minute by `ipod-boot make-disk` from `iPod_20.1.3.ipsw`, against the **v2.8.1 release**
+loader rather than the vendored 2.9.0d, and the refusal is the same string to the byte. It exits 1.
+The `0x0C` arm was re-checked at the same time and refuses `ipod8g-retail.PRISTINE.img` correctly,
+so both arms of this command do what they say.
 
 The arithmetic in `install::install_linux` is coherent with them, which is what makes the report
 worth recording rather than discounting. `osos` is written at `entry_offset` inside its own slot,
@@ -1770,6 +1773,76 @@ fixed.
 report's `firmware partition at …, N image(s)` line, which prints before the refusal. If the
 partition really is packed to one sector, the fix is to grow the firmware partition in `make-disk`
 rather than to shrink the payload.
+
+### Settled 2026-09-07 — the room exists, it is just not declared
+
+`make-disk` says so itself, on the line before it writes: *"Firmware-20.6.3 — 13895680 bytes (27140
+sectors), and it **fits MBR partition 0 exactly**"*. So the partition is packed to one sector because
+it is **sized to the payload**, and the diagnosis above is right.
+
+But the disk is not full. Read the MBR of either drive and the two partitions do not touch:
+
+| | start LBA | sectors | ends at |
+|---|---|---|---|
+| partition 0, firmware | 63 | 27 140 | 27 203 |
+| partition 1, FAT32 | **32 768** | 16 744 448 | — |
+
+**5 565 unallocated sectors — 2.85 MB — sit between them**, and `delta` is 112. On a `make-disk`
+drive every byte of that gap is zero (checked: the only distinct byte value in all 2 849 280 of them
+is `00`). Declaring partition 0 as **32 705** sectors — 63 + 32 705 = 32 768, abutting partition 1
+with no overlap — makes the command complete, and completely:
+
+```text
+firmware partition at 0x7e00, 3 image(s): osos, rsrc, aupd
+moving 2 later image(s) on by 57344 bytes
+installed at +0x735a00, 56912 bytes, checksum 0x2cd84e43
+… 1767 file(s) in 408 directory(ies), 213317701 bytes
+ipodloader.conf — ZeroSlackr
+```
+
+`+0x735a00` is the entry offset research/16 records, so this is the drive that note was measuring.
+
+**Two things to check before doing it in `make-disk`, and the second is the sharp one.**
+
+1. **`ipodpatcher` does not make this check at all.** `add_bootloader` computes the same `delta` and
+   calls `diskmove`; the space test above it is literally `/* TODO: Check the size of the
+   partition. */`. So the tool that does this on real hardware moves images past the declared end of
+   the firmware partition without asking, which is evidence that the gap is where they are meant to
+   go — AGENTS.md §4, upstream is the oracle.
+2. **The gap is NOT empty on a drive off real hardware.** The same 5 565 sectors on
+   `ipod8g-retail.PRISTINE.img` hold high-entropy data with no strings in it. Growing the partition
+   is safe on a drive `make-disk` built and is **not** demonstrated safe on somebody's own iPod, and
+   these are the drives AGENTS.md §3 is about. Whatever the fix is, it has to observe what is in
+   that gap rather than assume it, and a drive off hardware is `0x0C` anyway so it is refused one
+   step earlier today.
+
+The 32 705-sector drive above was built **in scratch, as an instrument control** — to find out
+whether these rows can produce a number at all, per AGENTS.md §6 — and is not a fix. Nothing in the
+repository writes a partition table like that.
+
+**What the control saw, which is the reason to bother fixing this.** `ipod-boot loader` on that
+drive, 2 G at `--clock=5`, real 5G NOR: **3 870 ATA commands, no unmapped accesses, 7 pictures,
+4 406 lit pixels**, and the last frame is not the bootloader's menu but ZeroSlackr's own console —
+
+```text
+==========================
+  Welcome to Keripo's
+  Project ZeroSlackr
+==========================
+- Initiating iPodLinux
+- Syncing partition
+hda: no DRQ after issuing WRITE
+```
+
+So the whole chain works on the **v2.8.1 release** loader, which nothing had run before: ipodloader2
+is entered at `0x10735a00`, reads the FAT32 volume, loads the 1 531 200-byte `vmlinux`, and the
+kernel reaches userland. Only the partition arithmetic stands between the matrix and that number.
+
+**And it exposes a new one, unrelated to this entry**: `hda: no DRQ after issuing WRITE`, repeated —
+the kernel's IDE driver gets no DRQ on WRITE, while its reads clearly work, since it got this far.
+That is a better-specified successor to research/16's open question about where the `ide` probe
+stops. Not filed as its own entry yet because it was seen on a drive whose partition table this
+project does not write; it wants re-observing on a legitimately built one.
 
 ## The cold boot takes longer in simulated time than hardware does — MOSTLY EXPLAINED 2026-08-18
 
