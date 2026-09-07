@@ -5581,7 +5581,6 @@ fn push_fit(window: &MainWindow, fit: &fit::Fit, window_logical: f64) {
     window.set_screen_h(fit.panel_h as f32);
     window.set_screen_scale(fit.k);
     window.set_too_short(fit.too_short);
-    window.set_fidelity(fidelity(fit.k).into());
     window.set_select_d(select_d(fit.hero_logical));
     let (headline, body) = short_pane(fit, window_logical);
     window.set_short_headline(headline.into());
@@ -5640,43 +5639,6 @@ fn short_pane(fit: &fit::Fit, window_logical: f64) -> (String, String) {
 fn select_d(hero_logical: f64) -> f32 {
     let outer = (geometry::WHEEL_D * hero_logical / 2.0) as f32;
     2.0 * wheel::WheelRing::new(0.0, 0.0, outer).select
-}
-
-/// §7.5's row-2 trailing slot: **which `k` is in force, and nothing else.**
-///
-/// It used to read `panel 2x, 320x240 physical, display scale 200 %`, in mono, on every screen this
-/// window draws — and the operator's word for it was *debuggy*. It is the §12.9 line exactly: the
-/// program is *"a terminal instrument for a person already holding a hypothesis"* pinned to a band
-/// that a person who just wants to use an iPod cannot get away from. §12.9's bridge for that reader
-/// is `Copy the command line for this device`, on request; the Readout's `MACHINE` block is where a
-/// number a bug report can quote actually lives, opt-in behind the Menu, in mono, next to every
-/// other number of its kind.
-///
-/// **What survives is what §17.Q11 asked for and only that.** Q11 settles that a plain resize does
-/// not re-decide `k` — *"a drawn iPod that changes size while you drag an edge is worse"* — and
-/// pays for it by making the answer visible: *"the shelf's fidelity slot says which `k` is in
-/// force, so it is a stated limitation rather than a mystery."* That is `k`. It is not the panel's
-/// pixel dimensions, which are `320x240` on every iPod this program emulates and so distinguish
-/// nothing; it is not the display's scale factor, which is the platform's business and which a
-/// person cannot act on from here; and it is not `nearest neighbour`, which is the name of a
-/// resampling filter. `2x` is the whole of the fact.
-///
-/// **`1x` draws nothing at all.** A slot that says *this iPod is drawn at its own size* on the
-/// commonest configuration in the world is a label with no reader; the fact Q11 wants visible is
-/// only a fact when `k` is doing something. `push_fit` writes the empty string through, and
-/// `bench.slint` draws an empty string as nothing.
-///
-/// **ASCII, and the `·` and `×` it used to carry are the point.** This string is drawn on shelf row
-/// 2, twenty pixels above a row 3 that goes to the trouble of drawing `·` as a `Path` because §6.7
-/// considers it unproven — and `·` is the exact character §6.7 names as the one the shipped window
-/// built into UI strings with no coverage gate at all. One band cannot have two answers to one
-/// question, and Rust has no drawn-Path escape hatch, so Rust types ASCII. That rules out `2×`.
-fn fidelity(k: i32) -> String {
-    if k <= 1 {
-        String::new()
-    } else {
-        format!("{k}x")
-    }
 }
 
 /// Where the drawer is, as three `in` properties the markup never writes.
@@ -6937,8 +6899,9 @@ fn summary(settings: &Settings, d: &Device, seen: &mut Presence) -> String {
         parts.push(format!("missing {}", names.join(", ")));
     }
 
-    // ASCII: this lands on shelf row 2, and `·` is drawn as a `Path` one row below it. See
-    // [`fidelity`] for the whole of the argument.
+    // ASCII, and §6.7 is the whole of the argument: `·` is drawn as a `Path` because nothing in
+    // `.slint` can ask whether a font has a glyph, and Rust has no drawn-Path escape hatch — so a
+    // sentence Rust types stays inside the proven set. One program, one answer.
     parts.join(", ")
 }
 
@@ -9278,9 +9241,10 @@ pub(crate) mod tests {
     /// assertions are in `a_press_on_the_drawn_centre_button_reaches_the_machine`.
     fn drawn_wheel_centre() -> (f32, f32) {
         let hero = dressed_fit().hero_logical;
-        // `bench.slint`'s `body-y`, bottom up: the shelf, `GAP_2`, the cradle label, `GAP_1`,
-        // `CRADLE_BAND`. The drawer is closed, so `drawer-inset` is 0 and the well is the client.
-        let well_h = geometry::PREF_HEIGHT - geometry::SHELF;
+        // `bench.slint`'s `body-y`, bottom up: `GAP_2`, the cradle label, `GAP_1`, `CRADLE_BAND`.
+        // The drawer overlays, so the well is the whole client — and since §7.5's shelf went, the
+        // whole client is the whole window.
+        let well_h = geometry::PREF_HEIGHT;
         let body_y = well_h
             - geometry::GAP_2
             - geometry::CRADLE_LABEL
@@ -9419,6 +9383,84 @@ pub(crate) mod tests {
             "a press on the empty well reached the machine, so the assertions above are about a \
              window that sends Select for every click on it"
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **The focus ring follows the modality focus arrived by, not the focus event** — §16.7.
+    ///
+    /// The operator: *"i also dont like the border around the ipod and the additional selected
+    /// border when i press on the ipod."* The second half is this ring. §7.2 makes a click on the
+    /// device body focus the fixture — `clicked => { cradle-focus.focus(); }` — and `init` hands it
+    /// the cradle at launch, so `visible: cradle-focus.has-focus` alone was on for essentially the
+    /// whole of every session: a transient indicator drawn as a permanent box around the product.
+    ///
+    /// **Deleting it is an accessibility regression, not a fix**, so what is asserted here is the
+    /// distinction rather than the absence: the web's `:focus-visible`, which Slint has no operator
+    /// for. Pointer in, ring off; keyboard in, ring on. `the_centre_button_is_reachable_from_the_
+    /// keyboard_with_no_pointer` is the other half and stays green — the cradle keeps focus either
+    /// way, and only the drawing of it moves.
+    ///
+    /// **Both directions, and the second one is what stops the fix becoming a deletion.** A ring
+    /// that never came back would pass a test that only pressed the mouse.
+    ///
+    /// Proved red three ways, each by reverting one part of the fix:
+    ///
+    ///   * `visible: cradle-focus.has-focus` with `&& root.focus-visible` removed — *the ring is
+    ///     drawn after a pointer press*, on the first assertion;
+    ///   * `clicked => { cradle-focus.focus(); }` with the modality write removed — the same;
+    ///   * `bench.keyboard-was-used()` removed from `window.slint`'s root scope — *a key did not
+    ///     bring the ring back*, on the third.
+    #[test]
+    fn the_focus_ring_follows_the_modality_focus_arrived_by() {
+        let (w, _wiring, dir) = a_wired_bench_with_a_machine("focus-visible");
+
+        // A window nobody has touched. `init` focused the cradle programmatically, and a
+        // programmatic focus carries the last modality forward — there has not been one, so the
+        // ring is offered. This is the state a `Tab`-only user opens the program in.
+        assert!(
+            w.get_focus_ring_shown(),
+            "a freshly opened window hides the focus ring, so a keyboard user has nothing telling \
+             them where they are before they press anything"
+        );
+
+        // A pointer press on the drawn device. §7.2 routes it to `cradle-focus.focus()`, so focus
+        // does not move — what moves is whether it is drawn.
+        let (cx, cy) = drawn_wheel_centre();
+        let centre = slint::LogicalPosition::new(cx, cy);
+        press_at(&w, centre);
+        lift_at(&w, centre);
+        assert!(
+            !w.get_focus_ring_shown(),
+            "the ring is drawn after a pointer press. That is the operator's *additional selected \
+             border when i press on the ipod*, and it is an indicator meant for somebody driving \
+             with a keyboard"
+        );
+
+        // …and the keyboard brings it back, before the keystroke does anything. §16.8 routes the
+        // wheel's own keys to the window's ROOT scope, which is why this is the key the test uses:
+        // it is the one a person on this surface presses most and the one the cradle's own
+        // `key-pressed` never sees.
+        let left: slint::SharedString = slint::platform::Key::LeftArrow.into();
+        w.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: left.clone() });
+        w.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyReleased { text: left });
+        assert!(
+            w.get_focus_ring_shown(),
+            "a key did not bring the ring back, so one click costs a keyboard user their focus \
+             indicator for the rest of the session — which is deleting it with extra steps"
+        );
+
+        // And a second pointer press takes it away again: this is a modality that keeps being
+        // asked, not a one-way latch.
+        press_at(&w, centre);
+        lift_at(&w, centre);
+        assert!(
+            !w.get_focus_ring_shown(),
+            "the ring survived a pointer press once the keyboard had been used, so the rule is a \
+             latch rather than a modality"
+        );
+
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -12282,11 +12324,6 @@ pub(crate) mod tests {
         push_fit(&w, &f, geometry::PREF_HEIGHT);
         assert_eq!(w.get_screen_scale(), 2);
         assert!(w.get_too_short(), "the too-short input did not reach the window");
-        assert!(
-            w.get_fidelity().contains('2'),
-            "the fidelity line does not carry k: {:?}",
-            w.get_fidelity()
-        );
         // §7.4: the hit region is the model's, and it is wider than the drawn disc — which is the
         // whole reason it is pushed rather than derived in markup.
         let drawn = (geometry::CENTRE_D * f.hero_logical) as f32;
@@ -13681,8 +13718,7 @@ pub(crate) mod tests {
         // Tall enough for the whole page at its longest — derived from the row count rather than
         // typed, so a fourteenth verb moves it.
         let tall = geometry::DRAWER_HEADER_H
-            + verbs::Verb::ALL.len() as f64 * (geometry::ROW_H + geometry::FIELD_REASON)
-            + geometry::SHELF;
+            + verbs::Verb::ALL.len() as f64 * (geometry::ROW_H + geometry::FIELD_REASON);
         w.window()
             .set_size(slint::LogicalSize::new(geometry::PREF_WIDTH as f32, tall as f32));
         let full = Furniture::new(a_furnished_library(&temp_dir("root-page-bottom")));
@@ -13962,12 +13998,27 @@ pub(crate) mod tests {
                 shot.h,
                 shot.at.display()
             );
+            // **§9.5's pane has a floor of its own, and it is not an exemption.** The proven-red
+            // case for this assertion is *"bench's right and bottom edges are 1 colour(s)"* — the
+            // renderer's clear colour, from removing the `show()` — so 1 is the number it has to
+            // catch, and every floor above 1 is margin. Every other page keeps 8 because it has
+            // furniture out at the edge to spend it on: the drawer's own column, or the drawn
+            // device's cradle ring 10 px inside the frame.
+            //
+            // The too-short pane has neither. It is one `bg-sunken` rectangle filling the client
+            // with its content centred, and until §7.5's shelf went there was a 44 px gradient
+            // under it painting the bottom band — so the margin this shot used to have was the
+            // shelf's, not its own. What is left on its far edge is the drawer handle, which is
+            // positioned from `client.width` and therefore *is* the thing the assertion is asking
+            // about: if the layout had run at another size the handle would not be in this band at
+            // all and the count would be the clear colour alone.
+            let floor = if *name == "bench-too-short" { 2 } else { 8 };
             let edges = shot.far_edges_colours();
             assert!(
-                edges > 8,
-                "{name}'s right and bottom edges are {edges} colour(s): the frame is {}x{} and the \
-                 window was laid out at some other size, so this is a picture of a small window in \
-                 a large one. {}",
+                edges > floor,
+                "{name}'s right and bottom edges are {edges} colour(s), against a floor of \
+                 {floor}: the frame is {}x{} and the window was laid out at some other size, so \
+                 this is a picture of a small window in a large one. {}",
                 shot.w,
                 shot.h,
                 shot.at.display()
@@ -17367,37 +17418,6 @@ pub(crate) mod tests {
         }
     }
 
-    /// §7.5's row-2 trailing slot carries **`k` and no other measurement**, and is empty at `k = 1`.
-    ///
-    /// §17.Q11 is the whole warrant for this slot existing — *"the shelf's fidelity slot says which
-    /// `k` is in force"* — and the line had grown three more numbers than that sentence asks for.
-    /// The panel's dimensions are the same on every iPod this program emulates, the display's scale
-    /// factor is the platform's and not actionable from here, and `nearest neighbour` is the name of
-    /// a resampling filter; all three were mono instrumentation on a band a person cannot leave.
-    ///
-    /// **And it is ASCII.** It used to read `panel 2× · 320×240 · nearest neighbour`, drawn on shelf
-    /// row 2 — twenty pixels above a row 3 that draws `·` as a `Path` because §6.7 does not consider
-    /// it proven. One band, two answers. That is what rules out `2×` here.
-    ///
-    /// Proved red by restoring the `320x240` half, and by returning `1x` for `k = 1`.
-    #[test]
-    fn the_fidelity_line_carries_k_and_nothing_else() {
-        assert_eq!(fidelity(1), "", "the commonest display in the world gets a label to ignore");
-        assert_eq!(fidelity(2), "2x");
-        assert_eq!(fidelity(8), "8x");
-        for k in 1..=geometry::K_MAX {
-            let s = fidelity(k);
-            assert!(s.is_ascii(), "the fidelity line carries a glyph nothing has proved: {s:?}");
-            // The four instruments that were on this line, none of which §17.Q11 asked for.
-            for banned in ["320", "240", "panel", "scale", "%", "nearest"] {
-                assert!(
-                    !s.contains(banned),
-                    "the fidelity line is instrumentation again at k={k}: {s:?} carries {banned:?}"
-                );
-            }
-        }
-    }
-
     /// Every chassis colour the identity model can produce has a case here.
     #[test]
     fn every_chassis_colour_is_distinct_from_the_default() {
@@ -18425,7 +18445,7 @@ pub(crate) mod tests {
     /// five `Made of` lines were undrawn and so was the one control §7.2 puts on this page.
     ///
     /// It also pins the four bindings that were reading the **bench's** two fields: `enabled` and
-    /// `reason` came from `DeviceRow.startable` / `.cradle-label`, which `window.slint:860` and
+    /// `reason` came from `DeviceRow.startable` / `.cradle-label`, which `window.slint:856` and
     /// `:893` read for the drawn iPod, and `machine-rule` was a literal `true`.
     #[test]
     fn the_devices_page_opens_a_row_and_reaches_its_start() {
@@ -18526,7 +18546,7 @@ pub(crate) mod tests {
         assert!(!w.get_setting_copy_enabled());
         assert!(!w.get_setting_copy_reason().is_empty(), "`Copy path` is disabled and says nothing");
 
-        // The one live control. `drawer.slint:475` fires this ordinal as
+        // The one live control. `drawer.slint:474` fires this ordinal as
         // `root.setting-toggled(1)`; `Row::CheckUpdates` is 1.
         let before = settings.borrow().check_updates_on_start;
         assert_eq!(w.get_setting_check_updates(), before, "the box does not reflect the library");

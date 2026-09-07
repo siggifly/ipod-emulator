@@ -203,23 +203,38 @@ mod tests {
     fn the_too_short_boolean_has_hysteresis() {
         let mut f = Fitter::new(1.0);
         let t = required_client_logical(geometry::hero_logical(1, 1.0));
-        assert!((t - 807.751).abs() < 0.01, "the threshold moved: {t:.3}");
+        assert!((t - 783.751).abs() < 0.01, "the threshold moved: {t:.3}");
 
-        let (a, _) = f.apply(Moment::Resized { window_logical: 807.0 });
-        assert!(a.too_short, "807.0 is below the {t:.1} threshold");
+        // **The four probes are placed relative to `t`, not typed.** They were four literals
+        // straddling 807.751, and when §7.5's shelf came off the column the threshold moved to
+        // 783.751 and all four landed on the same side of it — so the test failed on the step it
+        // was least about, and re-typing them would have left the next person the same trap. The
+        // assertion above is what pins the threshold itself; these pin the hysteresis around
+        // wherever it is.
+        let restore = t + geometry::HYSTERESIS;
 
-        let (b, _) = f.apply(Moment::Resized { window_logical: 813.0 });
+        let below = t - 1.0;
+        let (a, _) = f.apply(Moment::Resized { window_logical: below });
+        assert!(a.too_short, "{below:.1} is below the {t:.1} threshold");
+
+        let inside = t + geometry::HYSTERESIS / 4.0;
+        let (b, _) = f.apply(Moment::Resized { window_logical: inside });
         assert!(
             b.too_short,
-            "813.0 is above {t:.1} but below the {:.1} restore point, so it must stay short",
-            t + geometry::HYSTERESIS
+            "{inside:.1} is above {t:.1} but below the {restore:.1} restore point, so it must \
+             stay short"
         );
 
-        let (c, _) = f.apply(Moment::Resized { window_logical: 828.0 });
-        assert!(!c.too_short, "828.0 is past the restore point");
+        let past = restore + 1.0;
+        let (c, _) = f.apply(Moment::Resized { window_logical: past });
+        assert!(!c.too_short, "{past:.1} is past the {restore:.1} restore point");
 
-        let (d, _) = f.apply(Moment::Resized { window_logical: 818.0 });
-        assert!(!d.too_short, "818.0 is above {t:.1} and it was not short, so it stays not short");
+        let back = t + geometry::HYSTERESIS / 2.0;
+        let (d, _) = f.apply(Moment::Resized { window_logical: back });
+        assert!(
+            !d.too_short,
+            "{back:.1} is above {t:.1} and it was not short, so it stays not short"
+        );
     }
 
     /// **The display decides `k`; the window decides the warning.** Two questions, two
@@ -322,18 +337,18 @@ mod tests {
     fn the_nine_six_table_holds() {
         // display, sf, client (Dock hidden), expected k, expected spare (negative = short)
         //
-        // **Every row gained 2 px of spare when §7.5's rows moved off the shelf.** The bar halved
-        // — 88 to 44 — and the column took back two line terms, `LINE_TITLE` above the cradle and
-        // `LINE_LABEL` below the caption, for a net 2 px less chrome. `spare` is
-        // `client − required`, so it rises by exactly that. Nothing about which displays are short
-        // changed; `1280x800` and `1366x768` still are.
+        // **Every row gained 24 px of spare when §7.5's shelf went.** The 44 px band is deleted
+        // and the column took back one line term for §11.4's identifications — `LINE_BODY`, under
+        // the machine's name — for a net 24 px less chrome. `spare` is `client − required`, so it
+        // rises by exactly that. Nothing about which displays are short changed; `1280x800` and
+        // `1366x768` still are, by 49 and 95.
         let rows: &[(&str, f64, f64, i32, f64)] = &[
-            ("1280x800", 1.0, 735.0, 1, -73.0),
-            ("1366x768", 1.0, 689.0, 1, -119.0),
-            ("1440x900", 1.0, 835.0, 1, 27.0),
-            ("1470x956 (the operator's)", 2.0, 891.0, 2, 83.0),
-            ("1920x1080 @125%", 1.25, 801.0, 1, 124.0),
-            ("1920x1080 @150%", 1.5, 667.0, 1, 78.0),
+            ("1280x800", 1.0, 735.0, 1, -49.0),
+            ("1366x768", 1.0, 689.0, 1, -95.0),
+            ("1440x900", 1.0, 835.0, 1, 51.0),
+            ("1470x956 (the operator's)", 2.0, 891.0, 2, 107.0),
+            ("1920x1080 @125%", 1.25, 801.0, 1, 148.0),
+            ("1920x1080 @150%", 1.5, 667.0, 1, 102.0),
         ];
         for (name, sf, client, want_k, want_spare) in rows {
             let k = geometry::decide_k(*client, *sf);
@@ -360,11 +375,11 @@ mod tests {
     /// wrong when its parenthetical summed to 449 beside a declared 880.
     #[test]
     fn the_general_rule_is_the_same_arithmetic_as_the_table() {
-        // Lower than §9.6 first stated, for the reason the table above gives — the shelf halved
-        // and two of its rows became column terms beside the cradle. **The chrome came off in
-        // LOGICAL px, so what each row loses is 2 × sf**: 2, 2.5, 3 and 4. Written as one number
-        // for all four it is wrong at both ends, which is how this test caught the first draft.
-        for (sf, want) in [(1.0, 808.0), (1.25, 846.0), (1.5, 884.0), (2.0, 960.0)] {
+        // Lower than §9.6 first stated, for the reason the table above gives — the shelf is gone
+        // and one line came back for §11.4's identifications. **The chrome came off in LOGICAL
+        // px, so what each row loses is 24 × sf**: 24, 30, 36 and 48. Written as one number for
+        // all four it is wrong at both ends, which is how this test caught the first draft.
+        for (sf, want) in [(1.0, 784.0), (1.25, 816.0), (1.5, 848.0), (2.0, 912.0)] {
             let got = required_client_physical(1, sf);
             assert!(
                 (got - want).abs() < 1.0,

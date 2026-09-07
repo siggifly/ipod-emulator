@@ -1,7 +1,7 @@
 // The drawer — docs/GUI.md §4, §7.5, §8.1, §9.1, §14.3, §16.3.
 //
 // **420 px, right-anchored, and it OVERLAYS** (§21.2). It occupies the full client height minus
-// the shelf and slides in over the device; the device does not move. It is not a sidebar wearing a
+// the window's own height and slides in over the device; the device does not move. It is not a sidebar wearing a
 // hat and it does not float: §2.4 bans floating, and floating is a thing with a shadow, its own
 // edges and a surface behind it on all four sides. This is anchored to an edge, full-height, with
 // a 1 px rule and no shadow — the same construction it always was, minus the push.
@@ -12,7 +12,7 @@
 // into and a device that shrank whenever this opened would be the window fidgeting.
 //
 // **Max three levels deep**, and the depth slides — the borrowed iPod motion, inside a 420 px panel
-// where no framebuffer can be (§6.1). Every route in is a route out: `⌘\`, the handle, the shelf's
+// where no framebuffer can be (§6.1). Every route in is a route out: `⌘\`, the handle, the bench's
 // row-3 leading slot, the menu bar. `Esc` is not one of them (§4) — it only ever goes outwards.
 
 import { Ink, Metric, Motion } from "tokens.slint";
@@ -108,9 +108,8 @@ export component Drawer inherits Rectangle {
     callback verb-act(int);
 
     // The client height the drawer is being given. **Pushed in, because a component's root element
-    // cannot read `parent`** — Slint says `Cannot access id 'parent'` — and the alternative, letting
-    // each use site write `height: <something> - Geometry.shelf`, would put §9.5's decision in two
-    // files and let them disagree.
+    // cannot read `parent`** — Slint says `Cannot access id 'parent'`. It is the whole client now:
+    // §7.5's shelf was the one thing the drawer ever stopped short of, and it is gone.
     in property <length> client-height;
 
     // The Work page's inputs, passed straight through. The contract's property list stops at
@@ -264,10 +263,10 @@ export component Drawer inherits Rectangle {
     callback composer-commit();
 
     width: Geometry.drawer-w;
-    // §9.5's decision: the drawer runs the full client height ABOVE the shelf. The shelf's band and
-    // its 1 px top rule span the full client width; only the shelf's three content rows narrow.
-    // Nothing is unpainted and the drawer covers no shelf content.
-    height: root.client-height - Geometry.shelf;
+    // The full client height. §9.5's *above the shelf* was an argument about a band that no longer
+    // exists — it kept a full-height drawer from covering the shelf's rows — so with the shelf
+    // deleted the drawer runs edge to edge and covers nothing but the device it overlays.
+    height: root.client-height;
     clip: true;
     background: Ink.bg-raised;
 
