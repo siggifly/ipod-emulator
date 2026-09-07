@@ -62,6 +62,13 @@ import {
 // through one and §16.6's single font family through the other.
 export { Motion, Metric } from "tokens.slint";
 
+// §21.7's second view of the one panel. **Re-exported from here rather than compiled separately**,
+// and `build.rs` says why in as many words: there is exactly one `slint_build::compile*` call in
+// this crate, because a second one clobbers `SLINT_INCLUDE_GENERATED` and the window component
+// stops existing. A component reaches Rust only if it is exported from the document the compiler
+// was given as the ROOT, which is this one.
+export { PanelWindow } from "panel.slint";
+
 export component MainWindow inherits Window {
     title: "ipod-emulator";
     // Never seen: the bench paints every pixel of the client and the drawer paints its own. It
@@ -98,6 +105,11 @@ export component MainWindow inherits Window {
     callback games-choose();
     callback games-play(int);
     in property <[DeviceRow]> devices;
+    /// §21.7's `Panel` ordinal, pushed so `⌃⌘P` and the drawer row raise the one callback with the
+    /// one number. **Pushed rather than written as a literal**: `Verb::ordinal` is derived from
+    /// `Verb::ALL`'s order, so a verb added above `Panel` moves it, and a literal here would go on
+    /// naming whatever row had taken its place.
+    in property <int> panel-verb;
     /// `Settings::developer` — the switch that reveals Parts, the Readout and Work.
     in property <bool> developer;
     in property <string> setting-developer-shows;
@@ -591,6 +603,16 @@ export component MainWindow inherits Window {
         //
         // Retirement condition: when a Reference page exists in the depth-1 slot, this becomes
         // `open-page(DrawerPage.reference, 1)` again.
+        // §21.7's second view. **The same act the drawer's row performs**, invoked rather than
+        // repeated: `on_verb_act`'s `Panel` arm is where opening and closing are decided, and a
+        // second decision here is how a key and a row come to disagree about which one is a toggle.
+        KeyBinding {
+            keys: @keys(Control + "p");
+            activated => {
+                root.verb-act(root.panel-verb);
+            }
+        }
+
         KeyBinding {
             keys: @keys(Control + Comma);
             activated => {

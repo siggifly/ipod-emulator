@@ -733,6 +733,17 @@ impl Worker {
         })
     }
 
+    /// §21.3's `Doom` row, on a thread of its own — two downloads and three writes to a volume.
+    pub fn spawn_doom(
+        disk: PathBuf,
+        cache: PathBuf,
+        cancel: Arc<Cancel>,
+    ) -> Result<Worker, std::io::Error> {
+        Worker::start("ipod-doom", cancel, move |tx, flag| {
+            doom_run(disk, cache, tx, flag)
+        })
+    }
+
     pub fn spawn_fetch(
         wants: Vec<Want>,
         cache: PathBuf,
@@ -1220,6 +1231,77 @@ fn install(
 /// **`src` is never written to.** `install::install_os` writes a new image and says so; the drive
 /// this iPod had before the press is on disk afterwards, untouched, which is what makes this
 /// undoable by pointing the device back at it.
+/// §21.3's `Doom`: fetch both of `doom::CATALOGUE`, then put three files on the volume.
+///
+/// **One step per download and one for the write**, which is why `ipod_machine::doom::install` is
+/// not called here: it loops internally, so the whole of it would be a single step and 24 MB of
+/// Freedoom would arrive under a bar that had been full since the 285 KB one finished. `doom::fetch`
+/// and `doom::write_files` are that function split at the seam it already had — nothing is
+/// reimplemented, and `ipod-boot doom-assets` still calls `install`.
+///
+/// **Nothing is written until both downloads are in hand.** A half-installed volume is worse than an
+/// untouched one, and the network is the part that fails; `doom::install` takes the same line for
+/// the same reason.
+fn doom_run(disk: PathBuf, cache: PathBuf, tx: &mpsc::Sender<Report>, cancel: &Cancel) {
+    let mut payloads: Vec<(&'static str, Vec<u8>)> = Vec::new();
+    for (i, wad) in ipod_machine::doom::CATALOGUE.iter().enumerate() {
+        if cancel.asked() {
+            let _ = tx.send(Report::Cancelled { i, removed: None });
+            return;
+        }
+        let _ = tx.send(Report::Started { i });
+        let _ = tx.send(Report::Writing {
+            i,
+            path: cache.join(format!("{}.part", wad.file)),
+            meter: Meter::Apparent,
+        });
+        let mut w = Reporter { i, tx, cancel };
+        match ipod_machine::doom::fetch(wad, &cache, &mut w) {
+            Ok(got) => {
+                payloads.push(got);
+                // **`Outcome::Nothing`, deliberately.** A WAD is not one of §11.4's three shelves —
+                // it is not an installer, a bootloader or an operating system — so filing it as any
+                // of them would put a row in the wrong group offering the wrong verb. It lives in
+                // the cache and on the drive, and the library has no shelf for it.
+                let _ = tx.send(Report::Done { i, outcome: Outcome::Nothing });
+            }
+            Err(said) if cancel.asked() => {
+                let _ = tx.send(Report::Cancelled { i, removed: None });
+                let _ = said;
+                return;
+            }
+            Err(said) => {
+                let _ = tx.send(Report::Failed {
+                    i,
+                    fault: Fault { class: Class::Network, said },
+                });
+                return;
+            }
+        }
+    }
+
+    let n = ipod_machine::doom::CATALOGUE.len();
+    if cancel.asked() {
+        let _ = tx.send(Report::Cancelled { i: n, removed: None });
+        return;
+    }
+    let _ = tx.send(Report::Started { i: n });
+    match ipod_machine::doom::write_files(&disk, &payloads) {
+        Ok(_) => {
+            let _ = tx.send(Report::Done { i: n, outcome: Outcome::Nothing });
+        }
+        Err(said) => {
+            // Past the downloads, so this is a volume that could not be written rather than a
+            // network fault — `Permission` is the class a person can act on, and `Next::Reveal`
+            // opens the folder.
+            let _ = tx.send(Report::Failed {
+                i: n,
+                fault: Fault { class: Class::Permission, said },
+            });
+        }
+    }
+}
+
 fn install_run(
     src: PathBuf,
     dest: Destination,
@@ -1640,6 +1722,15 @@ enum Run {
     /// this one writes to a drive. It mints nothing — the iPod already exists and already has its
     /// identity — and it hands nothing over to be started, because installing is not booting.
     Install,
+    /// §21.3's `Doom` row: two downloads and three files onto a drive that already has Rockbox.
+    ///
+    /// **It DOES hand over to be started, and that is what makes it its own variant rather than a
+    /// second `Software`.** `Install` builds a new drive and stops, because installing an operating
+    /// system is not choosing to run it. Doom is a Rockbox plugin and the row is a thing to *play*
+    /// — issue #18's *pressing Doom ends with Doom's title screen* — so the boot is part of the
+    /// press, exactly as it is for [`Run::First`]. It also writes into the drive that is there
+    /// rather than making one, so it has no `Destination` and nothing to rename.
+    Doom,
 }
 
 /// What `Install…` can put on a drive.
@@ -2255,6 +2346,88 @@ impl Queue {
         }
     }
 
+    /// §21.3's `Doom` row: fetch the two WADs and put Doom on this iPod's drive.
+    ///
+    /// **Every refusal here is one this press cannot recover from**, in the order they bite — the
+    /// same discipline [`Queue::install`] states. What is deliberately NOT refused here is *Rockbox
+    /// is not installed*: that is a fact about the library rather than about this queue, the row
+    /// words it from `verbs::doom_row`, and asking it twice is how two surfaces come to disagree.
+    ///
+    /// **The plan is three steps and the Rail shows all three before any of them runs**, which is
+    /// §10.1's rule: a person agrees to the whole thing or to none of it. 24 MB is worth agreeing
+    /// to on purpose.
+    pub fn doom(
+        &mut self,
+        settings: &mut Settings,
+        rail: &mut Rail,
+        device: &str,
+        can_download: bool,
+    ) -> Press {
+        if self.busy() {
+            rail.note(&self.already_running());
+            return Press::Busy;
+        }
+        if !can_download {
+            return Press::Refused(Failure::new(Class::ToolMissing(Tool::Curl), "installing Doom"));
+        }
+        let Some(d) = settings.devices.iter().find(|d| d.name == device) else {
+            return Press::Refused(Failure::saying(
+                Class::Missing,
+                "installing Doom",
+                format!("there is no iPod called {device} in the library"),
+            ));
+        };
+        let disk = match settings.disk_of(d) {
+            Some(Ok(p)) => p,
+            Some(Err(_)) | None => {
+                return Press::Refused(Failure::saying(
+                    Class::Missing,
+                    "installing Doom",
+                    format!(
+                        "{device} has no drive to put Doom on. The plugin reads \
+                         /.rockbox/doom/rockdoom.wad off the volume, so there has to be one first."
+                    ),
+                ))
+            }
+        };
+
+        let mut steps: Vec<Step> = ipod_machine::doom::CATALOGUE
+            .iter()
+            .map(|w| Step {
+                kind: Verb::Fetch,
+                what: w.file.to_string(),
+                sub: w.about.to_string(),
+                cost: Cost { down: w.bytes, disk: 0, apparent: None },
+            })
+            .collect();
+        steps.push(Step {
+            kind: Verb::Install,
+            what: "Doom's files".into(),
+            sub: format!("into {} on the drive, with the shortcut that reaches them", ipod_machine::doom::DOOM_DIR),
+            cost: Cost::default(),
+        });
+
+        self.run = Run::Doom;
+        self.device = Some(device.to_string());
+        self.installing = None;
+        self.ids = rail.plan(&steps);
+        self.done = vec![false; steps.len()];
+        self.steps = steps;
+        let cancel = Cancel::new();
+        match Worker::spawn_doom(disk, self.cache.clone(), Arc::clone(&cancel)) {
+            Ok(w) => {
+                self.worker = Some(w);
+                self.cancel = Some(cancel);
+                Press::Running { from: 0, embodied: false }
+            }
+            Err(e) => Press::Refused(Failure::saying(
+                Class::Permission,
+                "installing Doom",
+                format!("the install thread could not be started: {e}"),
+            )),
+        }
+    }
+
     pub fn fetch(&mut self, rail: &mut Rail, wants: &[Want], nothing_to_fetch: &str) -> Press {
         if self.busy() {
             rail.note(&self.already_running());
@@ -2413,7 +2586,17 @@ impl Queue {
             && self.done.len() >= 2
             && self.first_unticked() >= self.done.len() - 1
             && rail.failures() == 0;
-        if !self.busy() && all_but_the_boot {
+        // **§21.3's `Doom` hands over too, and its plan has no boot step in it.** `Run::First`
+        // holds a boot as its last step and hands over with one step left; this one is finished
+        // when everything is ticked, and the boot is the press's own point rather than a row on
+        // the Rail — issue #18's *pressing Doom ends with Doom's title screen*. Written as its own
+        // condition rather than widened into the one above, because *all but one* and *all* are
+        // different questions and a single expression answering both would tick the boot early.
+        let doom_done = self.run == Run::Doom
+            && !self.done.is_empty()
+            && self.done.iter().all(|d| *d)
+            && rail.failures() == 0;
+        if !self.busy() && (all_but_the_boot || doom_done) {
             t.ready = self.device.clone();
             // Reported once. The handle also goes here, which is what releases the thread.
             self.worker = None;

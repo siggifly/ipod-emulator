@@ -223,11 +223,22 @@ export struct PartRow {
 export enum CradleRing { accent, dim, danger }
 
 export struct TitleRow {
-    // The title's own name, from its manifest. The directory is often an opaque id — 50513, 88888,
-    // 1500C — so a row named from the path shows a number nobody recognises.
+    // The title's own name, from its manifest's top-level `Name`. The directory is often an opaque
+    // id — 50513, 88888, 1500C — so a row named from the path shows a number nobody recognises.
+    //
+    // **Not `LocalizedNames`**, which the manifest key table names and which none of the twenty
+    // titles on hand actually carries — measured 2026-09-07. `Name` is what they ship.
     name: string,
     // Where it lives, for the fact line. §6.2 gives paths to `mono`.
     path: string,
+    // **The cover the iPod itself shows**, decoded from the `LaunchingArtwork` the 5G build names —
+    // a 320 × 216 RGB565 raw bitmap. Empty where the title ships none or the file will not decode,
+    // and §13.2's rule for that case is what `games.slint` obeys: never a stock icon.
+    cover: image,
+    // Whether this title has a build for the iPod this emulator is. False draws it refused.
+    runs: bool,
+    // Why not, when it does not — §14.1. Empty when it runs.
+    reason: string,
 }
 
 export struct DeviceRow {
@@ -854,6 +865,10 @@ export component Row inherits Pressable {
     in property <bool> warn: false;
     in property <int> index;
     in property <int> count;
+    /// §13's cover art, drawn in the value column's trailing gutter. Empty on every row that has
+    /// none, and an empty `Image` draws nothing — which is §13.2's rule for a title that ships no
+    /// artwork: never a blank rectangle, never a stock icon.
+    in property <image> thumb;
 
     inert: root.heading;
     pad: Geometry.page-margin;
@@ -879,8 +894,11 @@ export component Row inherits Pressable {
 
         Text {
             x: 0;
-            // The chevron's gutter, reserved on every row whether or not one is drawn.
-            width: parent.width - Metric.s4;
+            // The chevron's gutter, reserved on every row whether or not one is drawn — and the
+            // thumbnail's, on the rows that carry one. Both live at the trailing edge, and a row
+            // that set `value` and `thumb` at once would draw them over each other; subtracting
+            // here is what stops that being possible rather than being a rule somebody remembers.
+            width: parent.width - Metric.s4 - (root.thumb.width > 0 ? thumb.width : 0px);
             height: 100%;
             text: root.value;
             font-size: Metric.body-size;
@@ -902,6 +920,32 @@ export component Row inherits Pressable {
             width: Metric.s3;
             height: Metric.s3;
             visible: root.chevron;
+        }
+
+        // ── §13's cover, in the gutter this column already reserves ──────────────────────────
+        //
+        // **Here rather than as a child of the `Row`**, and the reason is mechanical: `Row inherits
+        // Pressable`, so a child written at a use site lands in Pressable's row cell where the
+        // LAYOUT places it — `x` is a hard compile error there, and the two fixed columns already
+        // sum to the page's inner width by construction (`ROW_VALUE_W` is `DRAWER_W − 2 ×
+        // PAGE_MARGIN − ROW_VALUE_X`). So a third element overflowed the drawer and the cover was
+        // drawn half outside it. Read it off `_out/gui/games.png` before this line existed.
+        //
+        // Inside this `Rectangle` it is absolutely positioned, which is what lets it sit at the
+        // trailing edge and cost the row nothing.
+        thumb := Image {
+            source: root.thumb;
+            visible: root.thumb.width > 0;
+            height: Geometry.thumb-body;
+            // Fitted by height; the width follows the bitmap's own shape so nothing is squeezed
+            // into the wrong aspect. `COVER_ASPECT` is that shape, measured.
+            width: self.height * Geometry.cover-aspect;
+            x: parent.width - self.width;
+            y: (parent.height - self.height) / 2;
+            image-fit: contain;
+            // A downscale — 320 px of bitmap into 24 px of row — so this is the one image in this
+            // window that is not §12.6's framebuffer and not `pixelated`.
+            image-rendering: smooth;
         }
     }
 }

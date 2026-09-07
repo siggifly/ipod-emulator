@@ -520,6 +520,35 @@ geometry! {
     // The same drawing at a different `body-height`, and neither is a framebuffer, so neither has
     // a `k`.
 
+    /// §13's cover art, as a shape rather than as a size.
+    ///
+    /// **Measured, across all twenty titles on hand**: every `.raw.lcd5` is 320 x 216 with a stride
+    /// of 640 and the tag `565L`, which is 138 256 bytes to the byte —
+    /// `ipod_machine::title::artwork` is what reads the header and this is the one number the
+    /// markup needs from it. A cover is drawn to [`THUMB_BODY`] tall and this is what its width
+    /// follows from, so nothing is squeezed into the wrong aspect.
+    ///
+    /// **A ratio and not two lengths**, because the markup needs the shape and never the size: the
+    /// bitmap's own pixel dimensions are a fact about somebody else's file, and putting them in a
+    /// window's geometry as lengths would invite drawing it at 1:1 in a 420 px drawer.
+    COVER_ASPECT:     Ratio = 320.0 / 216.0;
+
+    /// The panel's own pixels — `emu::FB_W` and `emu::FB_H`, stated here as the geometry they are.
+    ///
+    /// **Every iPod this program emulates has this screen**, which is why §15 struck `320x240` off
+    /// §7.5's fidelity slot for distinguishing nothing. It is still the denominator of every scale
+    /// this window computes, and [`panel_k`] is where that happens.
+    PANEL_PX_W:       Px = 320.0;
+    PANEL_PX_H:       Px = 240.0;
+    /// §21.7's popped-out window opens at 2x and can never be dragged below 1:1.
+    ///
+    /// **Two rather than a round number of pixels**, because the only sizes this window has that
+    /// mean anything are whole multiples of the panel — [`panel_k`] floors everything else to one
+    /// of them, so opening at 640 x 480 opens at exactly `k = 2` with no border, and opening at,
+    /// say, 700 x 500 would open at `k = 2` with a band of `bg-sunken` nobody asked for.
+    PANEL_WIN_PREF_W: Px = 2.0 * PANEL_PX_W;
+    PANEL_WIN_PREF_H: Px = 2.0 * PANEL_PX_H;
+
     /// The drawer's Devices list.
     ROW_BODY:         Px = 40.0;
     /// A Parts row for an iPod resource.
@@ -540,6 +569,40 @@ pub const SF_SWEEP: [f64; 10] = [1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0
 /// A 4K portrait display could legitimately ask for 5 or 6; the clamp is the sweep's own bound and
 /// it is stated here rather than hidden in an arithmetic accident.
 pub const K_MAX: i32 = 8;
+
+/// §12.6 and §21.7: the largest **whole-number** scale of the 320 x 240 panel that fits a surface.
+///
+/// `K = floor(min(W_phys / 320, H_phys / 240))`, clamped to `1..=K_MAX`. §12.6 states it for
+/// fullscreen; §21.7's popped-out window uses the same one, and *the same one* is the point rather
+/// than a convenience — one rule in two places beats two behaviours a person has to learn, and a
+/// window that scaled differently from the fullscreen it can enter would change size as it went in.
+///
+/// **Whole numbers, because 320 x 240 at a fractional scale is either blurry or unevenly scaled.**
+/// A 1.5x nearest-neighbour upscale draws every other source pixel at two device pixels and the
+/// rest at one, which is visible as banding on a checkerboard — and this panel draws a lot of
+/// dithered UI. Smoothing it instead is the other half of §12.6's rule and is refused there: no
+/// shader, no scaler above nearest.
+///
+/// **Physical pixels, not logical.** §12.6's own table was computed in logical px against a `k`
+/// derived in physical ones and contradicted itself for a whole revision; the argument is settled
+/// there and this signature is what stops it being re-opened — a caller has to have multiplied by
+/// the scale factor before it can call this at all.
+///
+/// Clamped at 1 rather than 0: a surface too small for even a 1:1 panel gets a panel that overflows
+/// it and is clipped, which is a picture with a piece missing. Zero is a window drawing nothing at
+/// all, with no way to tell that from a machine that is off.
+pub fn panel_k(w_phys: f64, h_phys: f64) -> i32 {
+    if !w_phys.is_finite() || !h_phys.is_finite() {
+        return 1;
+    }
+    let by_w = w_phys / PANEL_PX_W;
+    let by_h = h_phys / PANEL_PX_H;
+    let k = by_w.min(by_h).floor();
+    if !k.is_finite() {
+        return 1;
+    }
+    (k as i64).clamp(1, K_MAX as i64) as i32
+}
 
 /// §9.6: drop below the threshold, restore 20 px above it.
 ///
@@ -912,6 +975,10 @@ mod tests {
         // §13.4's project state. Declared the day the file landed, per this list's own rule.
         "games.slint",
         "ipod.slint",
+        // §21.7's second view of the panel — one `Image`, `panel_k`'s whole-number scale, and a
+        // `FocusScope` that forwards to the main window's `machine-key`. Declared the day the file
+        // landed, per this list's own rule.
+        "panel.slint",
         // §11.4's six groups.
         "parts.slint",
         // §12.8's seven groups of Gauges, its fixed header and its two pinned actions.
@@ -1050,6 +1117,90 @@ mod tests {
              MIN_HEIGHT {MIN_HEIGHT:.0} is supposed to be the height below which the pane cannot \
              be laid out, so either it is too low or the pane's column has grown"
         );
+    }
+
+    /// **§12.6's rule, and §21.7 uses the same one.**
+    ///
+    /// `K = floor(min(W_phys / 320, H_phys / 240))`. The rows are §12.6's own table, recomputed
+    /// here against the function rather than restated: that table was written in logical pixels
+    /// once, against a `k` derived in physical ones, and the document contradicted itself for a
+    /// whole revision. Nothing in this test converts anything — the caller does that, which is what
+    /// the signature is for.
+    ///
+    /// **How to make it go red:** round instead of flooring. `1470x956 @2` becomes 8 rather than 7,
+    /// and 8 x 240 is 1920 against a backing store 1912 tall — a panel with its bottom eight rows
+    /// outside the display.
+    #[test]
+    fn the_panel_scale_is_the_largest_whole_multiple_that_fits() {
+        // display, sf, physical backing store, expected K — §12.6's table.
+        let rows: &[(&str, f64, f64, i32)] = &[
+            ("1280x800 @1", 1280.0, 800.0, 3),
+            ("1366x768 @1", 1366.0, 768.0, 3),
+            ("1440x900 @1", 1440.0, 900.0, 3),
+            ("1470x956 @2 (the operator's)", 2940.0, 1912.0, 7),
+            ("1512x982 @2 (14in MBP)", 3024.0, 1964.0, 8),
+            ("1920x1080 @1", 1920.0, 1080.0, 4),
+        ];
+        for (name, w, h, want) in rows {
+            let got = panel_k(*w, *h);
+            assert_eq!(got, *want, "{name}: {w}x{h} gives k={got} and §12.6 says {want}");
+            // …and the thing `floor` is for: what it draws has to FIT.
+            assert!(
+                f64::from(got) * PANEL_PX_W <= *w && f64::from(got) * PANEL_PX_H <= *h,
+                "{name}: k={got} draws {}x{} into {w}x{h}",
+                f64::from(got) * PANEL_PX_W,
+                f64::from(got) * PANEL_PX_H
+            );
+            // …and it has to be the LARGEST that fits, or the rule is *some* whole number.
+            let next = f64::from(got + 1);
+            assert!(
+                got == K_MAX || next * PANEL_PX_W > *w || next * PANEL_PX_H > *h,
+                "{name}: k={got} but {} would also fit",
+                got + 1
+            );
+        }
+    }
+
+    /// **The two ends, and neither of them is zero.**
+    ///
+    /// A surface smaller than one panel gets `k = 1` and a panel that overflows it — a picture with
+    /// a piece missing, which a person can see and act on. `k = 0` draws a window with nothing in
+    /// it, which is indistinguishable from a machine that is off, and §9.1's rule against a bare
+    /// *nothing here* is the same argument one layer down.
+    ///
+    /// The clamp at the top is [`K_MAX`]'s, shared with `decide_k`: one bound on how large this
+    /// program will ever draw the panel, not two.
+    #[test]
+    fn the_panel_scale_never_answers_zero_and_never_exceeds_the_clamp() {
+        assert_eq!(panel_k(1.0, 1.0), 1, "a surface too small for one panel drew nothing at all");
+        assert_eq!(panel_k(0.0, 0.0), 1);
+        assert_eq!(panel_k(319.0, 239.0), 1, "one pixel short of 1:1 is still 1:1, clipped");
+        assert_eq!(panel_k(PANEL_PX_W, PANEL_PX_H), 1, "an exact 1:1 surface is not 1:1");
+
+        let huge = panel_k(100_000.0, 100_000.0);
+        assert_eq!(huge, K_MAX, "an 8K display asked for k={huge} and the clamp is {K_MAX}");
+
+        // **A hostile scale factor cannot produce a NaN**, which is the same guard `Fitter` needs
+        // one layer up: `set_size` on a window mid-transition has reported zero, and `0.0 / 0.0` is
+        // a `k` that compares false with everything and clamps to neither end.
+        assert_eq!(panel_k(f64::NAN, 480.0), 1);
+        assert_eq!(panel_k(f64::INFINITY, f64::INFINITY), 1);
+        assert!(panel_k(-1.0, -1.0) >= 1, "a negative surface produced a negative scale");
+    }
+
+    /// **§21.7's window opens on a whole multiple**, so it opens with no border at all.
+    ///
+    /// `PANEL_WIN_PREF_*` is `2 x` the panel rather than a round number of pixels, and this is what
+    /// says why that matters: at 640 x 480 the panel fills the window exactly, and at any size that
+    /// is not a whole multiple `panel_k` floors and the difference is drawn as `bg-sunken`.
+    #[test]
+    fn the_popped_out_window_opens_on_a_whole_multiple() {
+        let k = panel_k(PANEL_WIN_PREF_W, PANEL_WIN_PREF_H);
+        assert_eq!(k, 2, "§21.7's window opens at k={k}");
+        assert_eq!(f64::from(k) * PANEL_PX_W, PANEL_WIN_PREF_W, "it opens with a border");
+        assert_eq!(f64::from(k) * PANEL_PX_H, PANEL_WIN_PREF_H);
+        // …and it can never be dragged below 1:1, which is what the window's minimum is for.
+        assert_eq!(panel_k(PANEL_PX_W, PANEL_PX_H), 1);
     }
 
     /// §9.5's measure never overflows the well, at any size this window allows.

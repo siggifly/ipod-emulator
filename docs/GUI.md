@@ -3579,6 +3579,61 @@ title's name unconditionally, and **whether a `.ipg` carries cover art, and unde
 is §17.Q9** — with the 20 decrypted titles named as the way to answer it. A structural claim about a
 file format the program does not parse is exactly what §16.9 exists to stop.
 
+### 13.1.1 The list is read out of each title's manifest — built 2026-09-07
+
+The operator's 0.5 ask was *"we should show the game list nicely in the UI ideally fetching info on
+them from the files if we have graphics and info."* We have both, and it is reading a file rather
+than designing a list: Apple put the name and the artwork in `Manifest.plist` because the iPod
+itself draws them, so a list built from those is the list Apple shipped.
+
+`ipod_machine::title` is the reader. What the twenty decrypted titles actually carry, measured:
+
+```text
+Name  GUID  Version  DRM  BuildID  BuildIdentifier  ExecutablePath  Files  Verify
+Platforms[ { PlatformID  PlatformVersion  BuildID  ExecutablePath  LaunchingArtwork  Size } ]
+```
+
+**`LocalizedNames` is in RetailOS's key table and in none of the twenty manifests.** `research/13`
+reads that table out of RetailOS's own image — it is the union of keys the *reader* knows about, not
+what the titles ship. Measured 2026-09-07: `grep -l '<key>LocalizedNames</key>'` over all twenty
+returns nothing, while `LaunchingArtwork` and `PlatformID` return all twenty. So the display name is
+the top-level `Name`, which is what `manifest_name` has always read, and there is no second answer.
+
+**The cover is a 320 x 216 RGB565 bitmap and needs no image decoder.** `LaunchingArtwork` names a
+`.raw.lcd5` beside the title; its 16-byte header is width, height and stride as little-endian
+`u32`, then the four bytes `565L`. `320 x 216 x 2 + 16` is **138 256**, which is the size of all
+twenty to the byte — and `expand16` already turns an RGB565 word into RGBA, because the titles' own
+`.pix` textures are the same two encodings. The reader refuses rather than guessing: an unknown
+format tag, a stride that is not `width x 2` and a file shorter than its own header each name the
+number that was wrong. **A cover that will not decode is drawn as no cover** — §13.2's rule for that
+slot is *never a blank rectangle, never a stock icon*, and a wrong picture is both at once.
+
+**`PlatformID` is a refusal that can be made before anything is loaded.** A title lists one build
+per iPod generation; `research/01` settles that platform **1** is the 5G/5.5G by a natural experiment
+across all fifty-six archives — the seven titles a third party independently labels *5G and 5.5G
+only* are exactly the seven whose only platform is 1 — and that is the only generation this emulator
+is. A title with no entry for it is drawn refused, with *Built for 3. This emulator is an iPod 5G,
+platform 1.*, and pressing it is refused too: §16.5 keeps a disabled row's `TouchArea` alive so it
+can be focused and announced, so `activated` still arrives and would otherwise hand `start_title` an
+executable built for another machine.
+
+**Every one of the twenty on hand ships a `PlatformID 1` build**, so nothing in the corpus exercises
+that arm — which is why the tests for it are fixtures. `resources/` holds shipping binaries and
+other people's identifiers and nothing this repository writes may quote it; the *shape* is public and
+is what the fixtures carry. The control that the shape is Apple's is
+`title::tests::every_real_title_on_this_machine_answers_a_name_and_a_five_g_build`, which reads all
+twenty, decodes all twenty covers, prints none of them, and skips where `resources/` is absent.
+
+**No chevron on a title row**, and that is a correction rather than a style choice: §21.3's rule is
+that a chevron claims a press goes one level deeper, and pressing a title starts a machine —
+§13.3's *there is no boot*. It never opened a page.
+
+**And the cover is drawn in the row's own trailing gutter** rather than as a child of it. `Row
+inherits Pressable`, so a child at a use site lands in the layout, where `x` is a compile error and
+the two fixed columns already sum to the page's inner width — a third element overflowed the drawer
+and the cover was drawn half outside it. `Row` gained a `thumb` property instead, and the value
+column's `Text` subtracts its width so a row that set both could not draw them over each other.
+
 ### 13.2 The readiness matrix is `bind_native`'s return value, drawn
 
 Not *"will this boot?"* but *"this title declares 98 functions; we can serve 98"* — or *"we can serve
@@ -4081,6 +4136,59 @@ be true as built — but for the **announced** half, which is the honest reason.
 **The honest gap**: a 96-detent ring has no announced equivalent — Slint has `Slider` but a wheel is
 not one, and the `↑` / `↓` keys are the accessible route and are a fallback, not a peer. Say so once
 rather than pretending.
+
+#### 16.7.1 Six assertions CI never executes, named
+
+**The decision, recorded because the alternative already cost a day.** Six tests carry
+`#[cfg_attr(not(debug_assertions), ignore)]`, and both CI workflows run `--release`. So these are
+the assertions this project accepts are **never executed by CI**:
+
+| test | what it holds |
+|---|---|
+| `a_closed_drawer_is_out_of_the_accessible_tree` | a closed drawer is gone, not parked off screen still being announced |
+| `a_disabled_row_states_its_reason_to_an_assistive_technology` | §14.1's *disable with a reason* reaches a screen reader, on every refused row |
+| `every_ipod_in_the_list_has_its_own_start_control` | eight iPods do not announce eight buttons all called `Start` |
+| `every_page_this_window_shoots_is_drawn_with_what_is_on_it` | a page shot is of the page, not of an unfurnished neighbour |
+| `the_bench_has_a_drawn_control_that_opens_the_drawer` | the drawer is reachable by pointer and not by keyboard alone |
+| `the_short_pane_replaces_the_bench_below_the_threshold_and_not_above_it` | §9.5's pane is drawn where §9.6 says it is |
+
+**Issue #32 said two; there are six.** The two are the ones that had gone *red*; the other four have
+carried the attribute since they were written, are green, and nobody had counted. That is the reason
+this is a list with a test under it rather than a paragraph.
+
+**The constraint is upstream and it is not a preference.** `ElementQuery` needs Slint's debug info,
+and `build.rs` emits `SLINT_EMIT_DEBUG_INFO` only when `PROFILE` is `debug`. Without it the query
+finds *nothing* rather than refusing — an instrument reporting an absence it could not observe,
+which is the one failure mode this repository is least willing to add. Running them in release would
+mean emitting debug info into the shipped build, and CI is `--release` because every measurement in
+`research/` is a release measurement.
+
+**What is refused is the set growing quietly.** §21.3 replaced `MenuPage` with `verbs.rs` and left
+two of these red in debug: the fixture stopped being filled — the rows became a `VecModel` that
+`a_window()` never populates — and the counts they asserted (3 rows, 7 with the developer switch)
+were the old page's, against a page that draws **13 and 17**. Three agents in turn reported them as
+*pre-existing, not mine, does not gate CI*, all three times correctly, which is how a red test
+survived a day of work by six people.
+
+So `the_debug_only_accessibility_gate_is_recorded_in_the_design` runs in **release**, reads the
+attribute out of `main.rs`, and fails if the set is not these six — and fails again if this section
+does not name them. A seventh cannot join without being written down here, where somebody reading a
+green `--release` run can see what that run is not telling them.
+
+**And the two repaired ones no longer type their own numbers.** `verb_rows_drawn()` derives the count
+from `verbs::Verb::ALL`; the fixture opens the drawer through `wire` + `invoke_open_page(None, 0)` —
+the callback `⌘,` raises — rather than moving a `nav::Stack` by hand; and the disabled-row test now
+cross-checks **every** row the model refused against the accessible tree instead of naming four
+labels, so a row that stops being refused leaves the test by itself. A fixture that filled the model
+itself would be a second producer, and a second producer is what drifted.
+
+**Two things the repair had to discover, both worth keeping.** The drawer does not open at its root
+on an empty library — §10's first run leaves it at depth 1, where `on_screen(stack, Page::None)` is
+false and `push_verbs` pushes nothing — and §21.3's page is about 1 400 px against a window that
+opens at 820, so at the shipped height the bottom rows are outside the `Scroll`'s clip and therefore
+outside the accessible tree. Measured: 11 rows reachable of the 13 in the model. A test about how a
+refused row reads cannot skip the refusals that happen to be at the bottom, so the fixture sizes its
+window off the row count.
 
 ### 16.8 Keyboard, shortcuts and the menu bar
 
@@ -5312,7 +5420,9 @@ saying which of its paragraphs this superseded, and the three that were wordings
 structure — §12.5's power-row location, §12.5's Diagnostics sentence, §12.8's *pushes rather than
 covers* — are corrected where they stand rather than deleted.
 
-**What is not built, and each says so where it is designed**: §21.7's pop-out window is not built.
+**§21.7's pop-out window is built as of 2026-09-07.** §12.6's fullscreen *inside* the main
+window still is not, and the two now share one scale rule — `geometry::panel_k` — so the day it
+lands it cannot disagree with the window that already uses it.
 **§21.4 is built as of 2026-09-07** — what was left of it turned out to be three sentences in the
 drawer rather than a mechanism, and §21.4 records which and why; `This iPod`'s two pickers are not
 drawn and are not going to be (§21.3 below records where that decision went). **§21.8 is built and §21.5 has moved**, both by other hands:
@@ -5331,7 +5441,7 @@ it (AGENTS.md §5).
 
 | §21 said | what is built | why |
 |---|---|---|
-| §21.3's `Doom ▸ installs on first use` | **disabled, with its reason** | Nothing in this repository fetches a WAD. `research/06` reaches Doom's own menu and stops: `rockdoom.c:294` needs `/.rockbox/doom/rockdoom.wad` beside a game IWAD, the base WAD is a prebuilt asset no build produces, and **both** URLs Rockbox's own source names are dead. A row promising to install it would fail on the Rail after two downloads |
+| §21.3's `Doom ▸ installs on first use` | **live, and it installs on first use** — *corrected 2026-09-07* | The entry that stood here said *nothing in this repository fetches a WAD*, and that was **true of the window and false of the program**. `ipod_machine::doom` had held the catalogue, both live URLs, both SHA-256s and the shortcut file since 2026-09-01, and `ipod-boot doom-assets` installed all three; nothing in the window called it — a module that knows exactly where three files live and cannot put them on a disk. The two dead URLs `research/06` names are Rockbox's own source's, and the catalogue does not use them. So the row is §21.3's sketch after all: `Queue::doom` plans both downloads and the write, `Run::Doom` hands over to the boot, and `verbs::doom_row` refuses at whichever link of iPod → Rockbox → plugin is missing, naming the row above that makes it |
 | §21.10's `Games…` *is disabled with its reason* | **live, and it opens the page that exists** | `GamesPage` is built, composed into the drawer, and starts a title on the bench — `nav::Page::Games` has a slot and `on_games_play` reaches `start_title`. §21.10's premise is §15's *the framework work is not done*, which is about binding a `.ipg` title's imports; the shelf-of-titles page shipped ahead of it. Disabling a working page to match a note written from a screenshot is deleting function, and it is the exact defect `every_drawer_row_that_names_a_page_can_open_it` exists to catch — that gate caught `Games` shipped disabled over a working page once already |
 | §12.5's Diagnostics sentence, quoted verbatim by §21.3 | **shortened** | 477 px against §9.4's 372 px slot, measured. See the note under §12.5's table |
 | §21.3's `This iPod  5.5G ▾  synthetic ▾` | **a chevron to the Devices page** | Two Expands here would be a second writer for the two fields §11.2's Composer already writes *with the verdict, the plan and the cost attached*. The row states what this iPod is and goes to the page that changes it — §21.3's own *where that default is changed*, one level along, through machinery that exists |
@@ -5463,6 +5573,26 @@ starts Rockbox and hands back only when MENU is held at power-on, `ipodloader2` 
 promises, with a sentence naming which one is in the way. That is §14.1 doing the job it exists for:
 an option that silently vanished would have taught nobody, and *Apple's bootloader is on X and
 starts Apple's software* is a true thing about the hardware.
+
+**`Doom` is the same shape as `Rockbox`, one link further along the chain.** iPod → Rockbox → plugin
+→ game: the row refuses at whichever link is missing and names the row above that makes it, and a
+live press is the whole of the rest — `rockdoom.wad` (285 KB), Freedoom 0.13.0 (24 MB, BSD-licensed,
+named by Rockbox's own manual as the substitute for the id data it cannot ship), the three writes
+onto the volume, and the boot. **The boot is part of the press**, which is what makes `Run::Doom` its
+own variant rather than a second `Software`: installing an operating system is not choosing to run
+it, and installing a game is.
+
+**What the press does not do is drive Rockbox's menu.** From the boot it is Shortcuts, DOOM, Play
+Game — three items, which is what `shortcuts.txt` exists to make it rather than a hunt — and
+`research/06` measured why a scripted descent cannot be trusted: Rockbox accelerates the wheel, and
+two runs of the same forward descent, 24 clicks and 18, landed on `Shortcuts` and on `Settings`.
+§21.8's Hold switch is what opens Doom's own menu once the attract loop is running.
+
+**The row does not claim to know whether Doom is already on the drive.** `doom::missing` opens the
+FAT32 volume and walks it, and this page is rebuilt on every machine tick — asking would put a
+filesystem walk behind the frame rate. The press is idempotent instead: a cached download is not
+re-fetched and the three writes replace themselves, so one sentence is true on the first press and
+on the fifth.
 
 **Rockbox is two verbs wearing one label.** Not installed, the row is `devices::install_row` — the
 same two downloads and two writes the Devices page offers, with the same refusals; installed, it is
@@ -5615,6 +5745,41 @@ Two things, and they are not the same one:
   off panels, multiple machines"* on the grounds that there is exactly one machine by design — and
   that argument holds for a second *machine* and does not touch a second *view of the same panel*.
   One machine, two windows onto its framebuffer.
+
+**Built, 2026-09-07.** `ui/panel.slint` is the window, `Verb::Panel` is the row — third band, with
+`⌃⌘P` in the value column, refused with *There is nothing on the panel yet* whenever the glass is
+dark — and `main::open_panel` / `close_panel` / `pump_panel` are the whole of the Rust. It is a
+toggle rather than an open, because the row is the only control there is.
+
+**One rule for the scale, in one function.** `geometry::panel_k` is `K = floor(min(W_phys / 320,
+H_phys / 240))`, clamped to `1..=K_MAX`, and both the popped-out window and the fullscreen it can
+enter use it — so entering fullscreen does not change the scale it was already drawing at. The
+signature takes **physical** pixels, which is this section's own correction made structural: §12.6's
+table was computed in logical px against a `k` derived in physical ones and the document contradicted
+itself for a revision, and a caller now has to have multiplied by the scale factor before it can call
+at all. The markup does no arithmetic; `draw-w` and `draw-h` arrive already multiplied.
+
+**The window opens at 2x**, which is `2 x 320` by `2 x 240` rather than a round number of pixels:
+`panel_k` floors everything else to a whole multiple, so opening at 640 x 480 opens with no border at
+all and opening at 700 x 500 would open at the same scale with a band of `bg-sunken` nobody asked
+for. Its minimum is 1:1.
+
+**What it may not contain is the whole of the distinction between a view and a tear-off**, and it is
+asserted rather than remembered: one `Image`, no `TouchArea`, no `Pressable`, no `Row`, no wheel. Its
+keys reach `main::machine_key` through `invoke_machine_key` — §16.8's one definition, invoked rather
+than repeated — and its frame is `main.get_screen_source()`, pushed on the machine's own tick, so the
+two windows cannot come to be showing different frames.
+
+**`Esc` goes outwards, in one order**, which is §16.8's rule applied to the surface it is pressed on:
+leave fullscreen first, and only close the window once there is no fullscreen to leave. A key that
+did both at once would take somebody from a television to nothing.
+
+**What is not proved by a test, and it is worth saying.** Slint's testing backend runs one window per
+thread, so this suite cannot stand up two real windows: what
+`the_popped_out_panel_is_a_view_of_the_one_panel_and_not_a_second_front_end` proves is the shape, and
+`the_panel_scale_is_the_largest_whole_multiple_that_fits` proves the arithmetic it draws at. Dragging
+it to a second display and making it fullscreen there — this section's own *done when* — is checked
+by hand.
 
 ### 21.8 Input: everything reaches the wheel
 

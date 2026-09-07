@@ -95,10 +95,15 @@ export component GamesPage inherits Rectangle {
                 // §9.1's empty state for this page, and it is a sentence rather than a blank list:
                 // an empty page and a page that has not been pointed anywhere look identical, and
                 // only one of them is the operator's to fix.
-                Row {
+                // **`if`, not `visible`.** §16.3's rule is that `visible: false` still reserves the
+                // layout cell, and that is right where something would otherwise shuffle — but this
+                // row is `ROW_H + FIELD_REASON` = 78 px of it, held open above the first title on
+                // every shelf that has one. Read it off `_out/gui/games.png`: a blank band between
+                // *Titles are in* and the first game. Nothing shuffles when it goes, because it is
+                // drawn only in the state where there is nothing below it to move.
+                if root.titles.length == 0: Row {
                     index: 1;
                     count: 2;
-                    visible: root.titles.length == 0;
                     label: "No titles";
                     enabled: false;
                     machine-rule: false;
@@ -109,19 +114,52 @@ export component GamesPage inherits Rectangle {
                         : "Nothing in that folder holds Executables/<name>.bin, as itself or one level down.";
                 }
 
+                // ── One title: its own name, its own cover, and whether it runs here ───────
+                //
+                // **Everything drawn is out of the title's `Manifest.plist`** — issue #29. The
+                // name is the top-level `Name`, the cover is what the 5G build's `LaunchingArtwork`
+                // points at, and `runs` is whether the manifest lists a `PlatformID 1` build at
+                // all. `main::title_row` reads all three; this page words none of it.
+                //
+                // **The cover is beside the row rather than above a page of its own.** §13.2 draws
+                // a title's own page with the art at the top, and that page is the binding matrix,
+                // which is 0.6. What the list needs is the thing a person recognises, at the size a
+                // list row is — and the row is `ROW_H` tall, so the cover is drawn to that.
                 for t[i] in root.titles: Row {
                     index: i + 1;
                     count: root.titles.length + 1;
                     label: t.name;
                     sub: t.path;
                     sub-mono: true;
-                    chevron: true;
+                    // A title that cannot run says why, in place, and is never hidden — §14.1.
+                    // `PlatformID` answers it before anything is loaded.
+                    enabled: t.runs;
+                    reason: t.reason;
+                    // §9.4's two kinds: this is *this cannot work, ever* — the title ships no build
+                    // for the iPod this emulator is, and no amount of fetching changes that.
+                    machine-rule: true;
+                    // **No chevron, and that is a correction rather than a style choice.** §21.3:
+                    // a chevron is a claim that pressing goes one level deeper, and pressing a
+                    // title starts a machine — §13.3's *there is no boot; press the centre button
+                    // and the title is there*. It never opened a page, and the `›` was the same
+                    // false claim §21.3 records against `Doom` and `Diagnostics`. Removing it also
+                    // puts the cover at the trailing edge with nothing between it and the name.
+                    chevron: false;
                     activated => {
                         root.play(i);
                     }
                     gained-focus => {
                         scroll.ensure-visible(self.absolute-position.y, self.height);
                     }
+
+                    // **`if`, not `visible`**: a title with no artwork reserves nothing, because
+                    // §13.2's rule for that case is that there is no placeholder to reserve room
+                    // for. §16.3's anti-shuffle argument does not reach it — this is absolutely
+                    // positioned inside the row, so nothing moves either way.
+                    // The cover goes through `Row`'s own trailing gutter rather than as a child
+                    // here — see `primitives.slint`'s `thumb` for why a child overflowed the
+                    // drawer.
+                    thumb: t.cover;
                 }
             }
         }

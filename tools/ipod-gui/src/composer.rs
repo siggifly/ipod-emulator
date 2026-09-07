@@ -554,7 +554,7 @@ impl Composer {
     /// `the_verdict_the_plan_and_the_recipe_are_one_recipe` calls after every kind of edit.
     ///
     /// [`Composer::open`] sits in the middle of the run and is **not** gated: `push_composer` reads
-    /// it on every frame, through `set_composer_open_field` at `main.rs:6534`.
+    /// it on every frame, through `set_composer_open_field` at `main.rs:6800`.
     #[cfg(test)]
     pub fn region(&self) -> &Region {
         &self.region
@@ -2368,7 +2368,7 @@ impl Composer {
     /// `Field` has one (`primitives.slint:46`), `Pressable` does not — so a `Lock::Dump` sentence
     /// parked in `note` left the locked Model and Colour rows reserving §5's 34 px and saying
     /// nothing at all, two rows above a `Field` drawing that same sentence correctly. That is
-    /// `primitives.slint:509`'s own rule — *non-empty whenever `!enabled`* — broken on the page
+    /// `primitives.slint:520`'s own rule — *non-empty whenever `!enabled`* — broken on the page
     /// §9.4 was written for. A refusal is a reason; a shared iPod is a consequence; `locked()` is
     /// exactly that distinction and already knew the answer.
     fn pick(&self, field: Field, value: String, lock: Lock) -> Pick {
