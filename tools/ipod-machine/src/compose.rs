@@ -1167,9 +1167,6 @@ pub const FIRST_RUN_DEVICE: &str = "My 5.5G";
 /// The `UpdaterFamilyID` first run fetches from. The **release** is not a constant — it is
 /// `firmware::by_updater_family(25)`'s newest served, verifiable entry.
 pub const FIRST_RUN_FAMILY: u16 = 25;
-/// How long a cold boot takes, in seconds. A sub-line, never a bar: no percentage until this
-/// device has completed one boot of its own.
-pub const COLD_BOOT_SECONDS: u32 = 75;
 /// A 5G/5.5G firmware partition, for an estimate made before the bundle is opened.
 ///
 /// Measured on the reference drive: 27 140 sectors, which is `Firmware-20.6.3` to the byte.

@@ -196,6 +196,115 @@ impl Progress {
             }
         }
     }
+
+    /// **This boot has already cost more than the one that taught the denominator.**
+    ///
+    /// `false` where there is no denominator: a device that has never completed a boot cannot have
+    /// exceeded one, and answering `true` for it would put §12.3's *the recipe changed* sentence on
+    /// every first run.
+    pub fn past_the_denominator(&self) -> bool {
+        matches!(self, Progress::Fraction { done, of } if *done > of.get())
+    }
+
+    /// **Wall seconds still to go, divided out of this boot's own measured rate.**
+    ///
+    /// Every term is a reading taken since this machine started: the instructions left are the
+    /// denominator this device learned minus what it has executed, and the rate is [`Pace::speed`],
+    /// which is `executed_here / wall_secs`. Nothing here is a constant, so nothing here can be the
+    /// defect the shipped `about 75 s` was — a figure that was right at one clock, kept being
+    /// printed at another, and was wrong by fifteen times.
+    ///
+    /// **It self-corrects, which is the property that matters.** A boot running slower than the one
+    /// that taught the denominator produces a bigger number every time it is asked, so the estimate
+    /// grows in front of the person rather than expiring silently.
+    ///
+    /// `None` in three cases, and the third is the interesting one:
+    ///
+    /// - no denominator — the device has never completed a boot at this clock, so there is nothing
+    ///   to subtract from;
+    /// - no measured rate — the machine has been up for no wall time this program can divide by;
+    /// - **the denominator has already been passed** ([`Progress::past_the_denominator`]). That is
+    ///   not a shortage of information, it is an estimate that has been proved wrong, and inventing
+    ///   a *nearly there* for it is exactly the bar-pinned-at-100 % this whole section exists to
+    ///   stop. [`Life::shelf`] says so in words and the caption goes back to a count that moves.
+    pub fn remaining(&self, pace: &Pace) -> Option<f64> {
+        let Progress::Fraction { done, of } = self else {
+            return None;
+        };
+        let left = of.get().checked_sub(*done).filter(|n| *n > 0)?;
+        let rate = pace.speed().filter(|s| *s > 0.0)?;
+        Some(left as f64 / rate)
+    }
+}
+
+/// **A duration, forwards, for a person** — `45 s`, `4 min`, `26 min`.
+///
+/// [`crate::ago`] is the same arithmetic pointed backwards and says *just now* / *4 min ago*; this
+/// one is about a wait that has not happened yet, and *just now* is not a thing to say about one.
+///
+/// **Minutes are the coarsest unit**, deliberately: `1 h 10 min` is three characters wider than
+/// `70 min` on a row measured at 48 characters, and the widest thing this program has ever measured
+/// — an iPodLinux cold boot at 21.5 G instructions — is about half an hour. A unit chosen for
+/// elegance that pushes the number off the end of the row is a worse instrument than a large
+/// number of minutes.
+pub fn duration(secs: f64) -> String {
+    let s = secs.max(0.0).round() as u64;
+    if s < 90 {
+        return format!("{s} s");
+    }
+    format!("{} min", (s + 30) / 60)
+}
+
+/// **What a booting machine has been observed to do**, in the order a cold boot does it.
+///
+/// Not the firmware's own phases: nothing in this program can see those, and a list of them
+/// reasoned out from what an operating system *ought* to do at each point is the shape of instrument
+/// AGENTS.md §6 is written about. Each variant below is **one published number crossing zero**, and
+/// the order is measured rather than assumed — research/10 Addendum 32 sampled a retail cold boot
+/// every 2 M steps and put the first lit pixel at 43 M of 872 M, the drive's first answer at 57.5 M,
+/// and the machine going quiet at 823.6 M.
+///
+/// **This is the half the operator was missing.** A fresh iPod showed a logo and nothing else for
+/// six minutes, and the reasonable conclusion was that it had hung; it was reading its drive the
+/// whole time, and the number that says so was published on every tick and drawn nowhere.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Reached {
+    /// Nothing on the panel and nothing asked of the drive. `Out::fb_nonzero` and
+    /// `Stats::ata_commands` are both zero.
+    Nothing,
+    /// `Out::fb_nonzero != 0` — something has been drawn. On a retail dump that is Apple's
+    /// bootloader painting its own screen.
+    Panel,
+    /// `Stats::ata_commands > 0` — the operating system is being read off the drive. The count
+    /// moves for the whole middle of a cold boot, which is what makes it the useful one.
+    Drive,
+}
+
+impl Reached {
+    /// What the machine last did, said in the shelf's own register — a state, never a meter.
+    ///
+    /// **The ATA count is deliberately not in here.** It moves, and a number that moves belongs in
+    /// the one slot §12.3 gives a number that moves; two of them on one screen is the duplication
+    /// [`cradle`]'s `Running` arm was rewritten to end.
+    pub fn said(self) -> &'static str {
+        match self {
+            Reached::Nothing => "nothing on the panel yet",
+            Reached::Panel => "the panel has lit",
+            Reached::Drive => "reading the drive",
+        }
+    }
+
+    /// From the two counters the run loop already publishes.
+    ///
+    /// The drive outranks the panel because it is the later milestone, and it stays true for the
+    /// rest of the boot — a machine that has read its drive does not go back to not having.
+    pub fn read(drawn: bool, ata_commands: u64) -> Reached {
+        match (ata_commands > 0, drawn) {
+            (true, _) => Reached::Drive,
+            (false, true) => Reached::Panel,
+            (false, false) => Reached::Nothing,
+        }
+    }
 }
 
 // ── §12.2: the four phases, and Off is genuinely one of them ─────────────────────────────────────
@@ -290,7 +399,18 @@ impl Pace {
 #[derive(Clone, PartialEq, Debug)]
 pub enum Life {
     Off,
-    Booting { target: BootTarget, progress: Progress },
+    /// **A cold boot carries everything it takes to say how it is going**, which is the whole of
+    /// what §12.3 asks for and what the shipped window did not have: a `Progress` with no rate
+    /// beside it can draw a bar and cannot say how long is left, and the row that tried said
+    /// `about 75 s` from a constant instead.
+    Booting {
+        target: BootTarget,
+        progress: Progress,
+        /// The same `Pace` `Running` carries — the machine's own instructions and wall seconds.
+        /// [`Progress::remaining`] is what divides them.
+        pace: Pace,
+        reached: Reached,
+    },
     Running { pace: Pace, stalled_secs: f32 },
     Stopped { reason: Reason, pace: Pace },
 }
@@ -306,12 +426,28 @@ impl Life {
             Phase::Booting { .. } => Life::Booting {
                 target: boot_target.clone(),
                 progress: Progress::read(out.stats.executed, denominator),
+                pace: Pace::of(&out.stats),
+                reached: Reached::read(out.fb_nonzero != 0, out.stats.ata_commands),
             },
             Phase::Running => {
                 Life::Running { pace: Pace::of(&out.stats), stalled_secs: out.stalled_secs }
             }
             Phase::Stopped(why) => {
                 Life::Stopped { reason: Reason::new(why), pace: Pace::of(&out.stats) }
+            }
+        }
+    }
+
+    /// Wall seconds this machine has been running in this process, or `0.0` where there is none.
+    ///
+    /// **`Off` is a zero and not an unmeasured**, which is the one place in this module that is
+    /// true: there is no machine, so nothing has been running for any length of time. Every other
+    /// phase carries a [`Pace`] and this is its own number.
+    pub fn wall_secs(&self) -> f64 {
+        match self {
+            Life::Off => 0.0,
+            Life::Booting { pace, .. } | Life::Running { pace, .. } | Life::Stopped { pace, .. } => {
+                pace.wall_secs
             }
         }
     }
@@ -358,7 +494,19 @@ impl Life {
     pub fn shelf(&self) -> String {
         match self {
             Life::Off => "off".into(),
-            Life::Booting { progress, .. } => format!("booting — {}", progress.caption()),
+            // **The phase, and it used to be the percentage.** The bar under the device draws that
+            // fraction and the cradle label carries the number beside it, both within fifty pixels
+            // of this row — so `booting — 62 %` was one fact printed three times and the one thing
+            // a person watching a logo for six minutes actually needed was printed nowhere. This
+            // row is §12.2's *state* column; the state of a boot is how far through the machine's
+            // own milestones it is, not what percentage of them it has done.
+            Life::Booting { progress, reached, .. } => match progress.past_the_denominator() {
+                // §12.3: *"the bar passes 100 % and keeps going."* Said out loud, because a bar
+                // clamped at full while the count climbs is an instrument that has quietly stopped
+                // measuring, and this is the row with room to say which.
+                true => "booting — longer than it took last time".into(),
+                false => format!("booting — {}", reached.said()),
+            },
             Life::Running { .. } => "running".into(),
             Life::Stopped { .. } => "stopped".into(),
         }
@@ -607,7 +755,10 @@ impl Restore {
 /// snapshot without dropping the thread. Named in GUI.md §12.4 and in this module's header.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Launch {
-    /// Enter at the reset vector. About `compose::COLD_BOOT_SECONDS`.
+    /// Enter at the reset vector. **How long that takes is this device's own measurement or
+    /// nothing** — `compose::COLD_BOOT_SECONDS` was a 75 measured at `--clock=5` and quoted for a
+    /// year at a clock where the same boot costs fifteen times as much. It is deleted; see
+    /// [`cold_tail`].
     Cold,
     /// Put the machine back where it was. About 3 s.
     Resume,
@@ -673,6 +824,20 @@ pub enum Blocked {
     Unbuilt,
     /// §10.3: a first run that stopped part-way. Unfinished, not broken.
     Unfinished,
+    /// **This iPod's boot ROM and its drive are different generations**, and it boots to errors.
+    ///
+    /// The most expensive silent failure this project has. Family 25 is the 5.5G's updater and 13
+    /// and 20 are the 5G's; a 5G ROM against a 5.5G drive is not recognised as its own software and
+    /// shows the plug-into-a-computer screen after about seventy ATA commands, where a matching
+    /// pair reaches the language picker with several hundred. That reads as a broken emulator, and
+    /// it is what you get by picking a ROM and a drive from two lists that do not know about each
+    /// other — which is what the operator did, on an ordinary launch, and got *"some black ipod
+    /// that just boots up to errors"* with nothing anywhere saying why.
+    ///
+    /// **It is last in the order deliberately.** A part that has left the library is `Parts`
+    /// first — the pair may well be fine and the remedy is a different one — and a device with no
+    /// drive is `Unfinished`, because a device with nothing to disagree with cannot disagree.
+    Generations,
 }
 
 impl Blocked {
@@ -682,7 +847,9 @@ impl Blocked {
     /// one and the remedy is not the same, so the composed test comes first. **This is now the
     /// only place that order exists** — `main::blocked_label` is a `match` on what this returns,
     /// which is what makes two orders unwritable rather than merely discouraged.
-    pub fn of(device: Option<&Device>, absent: &[Absent]) -> Option<Blocked> {
+    /// `mismatch` is `Settings::generation_mismatch`'s answer for this device, computed by the
+    /// caller for the reason `absent` is: it opens the boot ROM, and this is asked per draw.
+    pub fn of(device: Option<&Device>, absent: &[Absent], mismatch: Option<&str>) -> Option<Blocked> {
         let Some(d) = device else {
             return Some(Blocked::Nothing);
         };
@@ -695,6 +862,9 @@ impl Blocked {
         if !d.names_a_disk() {
             return Some(Blocked::Unfinished);
         }
+        if mismatch.is_some() {
+            return Some(Blocked::Generations);
+        }
         None
     }
 
@@ -702,13 +872,21 @@ impl Blocked {
     /// is a thing this program has not written yet, which carries a command rather than a `Fix`.
     ///
     /// The same answer `devices::start_row` computes — `row.machine_rule = !gone.is_empty()`.
+    /// **`Generations` is one too, and for the reason that word means.** A 5G's software is not a
+    /// 5.5G's, ever — the Composer's firmware picker already words its own refusal that way — so
+    /// this carries no `Fix` and no command. What repairs it is choosing a different drive or a
+    /// different ROM, which is the Composer's, and the sentence says which two are in the way.
     pub fn machine_rule(self) -> bool {
-        matches!(self, Blocked::Parts)
+        matches!(self, Blocked::Parts | Blocked::Generations)
     }
 
     /// Whether the ring is drawn with gaps. §7.3 gives a broken ring to the three `cannot start`
     /// rows and to nothing else — an empty bench is *empty*, not broken, and a half-made device is
     /// unfinished.
+    ///
+    /// **A mismatched pair is not broken either.** Both parts are present and readable; what is
+    /// wrong is that they are not each other's. The ring is `Dim` — this cannot start — and whole,
+    /// which is the same distinction `Unbuilt` and `Unfinished` already draw.
     pub fn breaks_the_ring(self) -> bool {
         matches!(self, Blocked::Parts)
     }
@@ -730,9 +908,38 @@ pub struct Stand<'a> {
     pub cfg: Option<&'a Config>,
     /// §12.4's ~1.6 GB write is under way. `Link::saving`.
     pub parking: bool,
+    /// **The clock a press would start this machine at** — `emu::Config::clock`, or the window's
+    /// default where no machine has been resolved.
+    ///
+    /// Not read off [`Stand::cfg`], because `cfg` is `None` for the state this matters most in: an
+    /// iPod standing in the well that has never been started. A cold-boot measurement taken at
+    /// another clock describes another experiment, and this is the value it is checked against.
+    pub clock: u32,
+    /// §14.1, and the sentence is `Settings::generation_mismatch`'s.
+    ///
+    /// **Computed by the caller and passed in, exactly as `absent` is**, and for the same reason:
+    /// answering it costs a 1 MiB read of the boot ROM, and the bench asks for a caption sixty
+    /// times a second. `None` means *no reason to object*, which includes not knowing.
+    pub mismatch: Option<&'a str>,
 }
 
 impl Stand<'_> {
+    /// This device's last completed cold boot, **if it was measured at the clock in force**.
+    pub fn boot(&self) -> Option<ipod_machine::settings::ColdBoot> {
+        self.device
+            .and_then(Device::cold_boot)
+            .filter(|b| b.clock == self.clock)
+    }
+
+    /// What a resume would have to read, off the file it would read it from.
+    ///
+    /// Only ever asked where [`Restore::of`] has already said the snapshot is there and pairs with
+    /// the drive, so this is a second `stat` of a file one line after the first — which is what
+    /// §12.4 says the whole question costs, and cheap enough to ask before drawing a row.
+    fn snapshot_bytes(&self) -> Option<u64> {
+        let p = self.cfg?.snapshot.as_ref()?;
+        std::fs::metadata(p).ok().map(|m| m.len())
+    }
     /// §12.4's half of the pair, or `Never` when there is no machine configured.
     pub fn restore(&self) -> Restore {
         self.cfg.map_or(Restore::Never, Restore::of)
@@ -773,7 +980,7 @@ pub fn cradle(press: crate::Press, st: &Stand) -> Cradle {
         return Cradle { ring: Ring::Dim, broken: false, label: PARKING.into() };
     }
     match st.life {
-        Life::Booting { progress, .. } => Cradle {
+        Life::Booting { progress, pace, .. } => Cradle {
             // **Asked of [`Life::ring`] rather than typed here**, and that is a defect this pass
             // found rather than a tidiness point: this `match` carried a second copy of §12.2's
             // ring column — `Dim`, `Dim`, `Danger` — beside the one `Life::ring` already answered,
@@ -790,7 +997,15 @@ pub fn cradle(press: crate::Press, st: &Stand) -> Cradle {
             // of them for the next twenty-one minutes"*. Reversed, the stop survives every width,
             // and `every_machine_caption_this_module_types_fits_its_own_row` measures that it does
             // rather than asserting it here in prose.
-            label: format!("{} to stop — booting, {}", press.verb(), progress.caption()),
+            //
+            // **And the word `booting` has gone, which is what bought the row an estimate.** With a
+            // two-digit percentage in it this caption was 47 characters of a 48-character budget —
+            // measured, not guessed — so there was no room for a third fact, and the operator's
+            // *"show … the phases its going through and estimations"* had nowhere to go. `booting`
+            // is [`Life::shelf`]'s word, drawn beside the machine's name a row above the device;
+            // the percentage is the rule drawn eight pixels under it. Neither of those can say how
+            // much longer, and that is now the only thing this row says.
+            label: format!("{} to stop — {}", press.verb(), boot_tail(progress, pace)),
         },
         Life::Running { .. } => Cradle {
             ring: st.life.ring(),
@@ -843,28 +1058,89 @@ pub fn cradle(press: crate::Press, st: &Stand) -> Cradle {
 /// which is the one thing §12.3 is written about.
 const PARKING: &str = "parking";
 
+/// §12.3's boot caption, as **one fact rather than three**, because the row holds one.
+///
+/// Three forms, in the order they become available, and every one of them is a division of numbers
+/// the machine published in this session:
+///
+/// - `2 min left` — there is a denominator and a measured rate, so there is an answer.
+/// - `4 min so far` — there is no answer, and the honest substitute is the wait itself. This is the
+///   **first boot** of a device, where §12.3 forbids a fraction outright, and it is also the
+///   overrun: an estimate this boot has already passed is not a smaller estimate, it is a wrong one,
+///   and a clock that goes on counting says so where a bar pinned at full does not.
+/// - `50 %` or `412 M instr` — the first tick, before a wall second has passed for a rate to be
+///   divided out of. This is [`Progress::caption`] unchanged, so it is the fraction where there is
+///   one and §12.3's count where there is not; it is what the row says for the fraction of a second
+///   before the machine has been running long enough to be measured.
+fn boot_tail(progress: &Progress, pace: &Pace) -> String {
+    if let Some(secs) = progress.remaining(pace) {
+        return format!("{} left", duration(secs));
+    }
+    if pace.wall_secs >= 1.0 {
+        return format!("{} so far", duration(pace.wall_secs));
+    }
+    progress.caption()
+}
+
 /// The `Off` half of [`cradle`] — every row that is about a device rather than about a machine.
 fn off_cradle(press: crate::Press, st: &Stand) -> Cradle {
-    if let Some(b) = Blocked::of(st.device, st.absent) {
+    if let Some(b) = Blocked::of(st.device, st.absent, st.mismatch) {
         let label = match st.device {
-            Some(d) => crate::blocked_label(press, d, st.absent, b),
+            Some(d) => crate::blocked_label(press, d, st.absent, b, st.mismatch),
             None => NOTHING_MOUNTED.to_string(),
         };
         return Cradle { ring: Ring::Dim, broken: b.breaks_the_ring(), label };
     }
     let tail = match st.restore() {
-        // `Whole` is the only row that may promise three seconds, and `Stand::launch` is what the
-        // press will actually do — the two read the same `Config` and are checked against each
-        // other in this module's tests.
-        Restore::Whole => " — resume, about 3 s",
+        // **`about 3 s` was a literal too, and the snapshot's own size replaces it.** §21.6 made
+        // exactly this correction to the `Suspend` row one band up — *"the first draft typed
+        // §12.4's measured About 149 MB as a literal, which is the same shape as §7.3's about 75
+        // s"* — off `Link::snapshot_bytes`. This is the same fact on the way back in, off the file
+        // the restore will actually read, which is already `stat`ed by `Restore::of` one line
+        // above. `Stand::launch` is what the press will do — the two read the same `Config` and
+        // are checked against each other in this module's tests.
+        Restore::Whole => match st.snapshot_bytes() {
+            Some(n) => format!(" — resume, {} to read", ipod_machine::si(n)),
+            None => " — resume".to_string(),
+        },
         // §7.3's own wording is `press ● to cold boot · the parked snapshot no longer matches this
         // drive`: 71 characters against a 48-character row. `no resume` is the half a person needs
         // before pressing — the snapshot is not being used — and *why* it is not is a paragraph,
         // which §7.3 already puts on the device's drawer page beside `Discard the snapshot`.
-        Restore::Broken => " — no resume, about 75 s",
-        Restore::Never => " — cold boot, about 75 s",
+        Restore::Broken => cold_tail("no resume", st),
+        Restore::Never => cold_tail("cold boot", st),
     };
     Cradle { ring: Ring::Accent, broken: false, label: format!("{}{tail}", press.verb()) }
+}
+
+/// §7.3's cold-boot tail, with **this device's own last cold boot** on the end of it where there is
+/// one.
+///
+/// The row said `about 75 s` and it was a constant. That figure was measured — RetailOS's language
+/// picker draws at about 1.05 G instructions, and a host doing 14 M instr/s takes 75 seconds over
+/// them — but it was measured at `--clock=5`, and the default became 75 on 2026-08-17 while the
+/// string did not. At clock 75 the same boot needs fifteen times the instructions, so the window
+/// spent months quoting a number that was wrong by a factor of fifteen at every launch, and an
+/// operator watched a perfectly healthy boot for six minutes and reasonably concluded it had hung.
+///
+/// **Past tense, and that is the design rather than the grammar.** `was 19 min` reports what this
+/// device's last completed cold boot cost; `about 19 min` would predict this one. The difference is
+/// that a report cannot become wrong — the boot it describes happened — whereas a prediction goes
+/// on being printed after the thing that made it true has changed, which is the entire defect
+/// above. What this boot is actually costing is said while it is happening, by [`boot_tail`], off
+/// numbers taken from the boot itself.
+///
+/// **Nothing is said where nothing has been measured**, which is every first run: `Stand::boot`
+/// answers `None` for a device that has never finished a boot and for one whose measurement was
+/// taken at another clock, and the tail is then the bare `cold boot` §7.3 already wrote.
+fn cold_tail(what: &str, st: &Stand) -> String {
+    match st.boot() {
+        Some(b) => format!(
+            " — {what}, was {}",
+            duration(b.millis as f64 / 1000.0)
+        ),
+        None => format!(" — {what}"),
+    }
 }
 
 // ── §7.4 and §12.5: what a press does, and what a phase permits ──────────────────────────────────
@@ -898,11 +1174,11 @@ pub fn centre(st: &Stand) -> Act {
     match st.life {
         Life::Booting { .. } => Act::Stop,
         Life::Running { .. } => Act::ToMachine,
-        Life::Stopped { .. } => match Blocked::of(st.device, st.absent) {
+        Life::Stopped { .. } => match Blocked::of(st.device, st.absent, st.mismatch) {
             Some(b) => Act::Refuse(b),
             None => Act::Start(Launch::Cold),
         },
-        Life::Off => match Blocked::of(st.device, st.absent) {
+        Life::Off => match Blocked::of(st.device, st.absent, st.mismatch) {
             Some(b) => Act::Refuse(b),
             None => Act::Start(st.launch()),
         },
@@ -1042,7 +1318,15 @@ mod tests {
         life: &'a Life,
         cfg: Option<&'a Config>,
     ) -> Stand<'a> {
-        Stand { device: d, absent, life, cfg, parking: false }
+        Stand {
+            device: d,
+            absent,
+            life,
+            cfg,
+            parking: false,
+            clock: ipod_machine::CLOCK as u32,
+            mismatch: None,
+        }
     }
 
     // ── §12.2: the four phases ───────────────────────────────────────────────────────────────────
@@ -1265,7 +1549,20 @@ mod tests {
         let absent = s.missing_with(&d, &mut Presence::new());
         assert!(absent.is_empty(), "the fixture device is not intact: {absent:?}");
         let whole = cradle(crate::Press::Centre, &stand(Some(&d), &absent, &life, Some(&cfg)));
-        assert_eq!(whole.label, "Press the centre button — resume, about 3 s");
+        // **The size is the snapshot file's own**, read here the same way the caption reads it, so
+        // this asserts a derivation rather than a string. It was `about 3 s` — a literal, the twin
+        // of the `about 75 s` two rows down, and neither of them a measurement of anything on this
+        // machine.
+        let bytes = std::fs::metadata(cfg.snapshot.as_ref().expect("a snapshot path"))
+            .expect("the fixture snapshot")
+            .len();
+        assert_eq!(
+            whole.label,
+            format!(
+                "Press the centre button — resume, {} to read",
+                ipod_machine::si(bytes)
+            )
+        );
         assert_eq!(whole.ring, Ring::Accent);
 
         // Something else wrote to the drive — `ipod-boot put-files`, iTunes, a second window.
@@ -1273,8 +1570,8 @@ mod tests {
         std::fs::write(&cfg.workdisk, b"drive and more").expect("the drive moving on");
         assert_eq!(Restore::of(&cfg), Restore::Broken);
         let broken = cradle(crate::Press::Centre, &stand(Some(&d), &absent, &life, Some(&cfg)));
-        assert_eq!(broken.label, "Press the centre button — no resume, about 75 s");
-        assert!(!broken.label.contains("3 s"), "a broken pair still promised a resume");
+        assert_eq!(broken.label, "Press the centre button — no resume");
+        assert!(!broken.label.contains("to read"), "a broken pair still promised a resume");
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1310,6 +1607,8 @@ mod tests {
         let booting = Life::Booting {
             target: BootTarget::default(),
             progress: Progress::read(1_000, Some(800_000_000)),
+            pace: Pace::default(),
+            reached: Reached::Nothing,
         };
         assert_eq!(
             Glass::of(&booting, None, false),
@@ -1342,6 +1641,159 @@ mod tests {
     }
 
     // ── §7.3: the cradle table ───────────────────────────────────────────────────────────────────
+
+    /// **The boot estimate is a division of measured numbers, and it moves when they do.**
+    ///
+    /// The row it replaces read `about 75 s` from a constant. That figure was measured — RetailOS's
+    /// picker at about 1.05 G instructions, a host at 14 M instr/s — but at `--clock=5`, and the
+    /// default became 75, at which the same boot needs fifteen times the instructions. A literal
+    /// cannot notice that. So the assertion here is not *what it says* but *that it changes*: the
+    /// same progress against half the rate has to produce twice the wait.
+    #[test]
+    fn the_boot_estimate_is_divided_out_and_not_typed() {
+        let of = std::num::NonZeroU64::new(1_600_000_000).expect("a denominator");
+        let progress = Progress::Fraction { done: 800_000_000, of };
+        // 800 M done in 10 s is 80 M instr/s, so the 800 M left is another 10 s.
+        let quick = Pace { here: 800_000_000, wall_secs: 10.0, ..Pace::default() };
+        assert_eq!(boot_tail(&progress, &quick), "10 s left");
+        // The same boot, half the rate. **A constant would say the same thing twice.**
+        let slow = Pace { here: 800_000_000, wall_secs: 20.0, ..Pace::default() };
+        assert_eq!(boot_tail(&progress, &slow), "20 s left");
+
+        // **No rate yet is not an estimate of zero.** The first tick has no wall time to divide by,
+        // and what it says is the count §12.3 gives a device with nothing to divide at all.
+        let cold = Pace { here: 800_000_000, wall_secs: 0.0, ..Pace::default() };
+        assert_eq!(boot_tail(&progress, &cold), "50 %");
+        // …and with no denominator either, the count §12.3 gives a device that has never booted.
+        let first = Progress::Counted { instructions: 800_000_000 };
+        assert_eq!(boot_tail(&first, &cold), "800 M instr");
+    }
+
+    /// **An estimate that turns out wrong keeps counting rather than being silently exceeded.**
+    ///
+    /// §12.3 names both halves of what goes wrong when the thing on the drive changes under a
+    /// stored denominator, and this is the one a person watching can see: the bar passes 100 % and
+    /// goes on. A row that answered *nearly there* for ever would be the instrument that has
+    /// quietly stopped measuring, which is worse than no instrument.
+    #[test]
+    fn a_boot_that_outruns_its_estimate_says_so_and_goes_on_counting() {
+        let of = std::num::NonZeroU64::new(1_000_000_000).expect("a denominator");
+        let over = Progress::Fraction { done: 1_400_000_000, of };
+        assert!(over.past_the_denominator());
+        assert_eq!(over.percent(), Some(140), "the reading is clamped, so it is hidden");
+
+        let pace = Pace { here: 1_400_000_000, wall_secs: 420.0, ..Pace::default() };
+        assert_eq!(
+            over.remaining(&pace),
+            None,
+            "an estimate already passed produced another estimate"
+        );
+        assert_eq!(
+            boot_tail(&over, &pace),
+            "7 min so far",
+            "the caption stopped moving once the estimate was wrong"
+        );
+        let life = Life::Booting {
+            target: BootTarget::Os,
+            progress: over,
+            pace,
+            reached: Reached::Drive,
+        };
+        assert_eq!(life.shelf(), "booting — longer than it took last time");
+
+        // The control: the same row, still inside its estimate, says the phase instead.
+        let inside = Progress::Fraction { done: 400_000_000, of };
+        assert!(!inside.past_the_denominator());
+        let life = Life::Booting {
+            target: BootTarget::Os,
+            progress: inside,
+            pace,
+            reached: Reached::Drive,
+        };
+        assert_eq!(life.shelf(), "booting — reading the drive");
+    }
+
+    /// **The phases are two published counters crossing zero, in the order a cold boot crosses
+    /// them** — research/10 Addendum 32 measured the first lit pixel at 43 M of an 872 M boot and
+    /// the drive's first answer at 57.5 M.
+    ///
+    /// Read through `Life::read` rather than by calling `Reached::read` directly, because the thing
+    /// that could be wrong is which fields of `Out` it is fed: `fb_nonzero` is the panel and
+    /// `Stats::ata_commands` is the drive, and there is a second counter on `Stats` — `data_reads`
+    /// — that was once drawn under the label `ata commands` in the Readout for exactly this reason.
+    #[test]
+    fn a_booting_machine_says_which_of_its_own_milestones_it_has_passed() {
+        let phase = |lit: u32, ata: u64| {
+            let mut o = out(Phase::Booting { target: 0 }, stats(1_000_000, 1.0));
+            o.fb_nonzero = lit;
+            o.stats.ata_commands = ata;
+            match Life::read(&o, &BootTarget::Os, None) {
+                Life::Booting { reached, .. } => reached,
+                other => panic!("a booting machine read as {other:?}"),
+            }
+        };
+        assert_eq!(phase(0, 0), Reached::Nothing);
+        assert_eq!(phase(2_916, 0), Reached::Panel);
+        assert_eq!(phase(76_800, 340), Reached::Drive);
+        // The drive outranks the panel, and it also outranks a panel that has gone dark again.
+        assert_eq!(phase(0, 340), Reached::Drive);
+
+        assert_eq!(
+            [Reached::Nothing, Reached::Panel, Reached::Drive].map(Reached::said),
+            [
+                "nothing on the panel yet",
+                "the panel has lit",
+                "reading the drive"
+            ]
+        );
+    }
+
+    /// **A device's own last cold boot is what the cradle promises, and only at the clock it was
+    /// measured at.**
+    #[test]
+    fn the_cold_boot_promise_is_this_devices_own_measurement() {
+        use ipod_machine::settings::ColdBoot;
+        let dir = scratch("promise");
+        let (s, mut d) = library(&dir);
+        let absent = s.missing_with(&d, &mut Presence::new());
+        let off = Life::Off;
+
+        // Nothing measured: no claim at all. §12.3's *no fraction and no bar*, applied to the
+        // promise as well as to the picture.
+        let bare = cradle(crate::Press::Centre, &stand(Some(&d), &absent, &off, None));
+        assert_eq!(bare.label, "Press the centre button — cold boot");
+
+        d.cold_boot_instructions = Some(13_000_000_000);
+        d.cold_boot_millis = Some(1_140_000);
+        d.cold_boot_clock = Some(75);
+        assert_eq!(
+            d.cold_boot().map(|b: ColdBoot| b.millis),
+            Some(1_140_000),
+            "the fixture is not a whole measurement"
+        );
+
+        let at = |clock: u32| {
+            cradle(
+                crate::Press::Centre,
+                &Stand {
+                    device: Some(&d),
+                    absent: &absent,
+                    life: &off,
+                    cfg: None,
+                    parking: false,
+                    clock,
+                    mismatch: None,
+                },
+            )
+            .label
+        };
+        assert_eq!(at(75), "Press the centre button — cold boot, was 19 min");
+        // **The same device at another clock says nothing**, because the measurement is of a
+        // different experiment. This is the exact substitution the shipped literal made: a figure
+        // measured at 5 and printed at 75.
+        assert_eq!(at(5), "Press the centre button — cold boot");
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     /// **Every row of §7.3 this module owns, drawn once, with its ring and its continuity.**
     #[test]
@@ -1380,10 +1832,20 @@ mod tests {
             assert!(!c.label.is_empty(), "{name} drew an empty caption");
         }
         let by = |n: &str| rows.iter().find(|(k, _)| *k == n).map(|(_, c)| c.clone()).unwrap();
-        assert_eq!(by("booting").label, "Press the centre button to stop — booting, 62 %");
+        // 992 M of 1.6 G in 8.0 wall seconds is 124 M instr/s, so the 608 M left is 4.9 seconds of
+        // them. **Every term is the fixture's own**, which is the point: change the wall time and
+        // this number moves with it, where `about 75 s` did not move for anything.
+        assert_eq!(by("booting").label, "Press the centre button to stop — 5 s left");
+        assert_eq!(
+            booting.shelf(),
+            "booting — nothing on the panel yet",
+            "the phase belongs on the row above the device, where the percentage used to be"
+        );
         assert_eq!(by("running").ring, Ring::Dim);
         assert_eq!(by("stopped").ring, Ring::Danger);
-        assert_eq!(by("cold").label, "Press the centre button — cold boot, about 75 s");
+        // **No duration**, because this fixture's device has never completed a cold boot. §12.3's
+        // *no fraction and no bar* applied to the promise as well as to the picture.
+        assert_eq!(by("cold").label, "Press the centre button — cold boot");
         assert_eq!(by("cold").ring, Ring::Accent);
         assert_eq!(by("nothing").label, NOTHING_MOUNTED);
 
@@ -1417,10 +1879,10 @@ mod tests {
             ("composed", &composed, &[]),
         ] {
             let drew = cradle(crate::Press::Centre, &stand(Some(dev), absent, &off, None));
-            let b = Blocked::of(Some(dev), absent).expect("every row here is a refusal");
+            let b = Blocked::of(Some(dev), absent, None).expect("every row here is a refusal");
             assert_eq!(
                 drew.label,
-                crate::blocked_label(crate::Press::Centre, dev, absent, b),
+                crate::blocked_label(crate::Press::Centre, dev, absent, b, None),
                 "the bench and the Devices page word `{what}` differently"
             );
         }
@@ -1438,7 +1900,7 @@ mod tests {
         let off = Life::Off;
         let here = cradle(crate::Press::Here, &stand(Some(&d), &absent, &off, Some(&cfg)));
         let centre = cradle(crate::Press::Centre, &stand(Some(&d), &absent, &off, Some(&cfg)));
-        assert_eq!(here.label, "Press here — cold boot, about 75 s");
+        assert_eq!(here.label, "Press here — cold boot");
         assert!(!here.label.contains("centre button"), "§9.5's pane names a control it does not draw");
         assert_eq!(
             here.label.trim_start_matches("Press here"),
@@ -1469,10 +1931,21 @@ mod tests {
         assert!((24..=120).contains(&budget), "{budget} is not a sentence-sized budget");
 
         for (what, said) in [
-            ("cold", format!("{verb} — cold boot, about 75 s")),
-            ("resume", format!("{verb} — resume, about 3 s")),
-            ("no resume", format!("{verb} — no resume, about 75 s")),
-            ("booting", format!("{verb} to stop — booting, 62 %")),
+            ("cold", format!("{verb} — cold boot")),
+            // **The widest a derived estimate gets**, and it is measured rather than hoped: three
+            // digits of minutes is over sixteen hours, and `duration` stops at minutes precisely so
+            // that this row cannot be pushed off the end by a unit chosen for elegance.
+            ("cold, measured", format!("{verb} — cold boot, was 999 min")),
+            ("resume", format!("{verb} — resume, 1.6 GB to read")),
+            ("no resume", format!("{verb} — no resume, was 999 min")),
+            ("booting", format!("{verb} to stop — 26 min left")),
+            ("booting, unmeasured", format!("{verb} to stop — 26 min so far")),
+            // **This one used to be over budget and is not any more.** It was
+            // `… to stop — booting, 412 M instr` at 55 characters, exempted on the grounds that an
+            // instruction count's length is the machine's rather than ours; dropping the word
+            // `booting` — which `Life::shelf` says a row above the device — bought back seven
+            // characters and the widest count this program has ever printed now fits.
+            ("counted", format!("{verb} to stop — 21.5 G instr")),
             ("running", WHEEL_IS_LIVE.to_string()),
             ("parking", PARKING.to_string()),
             ("nothing", NOTHING_MOUNTED.to_string()),
@@ -1498,11 +1971,6 @@ mod tests {
         // not choose — an instruction count and an emulator's own stop reason — which is the
         // difference that earns the exemption.
         for (what, said, needs) in [
-            (
-                "counted",
-                format!("{verb} to stop — booting, 412 M instr"),
-                vec!["centre button", "stop", "booting"],
-            ),
             (
                 "stopped",
                 "stopped — Lost(0xe19b0000) at 128000 instructions".to_string(),

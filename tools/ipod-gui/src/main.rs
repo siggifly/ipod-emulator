@@ -932,8 +932,8 @@ fn wire(
             // this branch is taken once per machine and not once per frame.
             if learned.boot.is_some() || learned.parked.is_some() {
                 let mut s = settings.borrow_mut();
-                if let Some(n) = learned.boot {
-                    s.record_boot(n);
+                if let Some(b) = learned.boot {
+                    s.record_boot(b);
                 }
                 if let Some((name, at)) = &learned.parked {
                     // *When*, never *whether* (§3.3): whether there is anything to resume is a
@@ -3810,6 +3810,15 @@ impl Live {
             // §12.4's ~1.6 GB write. An atomic read rather than a constant, so the day something
             // parks, the caption is already telling the truth about it.
             parking: self.link.saving.load(std::sync::atomic::Ordering::Relaxed),
+            // The clock this machine is actually running at, not the window's default — `--clock=`
+            // is per launch, and a measurement is only this run's if it was taken at this run's
+            // clock.
+            clock: self.cfg.clock as u32,
+            // **`None`, and it is an invariant with an enforcer rather than an assumption.**
+            // `resolve_for_start` asks `Blocked::of` before it builds anything and refuses a
+            // mismatched pair, so a `Live` cannot exist over one. Re-asking here would open the
+            // boot ROM sixty times a second to be told what the press already established.
+            mismatch: None,
         }
     }
 
@@ -4015,6 +4024,11 @@ fn start_title(
         life: RefCell::new(machine::Life::Booting {
             target: emu::BootTarget::Os,
             progress: machine::Progress::read(0, None),
+            // Nothing has run, so nothing has been measured, and both of these say exactly that:
+            // a zero `Pace` has no speed at all — `Pace::speed` answers `None` on it — and
+            // `Reached::Nothing` is the panel and the drive both untouched.
+            pace: machine::Pace::default(),
+            reached: machine::Reached::Nothing,
         }),
         seq: Cell::new(0),
         booted: Cell::new(None),
@@ -4082,6 +4096,24 @@ fn start_machine(
     // field, so this is the one writer of it.
     cfg.boot = boot;
 
+    // ── §12.3's denominator, asked of the launch this press is actually making ──────────────────
+    //
+    // **Two things have to be true of a measurement before it may be divided into**, and neither
+    // was being checked:
+    //
+    // - **the clock.** `expected_boot` takes `cfg.clock`, which is the one the four lines above
+    //   just settled, so a boot learned at `--clock=5` is not offered as a clock-75 denominator.
+    //   The relationship between the two is whatever fraction of the boot is spent polling — for
+    //   RetailOS it is nearly all of it, which is the 15x the shipped `about 75 s` was out by —
+    //   and it is not a constant this program has measured, so the number is dropped rather than
+    //   scaled.
+    // - **the target.** `Device::cold_boot` is what a cold boot of *the operating system* costs.
+    //   §21.3's `Diagnostics` row power-cycles into `BootTarget::Nor("diag")`, which is a boot ROM
+    //   image entered directly and reaches its first screen in a small fraction of that — so a
+    //   diagnostics boot divided into an OS denominator draws a bar that never leaves zero, and
+    //   `pump_machine` must not let one *teach* that denominator either.
+    let denominator = cold_boot_of(settings, &cfg).map(|b| b.instructions.get());
+
     let link = emu::Link::new();
     // What the control socket is looking at. Ordered after the `*live.borrow_mut() = None` at the
     // top of this function, which is where the old machine's `Live::drop` clears the bench — the
@@ -4121,10 +4153,12 @@ fn start_machine(
         // operating system for a machine entering `diag` — one press, two answers.
         life: RefCell::new(machine::Life::Booting {
             target: cfg.boot.clone(),
-            progress: machine::Progress::read(0, settings.expected_boot()),
+            progress: machine::Progress::read(0, denominator),
+            pace: machine::Pace::default(),
+            reached: machine::Reached::Nothing,
         }),
         cfg,
-        denominator: settings.expected_boot(),
+        denominator,
         seq: Cell::new(0),
         booted: Cell::new(None),
         learned: Cell::new(false),
@@ -4480,10 +4514,36 @@ fn pump_machine(
     // machine RetailOS never reached the wheel on. The latch is `Live::learned`: `booted_at` stays
     // `Some` for the rest of the session, and without it this would save the settings file sixty
     // times a second.
+    //
+    // **Three readings and not one, and the other two are what retire a literal.** An instruction
+    // count is a fact about the iPod; how long it takes is a fact about the host emulating it, and
+    // at which clock. The window's `cold boot, about 75 s` was the second of those typed as a
+    // constant — right at `--clock=5`, fifteen times short at the 75 that replaced it — and there
+    // was nothing in the library it could have been derived from instead. `Stats::wall_secs` and
+    // `Config::clock` were both to hand the whole time.
+    //
+    // **`BootTarget::Os` only.** §21.3's `Diagnostics` row power-cycles into a boot ROM image
+    // entered directly, which reaches its first screen in a fraction of an operating system's cold
+    // boot; filing that as *this device's own last completed cold boot* would put a denominator on
+    // the device that the next ordinary start divides into and blows through in seconds. Asked
+    // through `cold_boot_of`'s own condition rather than a second copy of it.
     if !l.learned.get() {
-        if let Some(n) = l.booted.get() {
+        if let Some(n) = l.booted.get().filter(|_| l.cfg.boot == emu::BootTarget::Os) {
             l.learned.set(true);
-            learned.boot = Some(n);
+            // `NonZeroU64` because a boot that cost nothing was not observed — `emu::Quiet` answers
+            // with the instruction count at the *start* of the quiet window, so zero would mean the
+            // machine was quiet before it executed anything, which is not a boot.
+            learned.boot = std::num::NonZeroU64::new(n).map(|instructions| {
+                ipod_machine::settings::ColdBoot {
+                    instructions,
+                    // **At most one tick late, and that is stated rather than hidden.** The
+                    // emulator thread publishes `booted_at` and this is the first 60 Hz tick that
+                    // sees it, so the duration is the boot plus up to one frame — about 16 ms on a
+                    // number measured in minutes.
+                    millis: (life.wall_secs() * 1000.0).round().max(0.0) as u64,
+                    clock: l.cfg.clock as u32,
+                }
+            });
         }
     }
     // §12.4's parked frame, asked for **only when nothing is executing**, which is the one state
@@ -4514,11 +4574,11 @@ fn pump_machine(
     // (§16.9): the caption carries a speed that changes every tick, and handing the model a fresh
     // row per tick tears down the repeater instance the cradle's focus ring is on.
     if let Some(mut row) = devices.row_data(l.index) {
-        let cradle = cradle_of(Press::Centre, settings, &l.device, &l.absent, Some(l));
+        let cradle = cradle_of(Press::Centre, settings, &l.device, &l.absent, None, Some(l));
         let state: slint::SharedString = shelf_state(&l.device, &life).into();
         let label: slint::SharedString = cradle.label.into();
         let press: slint::SharedString =
-            cradle_of(Press::Here, settings, &l.device, &l.absent, Some(l)).label.into();
+            cradle_of(Press::Here, settings, &l.device, &l.absent, None, Some(l)).label.into();
         let ring = ring(cradle.ring);
         // §12.3's rule. It moves on almost every tick while a machine is booting, which is exactly
         // what it is for — and is why it is in the same in-place update as the caption rather than
@@ -4560,8 +4620,11 @@ fn pump_machine(
 struct Learned {
     /// There is a machine, so keep ticking.
     watching: bool,
-    /// §12.3's denominator: what this device's cold boot cost, when its end was observed.
-    boot: Option<u64>,
+    /// §12.3's denominator: what this device's cold boot cost, when its end was observed. **All
+    /// three readings**, because an instruction count with no clock and no wall time beside it is
+    /// what the window had, and it is why the row under the device promised 75 seconds for years
+    /// after the clock that made that true had gone.
+    boot: Option<ipod_machine::settings::ColdBoot>,
     /// §12.4: the device that has just been parked, and when. The `Live` is already gone.
     parked: Option<(String, u64)>,
 }
@@ -4944,7 +5007,7 @@ fn take_next_step(
         //
         // The arm is correct and the gate is now honest, and no press a person can make gets here.
         // Traced rather than assumed: the only `Class::Incompatible` constructed outside a test is
-        // `work::Plan::of`'s defensive refusal at `work.rs:577`, which fires when a step's verb is
+        // `work::Plan::of`'s defensive refusal at `work.rs:585`, which fires when a step's verb is
         // `Verb::Copy` — and the only producer of `Verb::Copy` is `compose::Recipe::steps` under
         // `Start::FromImage` or `Start::FromDisk` (`compose.rs:913` and `:926`). `work::plan` is
         // `Verb::Synthesise`, then `work::recipe()`'s steps, then `Verb::Start`, and `recipe()`
@@ -5159,14 +5222,15 @@ fn resolve_for_start(
     // `take_next_step` re-checks a `Pressable` the markup already disabled. The first-run route is
     // decided in `on_start_device` **before** this is called, so an `Unfinished` device arriving
     // here is one whose press genuinely has nowhere to go.
-    if let Some(b) = machine::Blocked::of(Some(&d), &absent) {
+    let mismatch = settings.generation_mismatch(&d);
+    if let Some(b) = machine::Blocked::of(Some(&d), &absent, mismatch.as_deref()) {
         // The cradle's own words, so this cannot become a fourth account of one device.
         return Err((
             d.name.clone(),
             rail::Failure::saying(
                 rail::Class::Missing,
                 format!("starting {}", d.name),
-                blocked_label(Press::Centre, &d, &absent, b),
+                blocked_label(Press::Centre, &d, &absent, b, mismatch.as_deref()),
             ),
         ));
     }
@@ -5305,7 +5369,8 @@ fn finishes_the_first_run(s: &Settings, d: &Device) -> bool {
 /// to go: [`press_is_first_run`] routes it into `work::Queue` rather than at a machine. Refusing it
 /// here would take the only way to finish a device off both surfaces.
 fn startable(s: &Settings, d: &Device, absent: &[Absent]) -> bool {
-    machine::Blocked::of(Some(d), absent).is_none() || finishes_the_first_run(s, d)
+    machine::Blocked::of(Some(d), absent, s.generation_mismatch(d).as_deref()).is_none()
+        || finishes_the_first_run(s, d)
 }
 
 /// §7.3's cradle label: **what pressing will cost, or why it cannot be pressed**, before it is
@@ -5339,16 +5404,31 @@ fn cradle_label(s: &Settings, d: &Device, absent: &[Absent]) -> String {
     cradle_label_at(Press::Centre, s, d, absent)
 }
 
+/// **The measurement §12.3 may divide into, for the launch this config describes** — or `None`.
+///
+/// The single place both halves of that question are asked, because they were being asked in
+/// neither. `Settings::expected_boot` checks the clock; this adds the target, and the two together
+/// are what makes a stored number a measurement *of this run* rather than a number filed under this
+/// device. [`pump_machine`] asks it in the other direction — whether a boot that has just finished
+/// is one this device should learn from — off the same `Config`, so what teaches the denominator
+/// and what is allowed to use it cannot come apart.
+fn cold_boot_of(s: &Settings, cfg: &emu::Config) -> Option<ipod_machine::settings::ColdBoot> {
+    (cfg.boot == emu::BootTarget::Os).then(|| s.expected_boot(cfg.clock as u32)).flatten()
+}
+
 /// §7.3's table for one row, evaluated — **[`machine::cradle`], with the stand this window can
 /// build for that row**.
 ///
 /// `live` is `Some` for the one row §7.2 allows a machine on and `None` for every other, which is
 /// the whole of the difference between the machine's half of the table and the device's.
+/// `mismatch` is `Settings::generation_mismatch`'s answer for this device, **computed by the caller
+/// once per push** — it opens the boot ROM, and this is asked for two captions per row.
 fn cradle_of(
     press: Press,
     s: &Settings,
     d: &Device,
     absent: &[Absent],
+    mismatch: Option<&str>,
     live: Option<&Live>,
 ) -> machine::Cradle {
     match live {
@@ -5362,16 +5442,25 @@ fn cradle_of(
         // are about, because the whole job of that line is to say what pressing will cost **before**
         // you press. `bench-parked.png` is where it showed: a device with the frame it was put down
         // on still on its glass, under a caption promising a 75-second cold boot.
-        None => machine::cradle(
-            press,
-            &machine::Stand {
-                device: Some(d),
-                absent,
-                life: &machine::Life::Off,
-                cfg: Some(&resting_config(s, d)),
-                parking: false,
-            },
-        ),
+        None => {
+            let cfg = resting_config(s, d);
+            let clock = cfg.clock as u32;
+            machine::cradle(
+                press,
+                &machine::Stand {
+                    device: Some(d),
+                    absent,
+                    life: &machine::Life::Off,
+                    cfg: Some(&cfg),
+                    parking: false,
+                    // **The clock a press would start this device at**, off the same `Config` the
+                    // press builds — so the cold-boot measurement the caption quotes is checked
+                    // against the run it is about to describe rather than against a default.
+                    clock,
+                    mismatch,
+                },
+            )
+        }
     }
 }
 
@@ -5386,7 +5475,13 @@ fn cradle_of(
 ///
 /// **`devices::start_row` calls this and so does `machine::off_cradle`**, which is why the Devices
 /// page and the bench cannot describe one device two ways.
-fn blocked_label(press: Press, d: &Device, absent: &[Absent], b: machine::Blocked) -> String {
+fn blocked_label(
+    press: Press,
+    d: &Device,
+    absent: &[Absent],
+    b: machine::Blocked,
+    mismatch: Option<&str>,
+) -> String {
     match b {
         // Reachable only without a device, and this function has one — but the sentence is still
         // the true one for it, so this is a total `match` rather than an `unreachable!` that takes
@@ -5400,6 +5495,19 @@ fn blocked_label(press: Press, d: &Device, absent: &[Absent], b: machine::Blocke
         // on an iPod with no disk, and the press would then quietly resume a build the label said
         // nothing about. Pressing it does resume; this is the label saying so first.
         machine::Blocked::Unfinished => format!("{} to finish making {}", press.verb(), d.name),
+        // **The sentence is `inspect::generation_mismatch`'s, verbatim and not reworded here.**
+        // *This firmware is updater family 25. MA146 — a 5G — takes 13 or 20.* names both halves
+        // and both numbers, which is what §14.1 asks a refusal for and what nothing on this device
+        // could say before: `Blocked::of` returned `None`, the device looked startable, and the
+        // failure surfaced as a screen full of errors.
+        //
+        // The `unwrap_or_else` is unreachable by construction — `Blocked::of` answers
+        // `Generations` only when it was handed a sentence — and it is a total `match` rather than
+        // an `unreachable!` for the reason the `Nothing` arm above gives: a window must not be
+        // taken down over a caption.
+        machine::Blocked::Generations => mismatch
+            .map(str::to_string)
+            .unwrap_or_else(|| "Its boot ROM and its drive are different generations".into()),
     }
 }
 
@@ -5452,7 +5560,7 @@ impl Press {
 /// the tests that walk both of [`Press::ALL`] against one device.
 #[cfg(test)]
 fn cradle_label_at(press: Press, s: &Settings, d: &Device, absent: &[Absent]) -> String {
-    cradle_of(press, s, d, absent, None).label
+    cradle_of(press, s, d, absent, s.generation_mismatch(d).as_deref(), None).label
 }
 
 /// §9.1's and §10.1's empty bench, captioned for whichever surface is drawing the press.
@@ -6711,7 +6819,13 @@ fn device_rows(settings: &Settings, live: Option<&Live>) -> Vec<DeviceRow> {
             // while a machine runs would otherwise hand the caption to nobody.
             let mine = live.filter(|l| l.index == i);
             let life = mine.map_or(machine::Life::Off, Live::life);
-            let cradle = cradle_of(Press::Centre, settings, d, &gone, mine);
+            // §14.1: is this iPod's boot ROM the same generation as its drive's software? **Asked
+            // once per row per push and not per caption**, because answering it opens the boot ROM
+            // — `nor::Source::model` reads a dump's own `Mod#` rather than trusting its filename,
+            // which is the step that separates this check from the one the matrix harness got
+            // wrong from the other side.
+            let mismatch = settings.generation_mismatch(d);
+            let cradle = cradle_of(Press::Centre, settings, d, &gone, mismatch.as_deref(), mine);
             // §12.3's two properties, decided together — see [`boot_rule`].
             let rule = boot_rule(&life);
                 DeviceRow {
@@ -6736,7 +6850,7 @@ fn device_rows(settings: &Settings, live: Option<&Live>) -> Vec<DeviceRow> {
                 // §9.5's pane replaces the well, so the same caption has to name the Row the
                 // reader is looking at rather than a centre button that is not on screen. One
                 // tail, two prefixes — see [`Press`].
-                press_label: cradle_of(Press::Here, settings, d, &gone, mine).label.into(),
+                press_label: cradle_of(Press::Here, settings, d, &gone, mismatch.as_deref(), mine).label.into(),
                 // §7.5's row-1 trailing slot: **the state, and time since.**
                 state: shelf_state(d, &life).into(),
                 write_target: writes.line.into(),
@@ -7919,6 +8033,183 @@ pub(crate) mod tests {
         let d = std::env::temp_dir().join(format!("ipod-gui-test-{what}-{}", std::process::id()));
         std::fs::create_dir_all(&d).expect("a temp directory");
         d
+    }
+
+    /// **§21.4: the drawer on an empty library, which is the first screen anybody sees.**
+    ///
+    /// Three things were wrong on it and every one of them was a sentence about an iPod that does
+    /// not exist:
+    ///
+    /// - `Start` read *cold boot, from the reset vector*, which is what `Cmd::PowerOn` does. What
+    ///   the press actually does with an empty library is `press_is_first_run` → `work::Queue`:
+    ///   download Apple's firmware, build an 8 GB drive, **then** boot. The row under-promised the
+    ///   cost of the one press §21.4 is entirely about.
+    /// - `Suspend`, `Resume`, `Kill` and `Restart` substituted the literal `this iPod` for the
+    ///   device's name and said *this iPod is not running*, four times, under a bench captioned
+    ///   `No iPod yet`.
+    ///
+    /// **The bench had all three right the whole time**, thirty pixels away, which is what makes
+    /// this a wording defect rather than a missing feature — and why the fix is `work::cost` and
+    /// `NO_IPOD_YET` rather than three new sentences.
+    #[test]
+    fn the_drawer_with_no_ipod_costs_the_first_run_and_says_there_is_no_ipod() {
+        let empty = Settings::default();
+        let off = machine::Life::Off;
+        let mut seen = ipod_machine::settings::Presence::new();
+        let rows = verbs::view(
+            &empty,
+            None,
+            &mut seen,
+            rail::Caps { download: true, ..rail::Caps::default() },
+            verbs::Now {
+                settings: &empty,
+                life: &off,
+                machine: None,
+                park_bytes: None,
+                thread: false,
+                titles: 0,
+                games_gone: false,
+                developer: false,
+            },
+        );
+        let row = |v: verbs::Verb| {
+            rows.iter()
+                .find(|r| r.verb == v)
+                .unwrap_or_else(|| panic!("{} is not drawn", v.label()))
+        };
+
+        // **`Start` is live and costs the first run**, in the plan's own numbers rather than in a
+        // sentence typed here — this compares against `work::cost`, so a change to the plan moves
+        // both or neither.
+        let start = row(verbs::Verb::Start);
+        assert!(start.enabled, "the one press §21.4 promises is refused: {}", start.reason);
+        let cost = work::cost(compose::Holes::Sparse);
+        assert!(
+            start.sub.contains(&ipod_machine::si(cost.down))
+                && start.sub.contains(&ipod_machine::si(cost.disk)),
+            "`Start` does not cost the first run it will actually run: {}",
+            start.sub
+        );
+        assert!(
+            !start.sub.contains("reset vector"),
+            "`Start` promises a cold boot on a library with nothing to boot: {}",
+            start.sub
+        );
+
+        // **And no row claims anything about an iPod that is not there.**
+        for v in [
+            verbs::Verb::Suspend,
+            verbs::Verb::Resume,
+            verbs::Verb::Kill,
+            verbs::Verb::Restart,
+        ] {
+            let r = row(v);
+            assert!(!r.enabled, "{} is offered with no iPod", v.label());
+            assert_eq!(
+                r.reason,
+                "There is no iPod yet.",
+                "{}'s refusal is about an iPod that does not exist",
+                v.label()
+            );
+        }
+        assert!(
+            !rows.iter().any(|r| r.reason.contains("this iPod")),
+            "a row still says `this iPod` where there is not one"
+        );
+    }
+
+    /// **The pair that boots to errors is refused before it can start, and named while it is.**
+    ///
+    /// The operator's own launch: a device whose boot ROM is a real `MA146` — a 5G — and whose
+    /// drive was built from `iPod_25.1.3.ipsw`, which is updater family 25, which is the 5.5G's.
+    /// Apple ships a model's software under an updater family and an iPod only recognises its own,
+    /// so that machine reaches the plug-into-a-computer screen after about seventy ATA commands
+    /// where a matching pair reaches the language picker with several hundred. It reads as a broken
+    /// emulator.
+    ///
+    /// **`inspect::generation_mismatch` has produced the right sentence, under test, the whole
+    /// time — with no shipping caller.** `Blocked::of` returned `None`, `startable` said yes, the
+    /// centre button started it, and nothing anywhere said why. This is the wiring, measured at all
+    /// three surfaces that decide whether a press may happen.
+    #[test]
+    fn a_rom_and_a_drive_of_different_generations_cannot_be_started() {
+        use ipod_machine::settings::{Disk, Item, Resource};
+
+        let dir = temp_dir("generations");
+        let img = dir.join("my-5.5g.img");
+        std::fs::write(&img, b"not a drive, but it is there").expect("a scratch drive");
+
+        // `built_from` decides which generation the drive's software is; everything else about this
+        // library is deliberately intact, so the only thing that can refuse it is the pair.
+        let library = |built_from: &str| {
+            let mut s = Settings::default();
+            s.resources.push(Item {
+                name: "the rom".into(),
+                what: Resource::Firmware(ipod_machine::nor::Source::Synthetic {
+                    model: "MA146".into(),
+                    seed: 20_266,
+                    serial: None,
+                    guid: None,
+                    splash: None,
+                }),
+                from: None,
+            });
+            s.disks.push(Disk {
+                name: "my-5.5g".into(),
+                path: img.clone(),
+                built_from: Some(built_from.to_string()),
+                installed: Vec::new(),
+            });
+            s.devices.push(Device {
+                name: "Black 5g".into(),
+                firmware: "the rom".into(),
+                disk: Some("my-5.5g".into()),
+                ..Device::default()
+            });
+            s
+        };
+
+        let mut wrong = library("iPod_25.1.3.ipsw");
+        let d = wrong.devices[0].clone();
+        let said = wrong
+            .generation_mismatch(&d)
+            .expect("the fixture is not a mismatched pair");
+        assert!(
+            said.contains("25") && said.contains("MA146") && said.contains("13 or 20"),
+            "the sentence does not name both halves: {said}"
+        );
+
+        // ① the classification
+        assert_eq!(
+            machine::Blocked::of(Some(&d), &[], Some(said.as_str())),
+            Some(machine::Blocked::Generations)
+        );
+        // ② the caption every surface quotes, which is the model's sentence and not a second one
+        assert_eq!(
+            blocked_label(
+                Press::Centre,
+                &d,
+                &[],
+                machine::Blocked::Generations,
+                Some(said.as_str())
+            ),
+            said
+        );
+        // ③ whether the press is offered at all
+        assert!(!startable(&wrong, &d, &[]), "a mismatched pair was drawn startable");
+        // ④ and the press itself, which is the one that actually builds a machine
+        let refused = resolve_for_start(&mut wrong, 0).expect_err("it started the wrong pair");
+        assert_eq!(refused.1.said, said, "the press invented its own sentence");
+
+        // **The control, and it is the same library with one field changed.** Family 20 is the 5G's
+        // own, so this device is coherent and every one of the four answers above flips.
+        let mut right = library("iPod_20.1.3.ipsw");
+        let d = right.devices[0].clone();
+        assert_eq!(right.generation_mismatch(&d), None);
+        assert_eq!(machine::Blocked::of(Some(&d), &[], None), None);
+        assert!(startable(&right, &d, &[]));
+        assert!(resolve_for_start(&mut right, 0).is_ok());
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// §7.5's four sentences, and each one is a different pair of answers.
@@ -14106,8 +14397,15 @@ pub(crate) mod tests {
 
         // `None` is the bench — the drawer shut. Every other entry names a page, at the level
         // `Page::slot` says draws it, which is the only level `Stack::go` will accept.
-        let pages: [(&str, Option<nav::Page>, &Furniture); 10] = [
+        let pages: [(&str, Option<nav::Page>, &Furniture); 12] = [
             ("bench", None, &full),
+            // **§21.4's first run, which is the first thing anybody sees and had no picture.**
+            // Every other shot in this list is of a furnished library; this is an empty data
+            // directory, which is what a clean install is, and the two things it has to show are
+            // the offer and the press. `parts-empty` photographed an empty *page*; nothing
+            // photographed the empty *program*.
+            ("bench-empty", None, &empty),
+            ("menu-empty", Some(nav::Page::None), &empty),
             ("menu", Some(nav::Page::None), &full),
             ("devices", Some(nav::Page::Devices), &full),
             ("parts", Some(nav::Page::Parts), &full),

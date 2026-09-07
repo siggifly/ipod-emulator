@@ -488,7 +488,30 @@ pub struct Device {
     /// know are ignored"* — and the save path writes the file out from the model, so the stale line
     /// is read by nobody and gone at the next save. The device draws no fraction until its next
     /// real boot, which is exactly this field's documented `None`.
+    /// **Read through [`Device::cold_boot`], never on its own.** Two more fields below carry the
+    /// rest of the same measurement, and one of the three without the others is not a measurement.
     pub cold_boot_instructions: Option<u64>,
+    /// **Wall milliseconds that same cold boot took**, on the host that ran it.
+    ///
+    /// The half that lets the window say how long the next one will take without inventing a rate.
+    /// An instruction count alone cannot: it is a fact about the iPod, and how long it takes is a
+    /// fact about the machine emulating it.
+    ///
+    /// Milliseconds and not seconds because [`Device`] is `Eq` and an `f64` is not — which is a
+    /// language fact standing in for a real one: two devices are the same device or they are not,
+    /// and a field that cannot be compared for equality has no business deciding that.
+    pub cold_boot_millis: Option<u64>,
+    /// **The clock that boot ran at** — `emu::Config::clock`, interpreter instructions per
+    /// simulated microsecond.
+    ///
+    /// Both numbers above are readings of one experiment and the clock is the setting it was taken
+    /// at, so a measurement whose clock does not match the one in force describes a different run.
+    /// **This is not a detail.** The window shipped `cold boot, about 75 s` as a literal, which was
+    /// exactly right at `--clock=5` and fifteen times short at the 75 that replaced it: a boot that
+    /// spends its time polling executes fifteen times the instructions when each instruction is
+    /// worth a fifteenth of the simulated time. A denominator learned at one clock and divided into
+    /// at another is the same error wearing a bar.
+    pub cold_boot_clock: Option<u32>,
     /// **What [`Device::cold_boot_instructions`] was measured on** — `crate::compose::BootShape::render`,
     /// e.g. `rockbox, apple, rockbox`.
     ///
@@ -549,6 +572,49 @@ impl Device {
     pub fn names_a_disk(&self) -> bool {
         self.disk.is_some() || self.disk_path.is_some()
     }
+
+    /// **The one way to read the cold-boot measurement**, and it is all three fields or none.
+    ///
+    /// `None` when any of them is missing or the count is zero — which is what every device written
+    /// before the clock and the wall time were recorded reads as, and what a hand-edited file that
+    /// says only half of it reads as too. That costs such a device one boot with no fraction and no
+    /// estimate, which is exactly [`Device::cold_boot_instructions`]'s documented `None` and the
+    /// same once-only price the `boot_instructions` rename charged.
+    ///
+    /// **`clock` is checked by the caller, not here.** This says what was measured; whether it
+    /// applies is [`Settings::expected_boot`]'s question, and it needs the clock in force to ask it.
+    pub fn cold_boot(&self) -> Option<ColdBoot> {
+        Some(ColdBoot {
+            instructions: std::num::NonZeroU64::new(self.cold_boot_instructions?)?,
+            millis: self.cold_boot_millis.filter(|m| *m > 0)?,
+            clock: self.cold_boot_clock.filter(|c| *c > 0)?,
+        })
+    }
+
+    /// Drop it — **all three, because a surviving third is a measurement with two holes in it.**
+    pub fn forget_cold_boot(&mut self) {
+        self.cold_boot_instructions = None;
+        self.cold_boot_millis = None;
+        self.cold_boot_clock = None;
+    }
+}
+
+/// **One completed cold boot of one device, as three readings of one experiment.**
+///
+/// GUI.md §12.3's denominator was a bare instruction count, and the window's own promise beside it
+/// — `cold boot, about 75 s` — was a literal typed when the default clock was 5. The count and the
+/// duration are not interchangeable and neither survives a change of clock, so the three travel
+/// together or none of them is used: [`Device::cold_boot`] is the only constructor and
+/// [`Settings::expected_boot`] is the only thing that decides whether it still applies.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct ColdBoot {
+    /// Instructions from the reset vector to the machine going quiet with its drive answered —
+    /// `emu::Quiet`'s observation, never the `snap_at` fallback.
+    pub instructions: std::num::NonZeroU64,
+    /// Wall milliseconds the same boot took on this host.
+    pub millis: u64,
+    /// Interpreter instructions per simulated microsecond it ran at.
+    pub clock: u32,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -861,9 +927,17 @@ impl Settings {
                         "drive" if !v.is_empty() => s.devices[i].disk = Some(v.to_string()),
                         "chassis" => s.devices[i].chassis = crate::identity::Colour::parse(v),
                         "work_on_copy" => s.devices[i].work_on_copy = Some(v == "true"),
+                        // The three lines of one measurement. Each is read on its own and
+                        // `Device::cold_boot` is what refuses to assemble a partial one, so a file
+                        // carrying only the count — which is every file written before the other
+                        // two existed — parses without complaint and teaches nothing.
                         "cold_boot_instructions" => {
                             s.devices[i].cold_boot_instructions = v.parse::<u64>().ok()
                         }
+                        "cold_boot_millis" => {
+                            s.devices[i].cold_boot_millis = v.parse::<u64>().ok()
+                        }
+                        "cold_boot_clock" => s.devices[i].cold_boot_clock = v.parse::<u32>().ok(),
                         // **Read as text and not through `BootShape::parse`.** A hand-edited or
                         // future token this build does not know must survive the round trip rather
                         // than being silently blanked — and a shape that does not parse compares
@@ -1523,6 +1597,15 @@ impl Settings {
             if let Some(b) = d.cold_boot_instructions {
                 out.push_str(&format!("device.{i}.cold_boot_instructions = {b}\n"));
             }
+            // The other two readings of the same boot. Written independently rather than gated on
+            // `cold_boot()` being whole, so a file that arrived half-written round-trips as it is
+            // instead of being silently completed or silently emptied by a save.
+            if let Some(m) = d.cold_boot_millis {
+                out.push_str(&format!("device.{i}.cold_boot_millis = {m}\n"));
+            }
+            if let Some(c) = d.cold_boot_clock {
+                out.push_str(&format!("device.{i}.cold_boot_clock = {c}\n"));
+            }
             // Written **after** the number it qualifies, so a person reading the file meets the
             // denominator and then what it was measured on. Order is not load-bearing on read —
             // unlike `res.N.kind` before `res.N.path` — because neither line decides how the other
@@ -1597,6 +1680,8 @@ impl Settings {
             chassis: self.chassis,
             work_on_copy: self.work_on_copy,
             cold_boot_instructions: existing.and_then(|d| d.cold_boot_instructions),
+            cold_boot_millis: existing.and_then(|d| d.cold_boot_millis),
+            cold_boot_clock: existing.and_then(|d| d.cold_boot_clock),
             // **The named trap of §20 item 6, closed.** Without this line every `run_device` /
             // `remember_as` round trip loses the shape, `set_boot_shape` then sees `None` beside a
             // good number, reads it as a mismatch, and the next `Create` throws away a denominator
@@ -1932,13 +2017,18 @@ impl Settings {
         }
     }
 
-    /// Record how long this device's cold boot took, for the next one's progress bar.
-    pub fn record_boot(&mut self, instructions: u64) {
+    /// Record what this device's cold boot cost, for the next one's bar **and its estimate**.
+    ///
+    /// All three readings at once, because [`Device::cold_boot`] refuses to assemble a partial
+    /// measurement and a writer that filed one would be filing something nothing can read.
+    pub fn record_boot(&mut self, b: ColdBoot) {
         let Some(c) = self.current.clone() else {
             return;
         };
         if let Some(d) = self.devices.iter_mut().find(|d| d.name == c) {
-            d.cold_boot_instructions = Some(instructions);
+            d.cold_boot_instructions = Some(b.instructions.get());
+            d.cold_boot_millis = Some(b.millis);
+            d.cold_boot_clock = Some(b.clock);
         }
     }
 
@@ -1990,7 +2080,7 @@ impl Settings {
             return false;
         };
         if d.boot_shape.as_deref() != Some(rendered.as_str()) {
-            d.cold_boot_instructions = None;
+            d.forget_cold_boot();
         }
         d.boot_shape = Some(rendered);
         true
@@ -2254,13 +2344,49 @@ impl Settings {
         r
     }
 
-    /// What the progress bar should divide by, if anything is known.
-    pub fn expected_boot(&self) -> Option<u64> {
+    /// What the current device's last cold boot cost, **if that measurement still applies**.
+    ///
+    /// `clock` is the one in force for the run about to happen — `emu::Config::clock`. A
+    /// measurement taken at a different clock describes a different experiment and is dropped
+    /// rather than scaled: the relationship between the clock and a boot's instruction count is not
+    /// a constant this program has measured, it is whatever fraction of the boot is spent polling,
+    /// and multiplying by 15 because the clock went from 5 to 75 would be inventing the very number
+    /// this whole path exists to stop inventing.
+    pub fn expected_boot(&self, clock: u32) -> Option<ColdBoot> {
         self.current
             .as_deref()
             .and_then(|c| self.devices.iter().find(|d| d.name == c))
-            .and_then(|d| d.cold_boot_instructions)
-            .filter(|n| *n > 0)
+            .and_then(Device::cold_boot)
+            .filter(|b| b.clock == clock)
+    }
+
+    /// **Is this device's boot ROM the same generation as its drive's software?**
+    ///
+    /// `None` means no reason to object, and that deliberately includes *not knowing* — which is
+    /// `crate::inspect::generation_mismatch`'s own rule and the reason this can be asked of every
+    /// device without becoming noise. A drive somebody supplied has no family to read, and a
+    /// warning that fired on every one of those would teach people to ignore the one that matters.
+    ///
+    /// **Both halves are records, not guesses.** The ROM's generation comes from the model in its
+    /// own SysCfg — `nor::Source::model`, which reads a dump's `Mod#` rather than its filename, and
+    /// which is the step `tools/clean-run-matrix.sh` had to learn before it stopped reporting a
+    /// confident `FAIL` against a pair it had built wrong itself. The drive's family comes from
+    /// [`Disk::built_from`], the installer this program recorded when it built the drive, resolved
+    /// through the catalogue rather than parsed out of the name.
+    ///
+    /// **It costs a 1 MiB read for a dump** — `Source::model` opens the NOR — so it is asked once
+    /// per push by whoever is drawing, never per frame and never per row.
+    pub fn generation_mismatch(&self, d: &Device) -> Option<String> {
+        let model = self.nor_of(d)?.model()?;
+        let name = d.disk.as_deref()?;
+        let built = self
+            .disks
+            .iter()
+            .find(|x| x.name == name)?
+            .built_from
+            .as_deref()?;
+        let family = crate::firmware::by_file(built)?.updater_family;
+        crate::inspect::generation_mismatch(model, Some(u32::from(family)))
     }
 
     /// Write the settings file.
@@ -3349,28 +3475,172 @@ mod device_tests {
         );
     }
 
+    /// A device made of one ROM and one drive, filed the way this program files them.
+    fn pair(rom_model: &str, built_from: Option<&str>) -> Settings {
+        let mut s = Settings::default();
+        s.resources.push(Item {
+            name: "the rom".into(),
+            what: Resource::Firmware(synth(rom_model, 6182160)),
+            from: None,
+        });
+        s.disks.push(Disk {
+            name: "the drive".into(),
+            path: PathBuf::from("/drives/the-drive.img"),
+            built_from: built_from.map(str::to_string),
+            installed: Vec::new(),
+        });
+        s.devices.push(Device {
+            name: "Black 5g".into(),
+            firmware: "the rom".into(),
+            disk: Some("the drive".into()),
+            ..Device::default()
+        });
+        s
+    }
+
+    /// **The pair a person makes by picking a ROM and a drive from two lists that do not know about
+    /// each other**, which is what the operator hit on an ordinary launch: a 5G ROM against a drive
+    /// built from the 5.5G's bundle, which boots to errors with nothing anywhere saying why.
+    ///
+    /// `inspect::generation_mismatch` has produced this sentence, correctly and under test, since
+    /// before the window could ask for it — with no shipping caller anywhere. This is the question
+    /// asked of a device rather than of two loose values.
+    #[test]
+    fn a_rom_and_a_drive_of_different_generations_are_named_as_such() {
+        let s = pair("A146", Some("iPod_25.1.3.ipsw"));
+        let d = &s.devices[0];
+        let said = s
+            .generation_mismatch(d)
+            .expect("a 5G ROM against 5.5G software");
+        assert!(
+            said.contains("25") && said.contains("MA146") && said.contains("13 or 20"),
+            "the sentence does not name both halves: {said}"
+        );
+
+        // The other way round, because the check that hardcoded one side got this backwards.
+        let s = pair("A446", Some("iPod_20.1.3.ipsw"));
+        assert!(
+            s.generation_mismatch(&s.devices[0])
+                .is_some_and(|w| w.contains("20") && w.contains("25")),
+            "a 5.5G ROM against 5G software was not named"
+        );
+
+        // **And the three silences, each of which is *no reason to object* rather than *fine*.**
+        let s = pair("A146", Some("iPod_20.1.3.ipsw"));
+        assert_eq!(s.generation_mismatch(&s.devices[0]), None, "a matching pair");
+        let s = pair("A146", None);
+        assert_eq!(
+            s.generation_mismatch(&s.devices[0]),
+            None,
+            "a drive somebody supplied has no family to read, and must not warn"
+        );
+        let mut s = pair("A146", Some("iPod_25.1.3.ipsw"));
+        s.devices[0].disk = None;
+        assert_eq!(
+            s.generation_mismatch(&s.devices[0]),
+            None,
+            "a device with no drive has nothing to disagree with its ROM"
+        );
+    }
+
+    /// A cold boot, as three readings of one experiment. Nothing here invents any of them.
+    fn boot(instructions: u64, millis: u64, clock: u32) -> ColdBoot {
+        ColdBoot {
+            instructions: std::num::NonZeroU64::new(instructions).expect("a non-zero boot"),
+            millis,
+            clock,
+        }
+    }
+
     /// The progress bar's denominator is per machine, and absent until one boot has finished.
     #[test]
     fn the_expected_boot_is_learned_not_assumed() {
         let mut s = Settings::default();
         assert_eq!(
-            s.expected_boot(),
+            s.expected_boot(crate::CLOCK as u32),
             None,
             "nothing is known before the first boot"
         );
+        let at = crate::CLOCK as u32;
         s.remember_as("one");
-        assert_eq!(s.expected_boot(), None);
-        s.record_boot(1_600_000_000);
-        assert_eq!(s.expected_boot(), Some(1_600_000_000));
-        s.remember_as("two");
-        s.record_boot(21_500_000_000);
+        assert_eq!(s.expected_boot(at), None);
+        s.record_boot(boot(1_600_000_000, 114_000, at));
         assert_eq!(
-            s.expected_boot(),
+            s.expected_boot(at).map(|b| b.instructions.get()),
+            Some(1_600_000_000)
+        );
+        s.remember_as("two");
+        s.record_boot(boot(21_500_000_000, 1_530_000, at));
+        assert_eq!(
+            s.expected_boot(at).map(|b| b.instructions.get()),
             Some(21_500_000_000),
             "each machine learns its own"
         );
         s.run_device("one");
-        assert_eq!(s.expected_boot(), Some(1_600_000_000), "and keeps it");
+        assert_eq!(
+            s.expected_boot(at).map(|b| b.instructions.get()),
+            Some(1_600_000_000),
+            "and keeps it"
+        );
+    }
+
+    /// **A measurement taken at another clock describes another experiment**, and is dropped rather
+    /// than scaled.
+    ///
+    /// This is the defect the window shipped as a literal: `cold boot, about 75 s` was exactly
+    /// right at `--clock=5` and fifteen times short at the 75 that replaced it, because a boot that
+    /// spends its time polling executes fifteen times the instructions when each one buys a
+    /// fifteenth of the simulated time. The instruction count has the same problem and it is the
+    /// bar's denominator.
+    #[test]
+    fn a_boot_measured_at_another_clock_is_not_this_clocks_estimate() {
+        let mut s = Settings::default();
+        s.remember_as("one");
+        s.record_boot(boot(1_050_000_000, 75_000, 5));
+        assert_eq!(
+            s.expected_boot(5).map(|b| b.millis),
+            Some(75_000),
+            "the clock it was measured at still answers"
+        );
+        assert_eq!(
+            s.expected_boot(75),
+            None,
+            "a clock-5 measurement was offered as a clock-75 one"
+        );
+    }
+
+    /// **All three readings or none.** A file carrying only the count — which is every file written
+    /// before the clock and the duration were recorded — teaches nothing rather than teaching a
+    /// number whose experiment is unknown.
+    #[test]
+    fn a_cold_boot_measurement_with_a_piece_missing_is_not_a_measurement() {
+        let mut d = Device {
+            name: "one".into(),
+            cold_boot_instructions: Some(1_600_000_000),
+            ..Device::default()
+        };
+        assert_eq!(d.cold_boot(), None, "a bare instruction count read as whole");
+        d.cold_boot_millis = Some(114_000);
+        assert_eq!(
+            d.cold_boot(),
+            None,
+            "a count and a duration with no clock read as whole"
+        );
+        d.cold_boot_clock = Some(75);
+        let whole = d.cold_boot().expect("all three are here");
+        assert_eq!(whole.instructions.get(), 1_600_000_000);
+        assert_eq!(whole.millis, 114_000);
+        assert_eq!(whole.clock, 75);
+        d.forget_cold_boot();
+        assert_eq!(
+            (
+                d.cold_boot_instructions,
+                d.cold_boot_millis,
+                d.cold_boot_clock
+            ),
+            (None, None, None),
+            "forgetting left a third of a measurement behind"
+        );
     }
 
     /// **An old settings file must still describe the machine it described.** Anyone updating has
