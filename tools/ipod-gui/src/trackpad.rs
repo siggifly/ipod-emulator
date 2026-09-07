@@ -501,6 +501,34 @@ fn drawn_midline() -> f32 {
 /// **Only the angle survives, and only the angle ever mattered**: `Finger::moved` reads nothing
 /// else, and the radius a finger happens to be at is a fact about the pad rather than about the
 /// wheel. Never reached for a contact at the exact centre, because [`Pad`] emits nothing there.
+/// **Within [`ARM_MM`] of the ring's boundary, on the wrong side of it.**
+///
+/// `band` arrives already in units of this surface's wheel radius, for the reason [`ARM_MM`] gives:
+/// how still a hand can hold is a fact about fingers, so it must not scale with the pad.
+///
+/// The two boundaries are not symmetric on this surface and that is deliberate. `Geometry::of` puts
+/// `outer` at the pad's **half-diagonal**, so nothing on the glass is beyond it and the outer arm is
+/// unreachable in practice — it is written because `WheelRing` has two edges and a helper that
+/// silently knew about one of them would be wrong the day a surface is not a rectangle.
+///
+/// **`inner` and not `select`**, which are the same number on this surface and are not the same
+/// idea. `Geometry::of` collapses them deliberately — *"a rectangle of glass has no case"*, so there
+/// is no bezel to model — but `WheelRing::hit` leaves the ring at `inner`, and that is the line a
+/// finger crosses on the way out. Keyed on `select`, this would hold nothing across the moulding gap
+/// of a ring that has one.
+///
+/// A point still *on* the ring answers `false`, so this is the hold and never the membership test.
+/// The radial half of membership is **restated from [`WheelRing::hit`] rather than re-derived** —
+/// past `select`, at or past `inner`, within `outer` — because the one thing this must not do is
+/// disagree with `hit` about where the line is. Written as two independent range tests it did: with
+/// `inner == select` it answered `false` for a contact at exactly the boundary, which `hit` calls
+/// `Select` and which is therefore precisely a frame that wants holding.
+fn near_ring(x: f32, y: f32, ring: &WheelRing, band: f32) -> bool {
+    let r = (x * x + y * y).sqrt();
+    let on = r > ring.select && r >= ring.inner && r <= ring.outer;
+    !on && r > ring.inner - band && r < ring.outer + band
+}
+
 fn on_drawn_ring(x: f32, y: f32) -> (f32, f32) {
     let len = (x * x + y * y).sqrt();
     if len <= f32::EPSILON {
@@ -807,11 +835,31 @@ pub enum Act {
 /// makes in reverse: this is a fact about *fingers* — how still a hand can hold — and not about
 /// pads, so it must not scale when an external Magic Trackpad reports a different size.
 ///
-/// **It is an arming band and not a shifted threshold**, which matters: a Schmitt trigger would
-/// move the boundary, and the boundary is not this feature's to move — crossing [`CENTRE`] is what
-/// takes the finger off the wheel. So the mark fires on the *true* crossing and is then mute until
-/// the finger is this far clear of the line. One tick per crossing a hand meant, none for a wobble,
-/// and the wheel behaves exactly as it did before.
+/// **Two things use this distance, and they use it differently.**
+///
+/// For [`Edge`] it is an **arming band**: the mark fires on the *true* crossing of [`CENTRE`] and
+/// is then mute until the finger is this far clear of the line. One tick per crossing a hand meant,
+/// none for a wobble.
+///
+/// For the wheel's **contact** it is a held threshold — a Schmitt trigger — and that is a change of
+/// judgement rather than an oversight. The reason it may not stay an arming band there is a fact
+/// about the guest that was not known when this constant was written: RetailOS's decoder resets its
+/// scroll threshold on **every frame with the touch bit clear**, at `0x00281390`/`0x00281394`, and
+/// zeroes the accumulator beside it at `0x002813a8`. Four clean detents are what open that gate
+/// (`0x000dd018` drops `[0x1081d998+4]` from 3 to 0 once four have accumulated); a release before
+/// the fourth re-arms it. So a wobble across this line is not a cosmetic `Up`/`Down` — it re-arms a
+/// three-detent dead zone inside Apple's firmware, and a hand that wobbles once per detent never
+/// opens the gate at all. **Measured**: 62 detents 26 ms apart with a release-and-touch pair after
+/// every one produced **0 clicks and 6 panel frames** — the boot's own, so the list did not move —
+/// against 4 clicks and 10 frames for the same 62 detents on one unbroken contact. research/05
+/// carries the recipe.
+///
+/// **The chatter is the trackpad's, not the part's.** A 5G has a moulded bezel between the ring and
+/// the centre button, so a finger cannot hover ambiguously over that boundary; a rectangle of glass
+/// has nothing there to feel. Holding the contact across a wobble is this adapter compensating for
+/// a physical edge the input device does not have, which is the adapter's job — it does not reach
+/// [`crate::wheel`] or the machine, and `Pad::clicked` still resolves a press against the true
+/// geometry, so which button a press lands on is unchanged.
 pub const ARM_MM: f32 = 1.5;
 
 /// **The same idea on the angular axis, for [`Edge::Band`]. 2 clicks — 7.5°.**
@@ -1003,25 +1051,32 @@ impl Pad {
         // so that is what goes out. See [`on_drawn_ring`] for the defect this separation fixes.
         let was = self.at.replace((x, y));
         let hit = g.ring().hit(x, y);
-        let mut out = match hit {
-            Hit::Ring(_) | Hit::RingButton(_, _) => {
-                let (dx, dy) = on_drawn_ring(x, y);
-                if self.on_ring {
-                    // A frame that did not move is not an edge. A surface sends stationary contacts
-                    // at the full rate and every one of them would otherwise be a `Moved`.
-                    if was == Some((x, y)) {
-                        Vec::new()
-                    } else {
-                        vec![Act::Moved(dx, dy)]
-                    }
+        // **A contact already on the wheel is held across a wobble.** `hit` is the true geometry
+        // and decides where a *press* lands; this decides whether the finger is still on the wheel,
+        // and it is hysteretic by [`ARM_MM`] — see there for the guest-side reason, which is that
+        // one untouched frame re-arms a three-detent dead zone inside RetailOS.
+        //
+        // `self.on_ring &&` is what makes it a hold rather than a widened ring: a contact that
+        // *arrives* inside the centre button is on the centre button, exactly as before.
+        let held = self.on_ring && near_ring(x, y, g.ring(), ARM_MM / g.radius);
+        let mut out = if matches!(hit, Hit::Ring(_) | Hit::RingButton(_, _)) || held {
+            let (dx, dy) = on_drawn_ring(x, y);
+            if self.on_ring {
+                // A frame that did not move is not an edge. A surface sends stationary contacts
+                // at the full rate and every one of them would otherwise be a `Moved`.
+                if was == Some((x, y)) {
+                    Vec::new()
                 } else {
-                    self.on_ring = true;
-                    vec![Act::Down(dx, dy)]
+                    vec![Act::Moved(dx, dy)]
                 }
+            } else {
+                self.on_ring = true;
+                vec![Act::Down(dx, dy)]
             }
-            // The centre is not the ring, so the wheel's contact ends there — and the position is
-            // still remembered, because that is where a click lands.
-            Hit::Select | Hit::None => self.leave_ring(),
+        } else {
+            // Clear of the line by more than the band: the wheel's contact ends here — and the
+            // position is still remembered, because that is where a click lands.
+            self.leave_ring()
         };
         // **After what the wheel did, because it reports on it.** The order also puts the machine's
         // act first in the frame that crosses [`CENTRE`], which is the frame the hand most needs to
@@ -1718,6 +1773,96 @@ mod tests {
         );
     }
 
+    /// **A wobble across [`CENTRE`] does not take the finger off the wheel, and a real crossing
+    /// still does.**
+    ///
+    /// The cost of getting this wrong is not cosmetic and is not ours to absorb quietly: RetailOS's
+    /// decoder resets its scroll threshold to 3 and zeroes its accumulator on **every** frame with
+    /// the touch bit clear (`0x00281390`/`0x00281394`/`0x002813a8`), and four clean detents are what
+    /// open that gate. So each spurious `Up` re-arms a three-detent dead zone inside Apple's
+    /// firmware. Measured on the machine: 62 detents 26 ms apart with a release-and-touch pair after
+    /// every one produced **0 clicks and 6 panel frames** — the boot's own, so the list did not move
+    /// at all — against 4 clicks and 10 frames for the same detents on one unbroken contact.
+    /// research/05 carries both recipes.
+    ///
+    /// **How to make it go red:** drop `|| held` from `Pad::frame`'s test. Every inward frame of the
+    /// wobble becomes an `Act::Up` and every outward one an `Act::Down`, which is 20 of each here
+    /// and, at the pad's ~124 Hz, a hundred a second on the hand of anyone circling near the line.
+    #[test]
+    fn a_wobble_across_the_centre_line_does_not_take_the_finger_off_the_wheel() {
+        let mut pad = Pad::default();
+        assert_eq!(
+            wheel_acts(pad.frame(frame(at_mm(0.0, BOUNDARY_MM + 4.0)))).len(),
+            1,
+            "the contact arrived on the ring"
+        );
+        assert!(pad.on_ring());
+
+        // ±0.5 mm about the line: a third of [`ARM_MM`], and well inside the 1.10 mm band the
+        // stillest 265 ms of the capture drifted over. This is a hand holding still, not a crossing.
+        let mut ups = 0;
+        let mut downs = 0;
+        for i in 0..20 {
+            let mm = if i % 2 == 0 { BOUNDARY_MM - 0.5 } else { BOUNDARY_MM + 0.5 };
+            for a in wheel_acts(pad.frame(frame(at_mm(f64::from(i), mm)))) {
+                match a {
+                    Act::Up => ups += 1,
+                    Act::Down(_, _) => downs += 1,
+                    _ => {}
+                }
+            }
+            assert!(pad.on_ring(), "frame {i} at {mm} mm took the finger off the wheel");
+        }
+        assert_eq!((ups, downs), (0, 0), "a wobble is not a lift and not a new contact");
+
+        // **The control, and it is the half that keeps this from being a widened ring**: clear of
+        // the line by more than the band, the finger really does leave. 2 mm past [`ARM_MM`].
+        let acts = wheel_acts(pad.frame(frame(at_mm(0.0, BOUNDARY_MM - ARM_MM - 2.0))));
+        assert_eq!(acts, vec![Act::Up], "a crossing a hand meant still ends the contact");
+        assert!(!pad.on_ring());
+    }
+
+    /// **[`near_ring`] and [`WheelRing::hit`] must agree about where the line is**, and the case
+    /// that catches a disagreement is the boundary itself.
+    ///
+    /// `Geometry::of` sets `inner == select`, so a contact at exactly the boundary is `Hit::Select`
+    /// — off the ring, and therefore precisely a frame the hold exists for. Written as two
+    /// independent range tests (`r < inner && r > inner - band`) the hold answered `false` there,
+    /// which is a one-value hole at the only radius the two predicates meet at. Asserted in the
+    /// ring's own units rather than through `at_mm`, so no millimetre round trip can blur it.
+    ///
+    /// **How to make it go red:** restore that body in [`near_ring`].
+    #[test]
+    fn the_hold_and_the_hit_agree_about_the_boundary() {
+        let g = Geometry::of(PAD).expect("a surface");
+        let ring = g.ring();
+        let band = ARM_MM / g.radius;
+        let r = ring.select;
+        assert_eq!(ring.hit(0.0, -r), Hit::Select, "the boundary is off the ring");
+        assert!(near_ring(0.0, -r, ring, band), "so it is a frame the hold is for");
+        // A hair outside it is *on* the ring, where the hold has no business answering.
+        assert!(!near_ring(0.0, -(ring.inner + 0.001), ring, band));
+        // And a departure a hand meant is not held.
+        assert!(!near_ring(0.0, -(ring.inner - band * 1.5), ring, band));
+    }
+
+    /// **A contact that *arrives* inside the centre button is on the centre button.** The hold in
+    /// [`Pad::frame`] is `self.on_ring && …`, so it can only ever keep a finger that was already on
+    /// the wheel — it never puts one there.
+    ///
+    /// **How to make it go red:** drop the `self.on_ring &&` from `held`. The first frame answers
+    /// `Down` and the wheel gains a contact from a finger that landed on SELECT.
+    #[test]
+    fn a_finger_that_lands_just_inside_the_centre_is_not_on_the_wheel() {
+        let mut pad = Pad::default();
+        let just_inside = at_mm(0.0, BOUNDARY_MM - 0.5);
+        assert_eq!(wheel_acts(pad.frame(frame(just_inside))), Vec::new());
+        assert!(!pad.on_ring());
+        // And a press there is SELECT, which is `hit`'s answer and not the hold's — the hold does
+        // not reach `clicked` at all.
+        assert_eq!(pad.clicked(), vec![Act::Press(Hit::Select)]);
+    }
+
     /// **The click is the press, and resting is not.** A finger sitting on the MENU label sends no
     /// button; clicking there does, and the release takes up what the press put down.
     ///
@@ -2019,61 +2164,99 @@ mod tests {
         assert_eq!(n, 40, "the control never fired, so the first assertion measured nothing");
     }
 
-    /// **The arming band is a gate on the mark and never a move of the boundary.**
+    /// **The mark lands on the line; the contact is held until the band is clear. Two boundaries,
+    /// on purpose.**
     ///
-    /// Crossing [`CENTRE`] is what takes the finger off the wheel, and that behaviour is not this
-    /// feature's to change — a Schmitt trigger would have shifted it by [`ARM_MM`] in each
-    /// direction. So both halves must land on the line: `Act::Up` at 12.58 mm and **the mark in the
-    /// same frame**, rather than 1.5 mm further in once the band was cleared. A boundary announced
-    /// late is a boundary reported in the wrong place.
+    /// The mark's job is to say *where the line is*, so it must fire on the true crossing of
+    /// [`CENTRE`] — a boundary announced 1.5 mm late is a boundary reported in the wrong place, and
+    /// that half is unchanged.
     ///
-    /// **How to make it go red:** make [`Radial`] a Schmitt trigger — test `r >= at + arm` going out
-    /// and `r < at - arm` coming in, instead of arming on the way through. The `Act::Up` still
-    /// arrives at the line and the mark no longer does.
+    /// The contact's job is different: it says whether the hand is still on the wheel, and there the
+    /// band is a **held threshold**, because one untouched frame re-arms a three-detent dead zone
+    /// inside RetailOS. See [`ARM_MM`] for the firmware addresses and the measurement.
+    ///
+    /// This test used to assert that both landed together, which is the decision that changed. The
+    /// pair is asserted rather than the halves separately because the whole point is that they now
+    /// disagree by a known distance, and a test of either alone would pass on a build that had
+    /// collapsed them back into one.
+    ///
+    /// **How to make it go red:** give [`Radial`] the same held threshold as the contact. The mark
+    /// stops arriving at the line and turns up 1.5 mm inside it, with the `Act::Up`.
     #[test]
-    fn the_wheel_and_the_mark_both_land_on_the_line_and_not_on_the_arming_band() {
+    fn the_mark_lands_on_the_line_and_the_contact_is_held_to_the_band() {
         let mut pad = Pad::default();
         pad.frame(frame(at_mm(0.0, BOUNDARY_MM + 5.0)));
         assert!(pad.on_ring());
-        // One hundredth of a millimetre inside the line is inside the button, arming band or no —
-        // and it is a hundred and fifty times finer than the band, so nothing here is a rounding.
+        // One hundredth of a millimetre inside the line is inside the button — a hundred and fifty
+        // times finer than the band, so nothing here is a rounding.
         let acts = pad.frame(frame(at_mm(0.0, BOUNDARY_MM - 0.01)));
-        assert!(acts.contains(&Act::Up), "the contact did not end at the line: {acts:?}");
         assert_eq!(marks_of(&acts, Edge::Centre), 1, "the mark did not land on the line: {acts:?}");
+        assert!(!acts.contains(&Act::Up), "the contact ended on the line: {acts:?}");
+        assert!(pad.on_ring(), "a hundredth of a millimetre took the finger off the wheel");
+
+        // And it ends where the band does. Straddled by a twentieth of a millimetre either side
+        // rather than tested at the line itself: `near_ring` is a `>` on a float that arrived
+        // through a division, and a test that turned on the last bit of that would be measuring the
+        // arithmetic rather than the rule.
+        let acts = pad.frame(frame(at_mm(0.0, BOUNDARY_MM - ARM_MM + 0.05)));
+        assert!(
+            acts.iter().any(|a| matches!(a, Act::Moved(_, _))),
+            "the contact ended inside the band: {acts:?}"
+        );
+        assert!(pad.on_ring());
+        let acts = pad.frame(frame(at_mm(0.0, BOUNDARY_MM - ARM_MM - 0.05)));
+        assert!(acts.contains(&Act::Up), "the contact outlived the band: {acts:?}");
         assert!(!pad.on_ring());
     }
 
-    /// **Why the centre edge can never starve a detent, said at the level where it is a property of
-    /// the geometry rather than of the rate limiter.**
+    /// **A centre edge CAN now share a frame with a detent — and still cannot starve one.**
     ///
-    /// A detent comes from `Act::Moved`, and moving *across* [`CENTRE`] is precisely the frame in
-    /// which the contact starts or ends — `Act::Down` or `Act::Up`, never `Act::Moved`. So the two
-    /// do not merely take turns: **they cannot occur in the same frame at all**, which is what
-    /// makes this the edge that is on by default. A radial line is invisible to
-    /// `wheel::position_at_angle`, which never reads a radius.
+    /// This test used to assert the opposite, and the reason it could is worth keeping: while
+    /// crossing [`CENTRE`] was the frame the contact ended in, a centre mark was always an
+    /// `Act::Up`/`Act::Down` frame and never an `Act::Moved` one, so the two could not co-occur by
+    /// geometry. Holding the contact across the band ends that: the mark still fires on the line
+    /// while the finger stays on the wheel, so one frame can now carry both.
     ///
-    /// **How to make it go red:** have `Pad::frame` emit `Act::Moved` for a contact in the centre
-    /// as well as on the ring.
+    /// **What was actually being protected is untouched, and it never rested on the geometry.**
+    /// [`Ticks::due`] reads `self.click` and no field a mark can write, so no number of marks in any
+    /// arrangement can delay or refuse a click — see the type's note and
+    /// `a_flood_of_edge_marks_cannot_refuse_a_single_detent`, which is the test that carries it. The
+    /// geometric coincidence was a second guarantee on top of a structural one; the structural one
+    /// is the one that was load-bearing, and it is still there.
+    ///
+    /// So this asserts what is now true, and asserts that the frames it is true of exist — a sweep
+    /// that produced no shared frame would be a test of nothing.
+    ///
+    /// **How to make it go red:** drop `|| held` from `Pad::frame`. The shared frames vanish, the
+    /// count goes to zero, and the first assertion fails.
     #[test]
-    fn the_centre_edge_never_shares_a_frame_with_a_detent() {
+    fn a_centre_edge_can_share_a_frame_with_a_detent_and_cannot_starve_one() {
+        let mut shared = 0;
         let mut crossings = 0;
         for click in [0.0, 7.0, 24.0, 41.0, 60.0, 84.0] {
             let mut pad = Pad::default();
             // In from well outside the band to well inside it, and back out, a third of a
-            // millimetre at a time — finer than the pad's own resolution at any speed.
+            // millimetre at a time — finer than the pad's own resolution at any speed. The angle
+            // moves with the radius so a held frame is a *detent* and not a stationary contact.
             let sweep = (0..200).map(|i| 30.0 - f32::from(i as u16) * 0.3);
-            for r in sweep.chain((0..200).map(|i| f32::from(i as u16).mul_add(0.3, 0.6))) {
-                let acts = pad.frame(frame(at_mm(click, r.max(0.6))));
+            for (n, r) in sweep.chain((0..200).map(|i| f32::from(i as u16).mul_add(0.3, 0.6))).enumerate() {
+                let acts = pad.frame(frame(at_mm(click + n as f64 * 0.25, r.max(0.6))));
                 let m = marks_of(&acts, Edge::Centre);
                 crossings += m;
-                assert!(
-                    m == 0 || !acts.iter().any(|a| matches!(a, Act::Moved(_, _))),
-                    "a centre edge and a detent in one frame at {click}: {acts:?}"
-                );
+                if m > 0 && acts.iter().any(|a| matches!(a, Act::Moved(_, _))) {
+                    shared += 1;
+                }
             }
         }
-        // The control: a sweep that crossed nothing proves nothing about frames that do.
         assert_eq!(crossings, 12, "six sweeps in and out is twelve crossings, not {crossings}");
+        assert!(shared > 0, "no frame carried both, so this measured nothing");
+
+        // The structural guarantee, restated where the geometric one used to be: a mark in the same
+        // frame as a click cannot take the actuator from it. `due` is asked *after* the mark.
+        let mut t = Ticks::default();
+        let now = Instant::now();
+        assert!(t.mark_due(now), "the mark fired first");
+        assert!(t.due(now, 1), "a mark in the same frame refused the click");
     }
 
     /// **A band edge does share its frame with a detent, and that is the argument against it stated
