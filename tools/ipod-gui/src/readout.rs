@@ -233,9 +233,30 @@ fn machine_group(g: &mut Vec<Gauge>, out: &Out, life: &Life, s: &Stats, fresh: F
     g.push(Gauge::new(m, "wall", secs(s.wall_secs), fresh));
     // `Pace::caption` is `None` while no wall time has passed, which is an unmeasured speed and not
     // a speed of zero — the rule this whole page is written around.
-    match Pace::of(s).caption() {
+    let pace = Pace::of(s);
+    match pace.caption() {
         Some(c) => g.push(Gauge::new(m, "speed", c, fresh)),
         None => g.push(Gauge::nothing(m, "speed")),
+    }
+    // **§12.8's ratio, now that there is a divisor it agrees with.** It was left undrawn because
+    // the three candidates worked from this file's own numbers matched neither each other nor the
+    // shipped diagram, and all three were instructions against 75 M — which is not what the
+    // simulated clock is made of. `Pace::real_time` is simulated seconds per wall second, taken off
+    // the steps the machine actually retired against the clock it is running at, and that is the
+    // number a person watching the screen is measuring.
+    //
+    // **Warned in BOTH directions, because both are unfaithful and only one of them is obvious.**
+    // Slow is issue #34 — the wheel stops answering somewhere under half of life. Fast is what a
+    // clock measured on a busy laptop and then held gives you on a quiet one, and it is the older
+    // failure: `Config::clock`'s own doc records that a machine whose sense of time runs ahead
+    // expires every wait a game asks for and makes Brick's ball unplayable. Nothing here throttles,
+    // so this row is how a person finds out that the calibration wants taking again.
+    match pace.real_time() {
+        Some(r) => g.push(Gauge {
+            warn: !(0.5..=1.5).contains(&r),
+            ..Gauge::new(m, "of real time", format!("{r:.2}x"), fresh)
+        }),
+        None => g.push(Gauge::nothing(m, "of real time")),
     }
     // §12.2's fifth thing, which is not a phase. `Life::stalled` answers only past the threshold and
     // only while `Running`: a machine that is off has not moved either, and reporting that as a

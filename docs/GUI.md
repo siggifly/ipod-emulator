@@ -3429,8 +3429,8 @@ Seven groups, fixed order, all present always:
  │  this session ·      487 220 016     │
  │  simulated                21.5 s     │
  │  wall                     34.8 s     │
- │  speed          14.2 M instr/s       │
- │  ratio           24.1 % of real      │
+ │  speed     14.2 M instr/s, clock 15  │
+ │  of real time              0.98x     │
  │  stalled                   0.0 s     │
  │                                      │
  │ CORES                     arrivals   │   ONE column. `Stats::enters` is
@@ -3545,6 +3545,19 @@ comes off both.
   which. `machine::Pace` therefore publishes the speed it can measure — `here / wall_secs`, which is
   a division of two numbers the run loop actually keeps — and **no ratio at all**. The row comes back
   when somebody writes down what it divides by.
+
+  **Somebody has, and the row is back as `of real time` — 2026-09-07.** All three candidates above
+  were instructions against 75 M, and **instructions are not what the simulated clock is made of**:
+  a halted cycle advances `usec` at exactly the rate an executed one does, and a booted iPod is
+  halted about 99.7 % of the time. So an instruction rate names the speed of a machine nobody is
+  running. The divisor is *the clock in force*, and the numerator is `Stats::steps_here` — executed
+  plus halted — over wall seconds, which is simulated seconds per wall second and is what a person
+  watching the screen measures. `Pace::real_time` draws it, warned below 0.5x.
+
+  It matters because it is no longer decorative. `speed` also names the clock now, when the clock
+  is not the part's: the window runs at whatever `Settings::sustained_clock` was measured to be, so
+  an iPod on this bench may be a 15 MHz one running its seconds in real seconds rather than a
+  75 MHz one running at a fifth of life. See issue #34 and `ipod_machine::pace`.
 - **§7.3 wanted `queued` on the cradle and this section refused it a row.** That table specified the
   running line as `running` — *or* `running · wheel 41 queued`, and `Stats::queued` is the field that
   would have filled it. Two sections of one document asking opposite things of one number is the

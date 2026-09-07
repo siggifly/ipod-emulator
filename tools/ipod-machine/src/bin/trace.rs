@@ -4126,11 +4126,15 @@ fn map_hardware(m: &mut ipod_machine::Machine, cold_boot: bool, args: &[String])
 ///
 /// `4000 * clock` is 20 000 at `--clock=5` — byte for byte the schedule every recipe written at
 /// the accelerant already gets — and 300 000 at 75, which is what the window already sends.
+///
+/// **The multiplication itself lives in [`ipod_machine::pace::wheel_click_gap`]**, because the
+/// window needs the same number and a second copy of a rule is how the first one comes to be wrong
+/// alone. This is the argument parsing and the clamp; the rule is one function.
 fn wheel_click_gap(args: &[String], clock: u64) -> u64 {
     args.iter()
         .find_map(|a| a.strip_prefix("--wheel-click-instr="))
         .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(4_000 * clock)
+        .unwrap_or_else(|| ipod_machine::pace::wheel_click_gap(clock as usize))
         .max(1)
 }
 

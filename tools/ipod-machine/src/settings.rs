@@ -718,6 +718,29 @@ pub struct Settings {
     /// the only image of an iPod they own, and defaulting to writing on it is how an afternoon
     /// disappears. `Some` is a person's explicit choice and is obeyed for either kind.
     pub work_on_copy: Option<bool>,
+    /// **The clock this host was measured to sustain**, in interpreter instructions per simulated
+    /// microsecond — see [`crate::pace`].
+    ///
+    /// `None` means nobody has measured, and the window then runs at [`crate::CLOCK`], the real
+    /// part's own rate. That is the right default and the wrong answer on every machine measured so
+    /// far: a host that retires about 15 million interpreter steps a second spends five wall
+    /// seconds on one simulated one at 75, and everything the firmware does — the list scroll, the
+    /// menu animation, the wheel poll — takes five times as long as it did on the part.
+    ///
+    /// **A property of the host, so it lives here and not on a [`Device`].** Every iPod in the
+    /// library runs on the same laptop. [`Device::cold_boot_clock`] is the neighbouring fact and is
+    /// deliberately a different one: that says *what clock this device's boot measurement was taken
+    /// at*, so it can be refused as a denominator later; this says *what clock the window should
+    /// choose next time*.
+    ///
+    /// **Measured once and held.** The window learns it at the end of a cold boot and never
+    /// silently rewrites it, because a clock that chased the host would make the iPod speed up and
+    /// slow down as the laptop got busy — and jitter is worse than a steady underclock. Delete the
+    /// line, or set it to 0, to have the next boot measure again.
+    ///
+    /// **Nothing in `trace`, `ipod-boot` or `ipod-film` reads this.** Every recipe pins its own
+    /// `--clock=`, and every number in `research/` depends on that staying true.
+    pub sustained_clock: Option<u32>,
 }
 
 impl Settings {
@@ -885,6 +908,11 @@ impl Settings {
                 // half-written file must not suppress the one screen that explains the program.
                 "welcomed" => s.welcomed = v == "true",
                 "work_on_copy" => s.work_on_copy = Some(v == "true"),
+                // A zero is *forget it and measure again*, not a clock of zero — `clamp` in
+                // `pace::sustainable` could never produce one, so nothing legitimate writes it and
+                // a person who wants a fresh measurement has a value to type as well as a line to
+                // delete.
+                "sustained_clock" => s.sustained_clock = v.parse::<u32>().ok().filter(|c| *c > 0),
                 "current" if !v.is_empty() => s.current = Some(v.to_string()),
                 "library_seeded" => s.library_seeded = v == "true",
                 // `device.N.field`, `disk.N.field`, `res.N.field`. Flat, because the file is flat
@@ -1470,6 +1498,14 @@ impl Settings {
              # Run on a COPY of the drive, leaving the original untouched. Absent means \"decide\n\
              # from where the drive came from\": a drive this program built is written to directly,\n\
              # one you supplied is copied. Set it to true or false to answer for both.\n\
+             {}\
+             # Interpreter instructions per simulated microsecond, MEASURED on this computer at the\n\
+             # end of a cold boot. A real 5G is 75; this machine chooses the rate at which the\n\
+             # iPod's seconds are real seconds, which on a host that cannot manage 75 means an\n\
+             # UNDERCLOCKED iPod running in real time rather than a correct one in slow motion.\n\
+             # Measured once and held — delete the line or set it to 0 to measure again. Nothing\n\
+             # outside the window reads it: every `trace` and `ipod-boot` recipe pins its own\n\
+             # --clock=, which is what keeps research/'s numbers comparable.\n\
              {}",
             self.chassis.map(|c| c.as_str()).unwrap_or("auto"),
             self.render_nor(),
@@ -1485,6 +1521,13 @@ impl Settings {
             self.welcomed,
             match self.work_on_copy {
                 Some(v) => format!("work_on_copy = {v}\n"),
+                None => String::new(),
+            },
+            // Omitted when unmeasured rather than written as a 0, for the reason every other
+            // `Option` here is: the absence of a line is what "nobody has looked" looks like, and
+            // a zero in a file is a value somebody could believe.
+            match self.sustained_clock {
+                Some(c) => format!("sustained_clock = {c}\n"),
                 None => String::new(),
             },
         ) + &self.render_resources()
@@ -2030,6 +2073,32 @@ impl Settings {
             d.cold_boot_millis = Some(b.millis);
             d.cold_boot_clock = Some(b.clock);
         }
+    }
+
+    /// **The clock a machine started from this library should run at**, and the only reader of
+    /// [`Settings::sustained_clock`].
+    ///
+    /// [`crate::CLOCK`] — the real part — when nothing has been measured, so a fresh installation
+    /// and every recipe agree on the same machine.
+    pub fn clock(&self) -> usize {
+        self.sustained_clock.map_or(crate::CLOCK, |c| c as usize)
+    }
+
+    /// Record what this host was measured to sustain, **and only if nothing was recorded before.**
+    ///
+    /// Returns whether it wrote, so a caller can say so once rather than every boot.
+    ///
+    /// **This is what "calibrate once and hold it" is**, and the guard is the whole of it: the
+    /// window measures a speed every second and would otherwise re-derive the clock from whatever
+    /// the laptop happened to be doing, which is an iPod that speeds up and slows down as another
+    /// program starts. A steady underclock is a machine you can learn; a moving one is not. Clearing
+    /// the setting is how somebody asks for another measurement.
+    pub fn record_sustained_clock(&mut self, clock: u32) -> bool {
+        if self.sustained_clock.is_some() || clock == 0 {
+            return false;
+        }
+        self.sustained_clock = Some(clock);
+        true
     }
 
     /// Record that a complete restore point was written for this device at `at`.
@@ -2991,6 +3060,10 @@ mod tests {
             developer: true,
             welcomed: true,
             work_on_copy: Some(true),
+            // Not 75, so the round trip exercises the key rather than the constant behind it: a
+            // field that happens to equal the default round-trips through a renderer that never
+            // wrote it, which is the defect the `developer: true` two lines up is here for.
+            sustained_clock: Some(15),
             devices: Vec::new(),
             current: None,
             resources: Vec::new(),
@@ -2998,6 +3071,39 @@ mod tests {
             library_seeded: false,
         };
         assert_eq!(Settings::parse(&s.render()), s);
+    }
+
+    /// **What clock a machine started from this library runs at, and the rule that it is measured
+    /// once.**
+    ///
+    /// A clock that chased the host would make the iPod speed up and slow down as the laptop got
+    /// busy, and jitter is worse than a steady underclock — so a second measurement is refused, and
+    /// clearing the setting is how somebody asks for another one.
+    ///
+    /// **How to make it go red:** drop the `is_some()` guard in
+    /// [`Settings::record_sustained_clock`], or have [`Settings::clock`] return
+    /// [`crate::CLOCK`] whatever is stored.
+    #[test]
+    fn the_sustained_clock_is_measured_once_and_then_held() {
+        let mut s = Settings::default();
+        assert_eq!(s.clock(), crate::CLOCK, "unmeasured is the real part, which is what a recipe runs");
+
+        assert!(s.record_sustained_clock(15), "the first measurement is taken");
+        assert_eq!(s.clock(), 15);
+
+        assert!(!s.record_sustained_clock(42), "a second one is refused");
+        assert_eq!(s.clock(), 15, "and did not move it");
+
+        // Zero is the value a person types to ask for a fresh measurement, so it must never be
+        // stored as one — `pace::sustainable` clamps to `FLOOR` and could not produce it.
+        let mut fresh = Settings::default();
+        assert!(!fresh.record_sustained_clock(0));
+        assert_eq!(fresh.clock(), crate::CLOCK);
+        assert_eq!(
+            Settings::parse("sustained_clock = 0").clock(),
+            crate::CLOCK,
+            "a zero in the file reads as `nobody has measured`, not as a clock of zero"
+        );
     }
 
     /// A path with a space in it must survive the format, which is why the value is the rest of

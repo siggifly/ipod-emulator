@@ -144,9 +144,15 @@ impl Machine {
     /// Write these four onto a config the window has already built from the library.
     ///
     /// **One place, and it only ever writes what was asked for.** `clock` is an `Option` precisely
-    /// so that *not saying* leaves `machine_config`'s `ipod_machine::CLOCK` standing rather than
+    /// so that *not saying* leaves `machine_config`'s measured clock standing rather than
     /// overwriting it with a zero — which `emu::build` clamps to 1, a machine running at one
     /// seventy-fifth of the part and reported as though it were the part.
+    ///
+    /// **`--clock=` moves the wheel's click spacing with it, and that is not optional.** The gap is
+    /// 4 ms of the *iPod's* time, so it is `4000 × clock` and nothing else; a launch that changed
+    /// one and left the other is the defect `--wheel-click-instr` shipped with for three weeks,
+    /// arriving through a different door. `ipod_machine::pace::wheel_click_gap` is the rule, in one
+    /// place, and this is the third caller of it.
     pub fn apply(&self, cfg: &mut crate::emu::Config) {
         cfg.cold |= self.cold;
         if let Some(two) = self.cores {
@@ -155,6 +161,7 @@ impl Machine {
         cfg.charger |= self.charger;
         if let Some(n) = self.clock {
             cfg.clock = n;
+            cfg.click_gap = ipod_machine::pace::wheel_click_gap(n);
         }
     }
 }
@@ -960,20 +967,31 @@ mod tests {
             Machine { cold: true, clock: Some(5), cores: Some(true), charger: true }
         );
 
-        // **On the config, and nothing else on it moves.** `apply` writes four fields; a fifth
-        // would be the command line reaching past the boundary this struct is.
+        // **On the config, and nothing else on it moves.** `apply` writes four axes; a fifth would
+        // be the command line reaching past the boundary this struct is. The clock's axis is two
+        // fields, because the wheel's click spacing is a duration in the machine's own time and
+        // therefore a function of the clock rather than a second knob.
         let mut cfg = crate::emu::Config {
             clock: ipod_machine::CLOCK,
+            click_gap: ipod_machine::pace::wheel_click_gap(ipod_machine::CLOCK),
             snapshot: Some(PathBuf::from("/somewhere/m.snap")),
             ..Default::default()
         };
         Machine::default().apply(&mut cfg);
         assert_eq!(cfg.clock, ipod_machine::CLOCK, "a flag nobody typed overwrote the default");
+        assert_eq!(cfg.click_gap, 300_000, "nor the gap that goes with it");
         // Two cores is the default, so "nothing asked for" is `!one_core`.
         assert!(!cfg.cold && !cfg.one_core && !cfg.charger);
         win("--cold --clock=5 --second-core --charger").apply(&mut cfg);
         assert!(cfg.cold && !cfg.one_core && cfg.charger);
         assert_eq!(cfg.clock, 5);
+        // **The half that would have been silent.** A `--clock=5` leaving 300 000 behind delivers
+        // one detent per 60 ms of the iPod's own time — fifteen times slower than a thumb — and
+        // nothing on any surface would have said so.
+        //
+        // **How to make it go red:** drop the `click_gap` line from `Machine::apply`.
+        assert_eq!(cfg.click_gap, 20_000, "--clock= moved the clock and left the wheel behind");
+        assert_eq!(cfg.click_gap / cfg.clock as u64, 4_000, "4 ms of the machine's own time");
         // **The cores axis needs the flag that can move it.** Two cores is the default, so
         // `--second-core` sets `one_core` to the value it already had and an assertion about it
         // would hold with `apply` deleted. `--no-second-core` is the only input that changes the
