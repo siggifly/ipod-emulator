@@ -129,7 +129,22 @@ geometry! {
 
     // ── §9.6 the horizontal budget, logical px ──
 
-    DRAWER_W:         Px = 420.0;
+    /// **The menu's column, and §22.8 makes it the whole window.**
+    ///
+    /// It was **420** — a panel inside a 460 px window, which left the iPod a 40 px sliver and
+    /// gave every row a column 372 px wide to say its sentence in. Issue #41 is that arrangement:
+    /// *"i hate that its a sidebar inside this fixed width."* The menu covers the window now, so
+    /// the widest column it can have is the window itself, and that is [`MIN_WIDTH`] — written as
+    /// the term rather than as a second 460, because a window minimum that moved and a menu that
+    /// did not would put the iPod back beside the menu one pixel at a time.
+    ///
+    /// **This is the largest honest number, and it is only 40 px more.** Every §9.4 slot is
+    /// derived from it — [`REFUSAL_MEASURE`] 412, [`ACT_MEASURE`] 364, [`PARTS_VERB_W`] 200,
+    /// [`REASON_MEASURE`] 166 — so the whole family of budgets moves together. What it does not do
+    /// is make a paragraph fit: the sentences §9.4's table records as amputated wanted 411, 423,
+    /// 545 and 623 px, and 412 reaches none of them. The column was too narrow *and* those
+    /// sentences were paragraphs; §22.8 says which ones came back and which did not.
+    DRAWER_W:         Px = MIN_WIDTH;
     /// 20 each side of the well.
     WELL_AIR:         Px = 20.0;
 
@@ -1276,13 +1291,20 @@ mod tests {
     /// **`DRAWER_W` appearing in the arithmetic would now be the defect**, so it is asserted
     /// against rather than subtracted: a well that reserved 420 px it never gives up would set
     /// this pane 420 px narrower than the surface it stands on, for a push that no longer happens.
+    ///
+    /// **And the relation is an equality since §22.8**, where it was `narrowest > DRAWER_W`. That
+    /// inequality was true of a menu 40 px narrower than the window it sat in, which is issue #41
+    /// in one line of arithmetic: the 40 px it left over was the sliver of iPod beside the menu.
+    /// `>=` would still pass over that arrangement, so the two are held equal — the menu column is
+    /// the narrowest window, which is what makes covering it possible at every size.
     #[test]
     fn the_short_pane_fits_the_narrowest_well_this_window_has() {
         let narrowest = MIN_WIDTH;
-        assert!(
-            narrowest > DRAWER_W,
-            "the drawer overlays and is {DRAWER_W} wide, so a window narrower than that would \
-             clip it against its own edge; the minimum is {narrowest}"
+        assert_eq!(
+            narrowest, DRAWER_W,
+            "the menu covers the window, so its column is the narrowest window — {DRAWER_W} \
+             against {narrowest}. Narrower and it is clipped; wider and the difference is iPod \
+             drawn beside the menu, which is the sidebar"
         );
         assert_eq!(
             SHORT_MEASURE + 2.0 * WELL_AIR,

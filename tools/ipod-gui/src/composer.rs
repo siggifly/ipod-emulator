@@ -1511,8 +1511,25 @@ pub const NO_IPOD: &str = "An iPod states its model, capacity, serial and GUID, 
 /// then says what that costs *here*. One fact worded two ways on two surfaces is how a person comes
 /// to believe they are two different problems, and `a_build_with_no_clipboard_does_not_offer_the_copy`
 /// pins the shared half by reading it out of `rail.rs`.
-pub const NO_CLIPBOARD: &str =
-    "this build has no clipboard, so there is nowhere for the command to go.";
+pub const NO_CLIPBOARD: &str = "this build has no clipboard, so the command has nowhere to go.";
+
+/// The other two arms of [`Composer::copy_command_row`], **named so the sweep can reach them**.
+///
+/// They were literals inside the `match` and therefore invisible to
+/// `every_reason_this_window_draws_fits_the_slot_it_is_drawn_in`, which sweeps four producers by
+/// driving them and everything else by name. A sentence that is neither driven nor named is not
+/// measured, and §9.4 records this whole module as the one that was never applied.
+///
+/// **The tail is gone and this is where it went**, per §9.4: it shipped as *"…so no seed
+/// reproduces them — the command would have to carry them in full."*, which the probe measures at
+/// **443 px** in [`geometry::ACT_MEASURE`]'s 364, so what the page drew ended somewhere in the
+/// middle of it. The clause said that a command for a typed identity would have to spell the
+/// serial and GUID out rather than name a seed — true, and one level past what somebody standing
+/// at a refused `Copy the command line` needs, which is that there is no seed to copy.
+pub const TYPED_HAS_NO_SEED: &str = "these values were typed, so no seed reproduces them.";
+/// The dump arm. See [`TYPED_HAS_NO_SEED`]; this one fits as it always was.
+pub const DUMP_HAS_NO_RECIPE: &str =
+    "this identity is read from a dump, so there is no recipe to copy.";
 
 /// Whether this build can reach a pasteboard: `rail::Caps::clipboard`, **as its own type**.
 ///
@@ -2151,17 +2168,11 @@ impl Composer {
         let (enabled, reason) = match &self.rom {
             _ if clipboard == Clipboard::Absent => (false, NO_CLIPBOARD.to_string()),
             Some(nor::Source::Synthetic { guid: Some(_), .. })
-            | Some(nor::Source::Synthetic { serial: Some(_), .. }) => (
-                false,
-                "these values were typed, so no seed reproduces them — the command would have to \
-                 carry them in full."
-                    .to_string(),
-            ),
+            | Some(nor::Source::Synthetic { serial: Some(_), .. }) => {
+                (false, TYPED_HAS_NO_SEED.to_string())
+            }
             Some(nor::Source::Synthetic { .. }) => (true, String::new()),
-            Some(nor::Source::File(_)) => (
-                false,
-                "this identity is read from a dump, so there is no recipe to copy.".to_string(),
-            ),
+            Some(nor::Source::File(_)) => (false, DUMP_HAS_NO_RECIPE.to_string()),
             None => (false, NO_IPOD.to_string()),
         };
         FixRow {

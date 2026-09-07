@@ -1655,9 +1655,16 @@ wrapped, not two lines, not a taller slot. §17.Q1 already made this trade once,
 of permanent chrome to hold a paragraph is a bad trade*, and §9.6's whole vertical budget is built on
 fixed row heights that a wrapping reason would make variable. The same answer applies one level down.
 
-Four slots draw one: §9.3's next-step pair is **146** (`geometry::REASON_MEASURE`), §11.4's group
-verbs **180** (`PARTS_VERB_W`), a Parts or Devices act **324** (`ACT_MEASURE`), a Settings row or a
-`Field` **372** (`PAGE_REASON_MEASURE`, which is `REFUSAL_MEASURE`).
+Four slots draw one: §9.3's next-step pair is **166** (`geometry::REASON_MEASURE`), §11.4's group
+verbs **200** (`PARTS_VERB_W`), a Parts or Devices act **364** (`ACT_MEASURE`), a Settings row or a
+`Field` **412** (`PAGE_REASON_MEASURE`, which is `REFUSAL_MEASURE`).
+
+**All four were 40 px narrower until §22.8** — 146 · 180 · 324 · 372 — because the menu was a
+420 px panel inside a 460 px window and every one of them is derived from its body. The menu covers
+the window now, so the body is the window less its margins and each slot moved with it. The numbers
+below in this section are the ones that were measured when they were measured, and are left as
+written: they are what the sentences were cut against, and §22.8 says which of those cuts the extra
+room reached and which it did not.
 
 **A `Next` refusal is still written to 146**, because `rail::Next::reason` alone is drawn in three of
 the four and a sentence written to the column it happens to be in today elides the first time it is
@@ -3371,6 +3378,37 @@ convenience, and this is where they meet.**
 Keyboard is unchanged, which is exactly why the map has to be complete: the drawn wheel is not on
 screen.
 
+**The television is not hardware this document has to wait for** *(added 2026-09-07)*. §21.7's
+remaining half stood open as *"needs the operator's two displays"*, and that claim did not survive
+being interrogated the way AGENTS.md §6 asks a zero to be. Fullscreen on a second display reduces to
+**a window of a given size at a given scale factor**, which is an assertion.
+`the_popped_out_panel_draws_a_whole_multiple_at_a_televisions_geometry` drives the popped-out window
+at **1920 × 1080 and 3840 × 2160, each at scale factor 1 and 2**, and asserts four things: the table
+above's own `K`; that the window is handed `K × 320` by `K × 240` *physical* pixels; that the
+framebuffer lands there centred, measured off the frame's own bounding box; and that it is drawn
+**pixelated**, read off the pixels — the fixture's 1 px white border comes out one block wide with
+an abrupt edge, and any smoothing blends the last of those columns.
+
+**The clamp bites at 4K and the table above does not say so.** The rule alone answers 9 for
+3840 × 2160; `geometry::K_MAX` is 8, so the panel draws 2560 × 1920 and not 2880 × 2160. A test
+written against 1080p alone would never have reached it.
+
+**What genuinely cannot be tested, and it is two things rather than the whole question.** Whether
+the window manager puts the window on the display somebody dragged it to — this program never asks,
+and never should. And whether it looks right on a television, which is a judgement. Everything
+between those two is arithmetic and is now asserted.
+
+**One instrument lies here and it is written down rather than worked around.**
+`i-slint-backend-testing` sizes its snapshot from the *physical* backing store and lays the content
+out in *logical* units mapped straight into it, so a 1920 × 1080 window at 2× hands back a 1920-wide
+frame holding a 640 × 480 rectangle while the program is drawing 1280 × 960. The pixel assertions
+therefore run at scale factor 1, where buffer and layout agree; at 2× the test asserts **the
+artefact** — the rectangle lands at `sf × (frame − size) / 2` — so a backend that starts rasterizing
+properly turns the test red and says which claim moved, rather than leaving a carve-out nobody
+revisits. The arithmetic half, which is the half `sf = 2` is there to check, runs at every scale
+factor: `panel_k` takes the backing store, so 4K at 1× and 4K at 2× must draw the same physical
+rectangle, and that is what the two arms compare.
+
 **Fullscreen is available whenever the glass has something on it** — `Booting`, `Running`, `Stopped`
 with its last frame, or parked with a `.parked.png`. Otherwise it is disabled with its reason —
 `Fullscreen shows the panel at the largest whole-number scale that fits. There is nothing on the
@@ -3944,18 +3982,20 @@ when the machine does not.
 
 ### 14.3 No sidebar, and the drawer is not one wearing a hat
 
-The operator rejected a 280 px sidebar. The drawer is 420 px on the other edge, and the difference is
+The operator rejected a 280 px sidebar. The menu covers the window from the other edge, and the difference is
 checkable rather than rhetorical:
 
 - **It is not on screen by default.** The window opens with it closed and one key closes it.
 - **It holds pages you visit**, not a permanently-visible list of things to switch between.
-- **It cannot shrink the subject.** The device is a constant physical size whether it is open or
-  not — and since §21.2 that is guaranteed by construction rather than by arithmetic: the drawer
-  overlays, so nothing it does can reach the surface the iPod is drawn on. This bullet used to
-  reach the same conclusion by a sum — *`min-width: 880` already accommodates it open* — and that
-  880 was `DRAWER_W + the device + its fixture + its air`, a window wide enough to hold both side
-  by side. The window is the device now and the minimum is 460, which is the device and its air
-  and nothing else.
+- **It cannot shrink the subject, and since §22.8 it does not stand beside it either.** The device
+  is a constant physical size whether the menu is open or not — since §21.2 that is guaranteed by
+  construction rather than by arithmetic, because the menu overlays and nothing it does reaches the
+  surface the iPod is drawn on. This bullet used to reach the same conclusion by a sum —
+  *`min-width: 880` already accommodates it open* — and that 880 was `DRAWER_W + the device + its
+  fixture + its air`, a window wide enough to hold both side by side. The window is the device now
+  and the minimum is 460, which is the device and its air and nothing else. **What that left, and
+  what §22.8 spends, is the 40 px of iPod still showing beside a 420 px menu** — issue #41. The
+  menu is the client's own width; the two are never on screen together.
 - **A sidebar's cost is proportional to the configuration surface it serves.** UTM has ~10
   configuration categories across two backends and is converging *on* a sidebar for that reason. This
   program has six resource groups and one Settings page with three rows.
@@ -6864,6 +6904,10 @@ he is right. This section is what §21 should have been.
 > edit its own rule demands. §22.6's Reference page is `src/reference.rs` + `ui/reference.slint`,
 > reached by `⌘,`, by `?` and by the menu row that used to be disabled. **§22.2 and §22.4 are not
 > built** — they are the other half of this section and another pair of hands.
+>
+> **§22.2 and §22.4 are built as of 2026-09-07**, and so is **§22.8**, which is the half of the
+> operator's complaint the rest of §22 kept answering inside a 420 px panel: the menu covers the
+> window now, and the iPod is never drawn beside it.
 
 ### 22.1 What §21 got wrong, precisely
 
@@ -7074,3 +7118,169 @@ key, and `⌘,` and `?` both reach it.
 The drawn device and its geometry · the wheel, its ghost and its haptics · §21.2's window-is-the-iPod
 · §21.3's verbs-not-nouns · §14.1 **for capability refusals** · §12.6's fullscreen arithmetic ·
 §21.7's second view · the piezo as the only thing that asks for a click.
+
+### 22.8 The menu covers the window — issue #41
+
+**Status: BUILT, 2026-09-07.** The operator, twice: *"i hate that its a sidebar inside this fixed
+width. it should expand the window size and show the right sidebar. or just not even be a sidebar
+and rather just a preferences UI that overlays over the window, so either settings - or ipod."*
+
+**Either the window grows or the menu covers it, and never both inside one 460 px.** §21.2 made the
+window the device — `MIN_WIDTH` 880 → 460, the grey field gone — and §21 had the drawer overlay
+rather than push so that the device would not move. Neither addressed the consequence: the drawer
+was a **420 px panel inside a 460 px window**, which left the iPod a 40 px sliver and gave every row
+a column too narrow for its own sentence.
+
+**This is a defect and not a preference, and the evidence is in this document.** §9.4's own table
+lists sentence after sentence cut off mid-clause and then shortened — 411 px in 180, 423 in 180,
+545 in 324, 623 in 372 — and the shortening was, each time, the response. The column was never the
+thing questioned. §9.4 records the one occasion it was (`devices::running_rule`, budgeted at 146 and
+drawn at 324) and calls it *"how a document and its implementation came to disagree about a sentence
+neither of them had measured in the right place"*. That is the same failure one level up: a budget
+was treated as a fact about English when it was a fact about a panel's width.
+
+#### The two shapes, and why this is the one
+
+**Grow the window.** The menu opens and the window widens to hold both. Honest, and every row gets
+whatever room it is given. It is refused for three reasons, in order of weight:
+
+1. **It moves the device.** A window that grows to the trailing edge pushes the iPod off centre; a
+   window that grows both ways moves it under the pointer. Keeping it still means repositioning,
+   and §9.6 already records that `set_outer_position` is documented Unsupported on Wayland with no
+   work-area query either — so the one platform where it cannot be done is the platform where the
+   compromise would land.
+2. **It fails exactly where it is needed.** On the 1366 × 768 and 1280 × 800 displays §9.6 tabulates,
+   a window that has to reach 880 to open its menu may have nowhere to grow into. The fallback is
+   the sidebar again, on the machines least able to afford it.
+3. **It is the same fidgeting §21.2 refused one band down.** *"A device that shrinks every time the
+   drawer opens is the window fidgeting"* is the argument against the push; a window that resizes
+   every time the drawer opens is that argument with a bigger subject.
+
+**So: the menu covers the window.** It slides in from the trailing edge as it always did and does
+not stop 40 px short of the leading one. When it is out it is the only thing on screen. Settings, or
+iPod.
+
+**It is also what `⌘,` already promised.** §22.6 bound the platform's own preferences chord to this
+surface; on every platform that has that chord, preferences are a thing that takes the window, not a
+strip down one side of it.
+
+**And it does not violate §14.4.** *Nothing floats* is about `PopupWindow`, `ContextMenu`,
+`TooltipArea`, toasts and OpenEmu's HUD — things that float **over** content and dismiss
+*themselves*. A surface anchored to the window, full-bleed, with no shadow, that a person dismisses
+deliberately, is ordinary layout, which is what §14.4 asks for. §22.6 already made this argument for
+the same surface at a smaller size.
+
+#### The mechanism — three properties, and the column is not the surface
+
+The one thing worth stating plainly is that **covering and widening are two changes**, and keeping
+them apart is what stops the pages reflowing at every window size:
+
+| | is | was |
+|---|---|---|
+| `window.slint`'s `drawer-out` | `client.width` | `Geometry.drawer-w` |
+| `Drawer.width` | `root.client-width`, pushed | `Geometry.drawer-w` |
+| `Drawer`'s `strip.x` | centres the column in the surface, then slides the slot | slid the slot |
+| `geometry::DRAWER_W` | `MIN_WIDTH` — **460** | 420 |
+
+The **surface** is the client, at every window size. The **column of rows inside it** is
+`DRAWER_W` and is centred, so a page has one width whether the window is at its 460 px minimum or
+dragged to 1200 — where a stretched page would put a row's value a thousand pixels from its label.
+At the minimum the two are the same number and the column is the window, which is the case every
+budget in §9.4 is measured at.
+
+**`DRAWER_W` is `MIN_WIDTH` written as the term, not as a second 460.** A window minimum that moved
+while the menu did not would put the iPod back beside the menu one pixel at a time.
+`geometry::the_short_pane_fits_the_narrowest_well_this_window_has` holds them equal — it used to
+assert `MIN_WIDTH > DRAWER_W`, and the 40 px that inequality allowed *is* issue #41.
+
+**The handle rides the menu's leading edge and therefore leaves with it**, which needed no change:
+§21.2 put it there, and the edge it rides now exits the window. The way out is the header's own
+`‹ Close`, `⌘\`, `Esc` and the menu bar, as before.
+
+#### What it is measured by
+
+`main::an_open_menu_covers_the_device_rather_than_sharing_the_window_with_it` shoots the same
+library with the menu shut and with it open, at the same window size, and requires that **no column
+of pixels appears in both**. A column is the full height of the window, so one matching would mean
+the menu is drawing the bench there.
+
+Two window sizes, and the second is the one that cannot be replaced by reading the source: at the
+460 px minimum a menu that only ever opens `DRAWER_W` wide covers the window by coincidence. 300 px
+wider it does not, and the two pre-§22.8 constructions fail there at **288** and **264** of 760
+columns. `Ink.bg-sunken` looked like the obvious detector and is not one — `primitives.slint`'s
+`Switch` track wears it when off, and §22.4's switch is on the menu's own root page.
+
+**One red-proof in that test's first draft was wrong and is recorded rather than deleted**: putting
+`DRAWER_W: Px = 420.0` back does *not* fail it. Covering is the markup's job and the constant is the
+column's, and once the two were separated a 420 px column simply sits inside a covering surface with
+20 px of `bg-raised` a side.
+
+#### The column, and what 40 px actually bought
+
+`REFUSAL_MEASURE` is 372 → **412**, and every §9.4 slot moves with it: the next-step pair 146 → 166,
+a group verb 180 → 200, an act 324 → **364**, a page reason 372 → **412**. §13's covers grow with
+them, because `COVER_W` is derived from the same body.
+
+**412 px of window is 412 px of window, and that is most of the honest answer.** Of the sentences
+§9.4 records as amputated, the extra room reaches **none**: they wanted 411 and 423 px in a 200 px
+column, 545 in 364, 623 in 412. Those were paragraphs, and §22.5 is right about them — a row that
+needs three lines of grey prose has not been designed.
+
+What the room did reach, and it is worth naming precisely because the total is small:
+
+| sentence | was | is | which measure |
+|---|---|---|---|
+| `settings_page::DEVELOPER_SHOWS` | **401 px drawn in 372 — it was eliding, and nobody could see it**, because the author's own trailing `…` is part of the name `Start as…` | drawn whole | 412 |
+| `composer::Lock::Dump`'s *Read from the dump; a device's identity is the ROM's, not ours.* | drew *…not …* under `Model` and `Colour`, which §9.4 names and did not fix | drawn whole under all four | 364 and 412 |
+| `main::MAKE_ONE_COST` | *downloads Apple's firmware **and** builds an 8 GB drive — about a minute*, **382 px**, drawn as *…about a …* in 324 and still in 364 | *downloads Apple's firmware, builds an 8 GB drive — about a minute*, 362 | 364 |
+
+The third is the shape of the whole change in one row. At 324 the only edit that reaches is deleting
+the time estimate; at 364 it is one conjunction, and the reader keeps the fact they cannot get
+anywhere else, which is how long they are about to wait.
+
+#### Three sentences that came back and did not need the width at all
+
+Looking for what the room bought turned up something else, and it is the more useful finding: **the
+Settings page's sentences had been cut against a budget belonging to a column the page is not drawn
+in.** §9.4's own diagnosis, one surface over from where it was made.
+
+| sentence | was cut to | because | its actual slot |
+|---|---|---|---|
+| the Theme row's reason | `one palette in this build`, 123 px | *"a slot that elides at `geometry::REASON_MEASURE`"* — which is **146**, §9.3's next-step pair | 372, then 412 |
+| the Settings-file row's reason | `this build has no clipboard`, 139 px, with `, so there is nowhere for the path to go` deleted | the same sentence, quoting the same 146 | 372, then 412 |
+
+Both are restored — `one palette in this build, and nothing keys on a scheme` at 293 px, and the
+clipboard row's own half at 345 — and **both fitted 372 the whole time**. §22.8 is not what made
+them possible; it is what made somebody look.
+
+#### Four sentences nothing was measuring
+
+Reading `_out/gui/*.png` after the change found three producers the sweep does not drive and had
+not been handed by name either. Each was a sentence on screen that no gate could see:
+
+- **`Make me one`'s two**, worded in `push_static` beside the `New device` footer that *is* swept.
+  `devices.png` drew *…an 8 GB drive — about a …* under this program's most pressed button with the
+  suite green. Its refusal — *this build has no `curl`, and Apple's firmware has to be downloaded* —
+  spends 356 of 364 px and would have elided on the first machine without curl.
+- **`settings_page::DEVELOPER_SHOWS`**, above.
+- **`composer.rs`, the fifth producer §9.4 names and nothing swept.** `NO_CLIPBOARD` measured 377 px
+  in 364 and drew *…nowhere for the command t…* — the same sentence, built the same way out of
+  `rail::Next::CopyDetails`, that the Settings page had already had cut once. One surface was fixed
+  and its twin was not, because only one of them was measured. Its two sibling arms were literals
+  inside a `match` and are now `composer::TYPED_HAS_NO_SEED` and `composer::DUMP_HAS_NO_RECIPE`.
+
+All are swept now, by name, the way `settings_page::SAVE_FAILED` already was. **What the sweep still
+does not reach, said rather than implied:** the rest of `composer.rs` — `NO_IPOD` and
+`SERIAL_NEEDS_GUID` are drawn in wrapping paragraph blocks rather than eliding `ReasonSlot`s, so this
+budget is not theirs, and `Fix`'s and `Pick`'s `format!`ed arms are reached only by driving a
+`Composer`, which nothing here does.
+
+#### What §22.8 does not overturn
+
+§21.2's *the window is the iPod* — the device still fills the client and still does not move. §21.3's
+verbs-not-nouns · §22.2's rule about refusals · §22.4's one switch · §22.6's `⌘,` and its argument
+against §14.4, which this extends rather than replaces · §14.1 for capability refusals · the drawn
+device, its geometry, its wheel and its haptics. §14.3 survives with its opening line and one bullet
+rewritten: the menu is still not a sidebar, and the difference is now that it cannot be on screen
+beside the thing it is about.
+

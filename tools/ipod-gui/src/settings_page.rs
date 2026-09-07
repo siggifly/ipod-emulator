@@ -14,8 +14,8 @@
 // it by number, so a renumbering here silently re-aims a live control — `Copy path` writing the
 // update preference, say. Measured in the file `build.rs` compiles:
 //
-//   - `Row::CheckUpdates` is **1** — `drawer.slint:482`, `root.setting-toggled(1)`.
-//   - `Row::CopyPath` is **2** — `drawer.slint:485`, `root.setting-toggled(2)`.
+//   - `Row::CheckUpdates` is **1** — `drawer.slint:506`, `root.setting-toggled(1)`.
+//   - `Row::CopyPath` is **2** — `drawer.slint:509`, `root.setting-toggled(2)`.
 //
 // `Row::Theme` is **0** and is ours: the theme row is drawn from `setting-theme-*` and fires
 // nothing yet. It is in the list because the page has three rows and a vocabulary with a hole in it
@@ -107,11 +107,18 @@ const THEME: &str = "Light";
 /// program keys on a scheme, so a Theme control would write a field no pixel reads — which is
 /// exactly the landmine §17.Q8 names about `Settings::mode`.
 ///
-/// **One clause, measured.** The sentence this replaced ran to **623 px** in a slot that elides at
-/// `geometry::REASON_MEASURE`, so the Settings page drew *there is one palette in this build and
-/// nothing keys on a scheme, so t…* — a reason cut off before it reaches its own verb. The half that
-/// is gone said what a Theme control *would* do, which is this doc comment's job and not the row's.
-const NO_THEME: &str = "one palette in this build";
+/// **One clause, measured — and it got a second one back.** The sentence this replaced ran to
+/// **623 px** and was cut to *one palette in this build*, 123 px, against
+/// `geometry::REASON_MEASURE` — which is **146 and is not this row's column**. This row is drawn in
+/// [`geometry::PAGE_REASON_MEASURE`], 372 then and 412 since §22.8, so the edit spent two thirds of
+/// the line to satisfy a budget belonging to §9.3's next-step pair. That is the same defect §9.4
+/// records against `devices::running_rule` — *one budget applied to four columns* — found one
+/// surface over and fixed the same way. At **293 px** the row says what it is refusing *and* why,
+/// which is §9.4's whole argument for disabling a control rather than hiding it.
+///
+/// The half still gone said what a Theme control *would* do — write a preference no pixel reads —
+/// and that is this doc comment's job.
+const NO_THEME: &str = "one palette in this build, and nothing keys on a scheme";
 
 /// Why there is no path to copy, when this computer has nowhere to keep a settings file.
 ///
@@ -196,7 +203,7 @@ pub struct View {
 ///
 /// It names pages rather than powers deliberately: nothing becomes possible when this is on. Every
 /// `ipod-boot` capability is reachable with it off, on the iPod it concerns.
-const DEVELOPER_SHOWS: &str =
+pub const DEVELOPER_SHOWS: &str =
     "Parts, the Readout and the Work rail, and the boot recipes under Start as\u{2026}";
 
 /// The Settings page's whole state.
@@ -248,14 +255,18 @@ impl Prefs {
                 // different problems — `composer::NO_CLIPBOARD` is built the same way, from the
                 // same `Next`, and `the_copy_row_wears_rails_own_sentence_for_an_absent_clipboard`
                 // pins the shared half by reading it out of `rail.rs` rather than repeating it.
-                // **`rail.rs`'s sentence and nothing appended to it.** It used to carry
-                // `, so there is nowhere for the path to go` on the end, which took the line to
-                // 345 px in a slot that elides at `geometry::REASON_MEASURE` — so the page drew
-                // *this build has no clipboard, so there is nowher…*, and the appended half, which
-                // was the only part this page contributed, was the part that fell off. The row is
-                // called `Settings file` and the control is `Copy path`; where the path would have
-                // gone is not a fact the reader is missing.
-                Some(_) if !clipboard => Next::CopyDetails.reason().to_string(),
+                // **`rail.rs`'s sentence and this page's own half after it** — restored §22.8.
+                // The tail was deleted because the line ran to 345 px "in a slot that elides at
+                // `geometry::REASON_MEASURE`", and `REASON_MEASURE` is **146** and is §9.3's
+                // next-step pair, which this row is drawn in none of: a Settings row's slot is
+                // `geometry::PAGE_REASON_MEASURE`, 372 then and 412 now, and 345 fitted it the
+                // whole time. So the only half this page contributed was cut against a column it
+                // is not in. `composer::NO_CLIPBOARD` is the same construction — rail's fact, then
+                // what it costs here — and having one of the pair append and the other not was two
+                // answers to one question.
+                Some(_) if !clipboard => {
+                    format!("{}, so there is nowhere for the path to go", Next::CopyDetails.reason())
+                }
                 Some(_) => String::new(),
             },
             developer_consequence: DEVELOPER_SHOWS.into(),
