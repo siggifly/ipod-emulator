@@ -120,6 +120,40 @@ Smaller than it sounds, and none of it is research:
    imports, traps every framework call with its arguments, disassembles, single-steps, keeps an
    execution-history ring, and renders to a framebuffer you can dump.
 
+## Where this goes on Apple's platforms — a direction, not a decision
+
+The operator's framing is that the point of all this is *"playing these games on Apple's closed
+platform, where the nostalgic iPod lovers are today."* Two things make that more reachable than it
+sounds, and they belong to the **player** rather than to the emulator.
+
+**The iPhone is the best click wheel surface available.** Better than a trackpad, because a
+touchscreen gives absolute finger position *and* you can draw the wheel underneath the finger — so
+the two problems glass creates on a laptop, the invisible geometry and the missing bezel, simply do
+not arise. The Taptic Engine supplies the detent. And most of it is already built: the trackpad work
+landed a seam that takes contacts **in millimetres from the centre of the surface, with orientation
+normalised by the adapter**, behind `trait Source` and `trait Detents`. An iOS touch adapter
+implements those two traits; the angle arithmetic, the 96 detents, the four domes and the quadrant
+bands come across unchanged.
+
+**The screen can be on a television.** iOS has supported independent external displays since iOS 5 —
+when a screen connects, over AirPlay or a cable, an app gets a second scene and can put entirely
+different content on it. This is opting out of mirroring, not fighting it, and games did exactly this
+around 2011–14. So: the game on the TV, the wheel on the phone.
+
+Two architectures, and **latency picks the winner rather than taste**:
+
+| | |
+|---|---|
+| **the phone runs the game, the TV is a display** | one app, simple. Risk is AirPlay *video* latency — invisible for a puzzle game, and exactly where it hurts for Brick |
+| **the Apple TV runs the game, the phone is a controller** | only input crosses the network, so the latency problem largely goes away. Costs two apps and a pairing story |
+
+Measure the first before building the second. And on a bare Apple TV the **Siri Remote's touch
+surface is itself a small trackpad**, so the same seam gives the tvOS app a wheel with no phone
+present — worse than a phone, but it means the app is never useless alone.
+
+The catch is the one this whole note turns on: **this is the player, not the emulator.** Nothing here
+wants a NOR dump, an IPSW or an 8 GB drive, which is exactly why it is the half that can travel.
+
 ## The thing worth remembering
 
 The iPodLinux wiki set out this exact goal and never reached it:
