@@ -1533,3 +1533,193 @@ export component Scroll inherits Rectangle {
         visible: root.more-below;
     }
 }
+
+// ─── Tile (§5's tenth, §22.5) ───────────────────────────────────────────────────────────────────
+//
+// **A cover, its name, and whether it runs.** §5 retired Tile with the device grid, and §22.5
+// brings it back for the one thing that was always the argument for it: `LaunchingArtwork` is the
+// picture the iPod itself puts on screen as a title starts, and a shelf of those is how a person
+// recognises a game. A list of names with a 24 px stamp at the trailing edge is not that — read it
+// off `_out/gui/games.png` before this change, where three titles occupy 200 px of an 820 px page
+// and the covers are postage stamps.
+//
+// **Not a `Pressable`, for `Act`'s reason.** That component is a ROW — full width, a label cell, a
+// value column at 232 px and a 34 px reason slot reserved beneath it. A tile is a 180 px picture
+// with a caption, and inheriting a row to switch all four off would be a row pretending to be a
+// picture. It carries its own `TouchArea` and `FocusScope` and neither is ever `enabled: false` —
+// §16.5's lock, for §16.5's reason: a disabled `TouchArea` forcibly clears `has_hover`, so the gate
+// is a boolean inside the handler and the element stays alive to be hovered, focused and described.
+// A control that cannot be focused cannot say why it is refusing.
+//
+// **The refusal is drawn where the picture would have been**, and that is §22.5's *the grid stays
+// regular* made structural rather than remembered: a sentence hung under a tile makes one column
+// taller than the other, and reserving §9.4's slot under all of them for the sake of one is the
+// three-lines-of-grey-prose §22.5 exists to retire. A title that cannot run here has no picture
+// worth showing, so the box says why instead — wrapping at `COVER_REASON_W` rather than eliding.
+//
+// **Two presses, and the first one is visible.** §22.5's *double-press plays*: one press arms and
+// the second runs it, which is the shelf idiom every desktop shares and is also the guard §11.3
+// asks for wherever a press is expensive — starting a title boots a machine. The armed state is an
+// accent ring and the `play` glyph, so the first press is never a press that did nothing. **Which
+// tile is armed is the PAGE's, not the tile's**: a grid where each tile remembered its own arm
+// would arm two at once.
+export component Tile inherits Rectangle {
+    // Required. A title with no name is a defect, not a state — `titles_under` falls back to the
+    // directory name, so there is always one.
+    in property <string> label;
+    // §13.2's rule: never a stock icon, never a blank placeholder. An empty image draws the well.
+    in property <image> cover;
+    in property <bool> enabled: true;
+    // §14.1 — non-empty whenever `!enabled`, and it is what an assistive technology is told.
+    in property <string> reason;
+    // The page's answer to *which tile is armed*, never this tile's own.
+    in property <bool> armed: false;
+
+    callback activated();
+    // Fired when the keyboard put focus here, so the page's `Scroll` can bring it into view.
+    // §16.11: `Tab` / `⇧Tab` is the only keyboard scroll route this program has, because `↑` / `↓`
+    // belong to the machine's wheel, always (§16.8).
+    callback gained-focus();
+
+    width: Geometry.cover-w;
+    height: Geometry.cover-tile-h;
+
+    accessible-role: AccessibleRole.button;
+    accessible-label: root.label;
+    // §11.3's shape — what the NEXT press will do, said before it. An armed tile's next press runs
+    // the title, an unarmed one's selects it, and a refused one's does neither and says why.
+    accessible-description: root.enabled
+        ? (root.armed ? "Press again to play" : "Select")
+        : root.reason;
+    accessible-enabled: root.enabled;
+
+    art := Rectangle {
+        x: 0;
+        y: 0;
+        width: Geometry.cover-w;
+        height: Geometry.cover-h;
+        // The well a cover sits in, and what a title with no artwork is left showing. The same
+        // `bg-sunken` the window's own ground is, so an absent cover reads as a hole rather than as
+        // a white card somebody forgot to fill.
+        background: Ink.bg-sunken;
+        clip: true;
+
+        // **`visible`, not `if`** (§16.3): this holds a decoded bitmap, and rebuilding the subtree
+        // on every re-push would re-upload it.
+        Image {
+            width: 100%;
+            height: 100%;
+            source: root.cover;
+            // The artwork is 320 x 216 and this box is derived from that same aspect, so `contain`
+            // resamples by a hair and never crops. Cropping somebody's cover art to fit our grid is
+            // the one thing a shelf of covers must not do.
+            image-fit: contain;
+            visible: root.cover.width > 0 && root.enabled;
+        }
+
+        // §14.1's refusal, in the picture's own rectangle.
+        Text {
+            x: Geometry.cover-pad;
+            y: Geometry.cover-pad;
+            width: Geometry.cover-reason-w;
+            text: root.reason;
+            wrap: word-wrap;
+            font-size: Metric.label-size;
+            font-weight: Metric.weight-label;
+            color: Ink.fg-dim;
+            visible: !root.enabled;
+        }
+
+        // **The armed tell, and it is a drawn `Path` rather than a word** — §6.7's closed icon set
+        // already carries `play`, and a caption here would be a word over somebody's artwork.
+        Rectangle {
+            x: parent.width - Metric.s5 - Metric.s2;
+            y: parent.height - Metric.s5 - Metric.s2;
+            width: Metric.s5;
+            height: Metric.s5;
+            border-radius: self.height / 2;
+            background: Ink.accent;
+            visible: root.armed && root.enabled;
+
+            Icon {
+                kind: "play";
+                ink: Ink.bg;
+                width: Metric.s3;
+                height: Metric.s3;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+            }
+        }
+    }
+
+    Text {
+        x: 0;
+        y: Geometry.cover-h + Geometry.cover-gap / 2;
+        width: 100%;
+        height: Geometry.line-body;
+        text: root.label;
+        // §22.5: the name is the fallback rather than the primary, so it is one line and it elides.
+        // A title whose name does not fit its own cover's width is one you recognise by the
+        // picture, which is the whole argument for this primitive.
+        overflow: elide;
+        vertical-alignment: center;
+        font-size: Metric.body-size;
+        font-weight: root.armed ? Metric.weight-strong : Metric.weight-body;
+        color: !root.enabled ? Ink.fg-disabled : (root.armed ? Ink.accent : Ink.fg);
+    }
+
+    // The armed ring, around the picture rather than around the caption: what is selected is the
+    // game, and the caption is a label on it.
+    Rectangle {
+        x: 0;
+        y: 0;
+        width: Geometry.cover-w;
+        height: Geometry.cover-h;
+        border-width: Geometry.focus-ring-w;
+        border-color: Ink.accent;
+        visible: root.armed && root.enabled;
+    }
+
+    // §8.1 item 9: the focus ring is instant, always. It is drawn around the whole tile, because
+    // the caption is part of what is focused.
+    Rectangle {
+        x: 0;
+        y: 0;
+        width: 100%;
+        height: 100%;
+        border-width: Geometry.focus-ring-w;
+        border-color: Ink.accent;
+        visible: focus.has-focus;
+    }
+
+    focus := FocusScope {
+        // Never `enabled: false` — see the header. The gate is a boolean inside the handler.
+        key-pressed(event) => {
+            if (event.text == Key.Space || event.text == Key.Return) {
+                touch.clicked();
+                return accept;
+            }
+            // Everything else bubbles — §16.8. `Esc`, the arrows and `⌘\` belong to the window.
+            return reject;
+        }
+        focus-changed-event => {
+            if (self.has-focus) {
+                root.gained-focus();
+            }
+        }
+    }
+
+    touch := TouchArea {
+        mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
+        clicked => {
+            focus.focus();
+            // §14.1: a refused tile still takes the press and still says why — it simply does not
+            // arm and does not run. Swallowing the click silently is the dead end that rule exists
+            // to reject, and the sentence is already on the tile.
+            if (!root.enabled) {
+                return;
+            }
+            root.activated();
+        }
+    }
+}

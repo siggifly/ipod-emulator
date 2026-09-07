@@ -1,0 +1,133 @@
+// Reference — docs/GUI.md §22.6, §16.8, §9.1.
+//
+// **The page §16.8's table has never had.** `nav::Page::Reference` existed carrying the comment
+// *"nothing draws a Reference page"*, `Stack::go` refused to navigate to it, and the menu's own
+// `Reference` row was disabled with *"The keyboard table and the stated limits have no page yet."*
+// — three statements of the same absence in three files, and a person who could not work out how
+// to drive the wheel had no way to be told. `⌘,` was bound to opening the menu instead, which is
+// the platform's Settings chord pointed at something that is not settings.
+//
+// **This file words nothing.** Every legend, every sentence and every heading on the page comes
+// from `src/reference.rs`, for `verbs.slint`'s reason: a key typed here is a second answer to
+// *what does this program bind*, and a page whose whole subject is that question cannot afford
+// two. `the_reference_page_words_no_binding_of_its_own` is the sweep.
+//
+// **It is `MadeOfLine` and not a table of its own.** A key legend leading and a sentence trailing
+// is exactly the two-column fact the Devices page and the menu's `About this iPod` already draw,
+// and that component is where the wrapping arithmetic lives — the natural width measured off a
+// hidden non-wrapping twin, divided by the column, because Slint's vertical `layout_info` for a
+// wrapping `Text` under-reports and leaves the second line clipped with no ellipsis. Writing a
+// second two-column row here would be writing that bug again.
+//
+// **A heading is a `Row` with `heading: true`**, which is how §21.3's menu draws `About this iPod`.
+// A rule above it, for the same reason and by the same construction.
+
+import { Ink, Metric } from "tokens.slint";
+import { Geometry } from "@geometry";
+import { DetailRow, DrawerHeader, Row, Scroll } from "primitives.slint";
+import { MadeOfLine } from "devices.slint";
+
+// One line of the page: a band heading, or a binding.
+//
+// **Two shapes in one model rather than two models**, because the order matters and two parallel
+// lists cannot express an order between them. `heading` non-empty is what tells them apart, which
+// is the same test `MadeOfLine` already makes on an empty `label`.
+export struct KeyRow {
+    // Non-empty on a band heading, and empty on every binding.
+    heading: string,
+    // What a person presses. ASCII — §16.6's closed glyph set has no `⌘` in it, and Slint takes one
+    // `font-family` per element with no fallback list, so a legend drawn in `⌘` is an empty square
+    // on any machine whose UI face lacks the glyph.
+    keys: string,
+    // What it does.
+    does: string,
+    // §9.4's machine rule — prose in `fg` rather than `fg-dim`, for a note about the band above it
+    // rather than a key. `reference::binding_detail` sets it wherever `keys` is empty.
+    note: bool,
+}
+
+export component ReferencePage inherits Rectangle {
+    callback back-pressed();
+    /// §16.8's table, from `reference::page()`.
+    in property <[KeyRow]> rows;
+
+    background: Ink.bg;
+    accessible-role: AccessibleRole.region;
+    accessible-label: "Reference";
+
+    VerticalLayout {
+        spacing: 0px;
+
+        DrawerHeader {
+            back: "Menu";
+            title: "Reference";
+            back-pressed => {
+                root.back-pressed();
+            }
+        }
+
+        // Four bands and twenty-odd rows, several of which wrap to two lines — comfortably past
+        // the 776 px this page has. §16.2: a layout shorter than its children neither shrinks nor
+        // clips them, it draws them past the bottom edge and off the accessible tree with them.
+        scroll := Scroll {
+            vertical-stretch: 1;
+            min-height: 0px;
+            preferred-height: 0px;
+            viewport-height: body.preferred-height;
+
+            body := VerticalLayout {
+                width: scroll.width;
+                alignment: start;
+                spacing: 0px;
+                accessible-role: AccessibleRole.list;
+                accessible-label: "Reference";
+
+                for r[i] in root.rows: VerticalLayout {
+                    spacing: 0px;
+
+                    // The rule over a band, drawn above every heading but the first — the same
+                    // construction and the same argument as §21.3's one horizontal rule. `if`
+                    // rather than `visible` because a 1 px line holds no focus, no hover and no
+                    // scroll offset, which is the whole of §16.3's rule.
+                    if r.heading != "" && i > 0: Rectangle {
+                        height: 1px;
+                        background: Ink.line;
+                    }
+
+                    if r.heading != "": Row {
+                        index: i;
+                        count: root.rows.length;
+                        label: r.heading;
+                        heading: true;
+                    }
+
+                    // **Inset by the page margin, because `MadeOfLine` has none of its own** — the
+                    // same correction `verbs.slint` records: every `Row` above carries
+                    // `pad: Geometry.page-margin` inside itself, and a `MadeOfLine` relies on the
+                    // body it is laid out in. Without this the legends start 24 px to the left of
+                    // the headings over them.
+                    if r.heading == "": MadeOfLine {
+                        d: {
+                            label: r.keys,
+                            value: r.does,
+                            machine-rule: r.note,
+                            has-action: false,
+                            mono: false,
+                        };
+                        index: i;
+                        x: Geometry.page-margin;
+                        width: parent.width - 2 * Geometry.page-margin;
+                        // Nothing is bound to `act`: `reference::page` returns no acts at all, so
+                        // the branch that would fire it is not drawn. Binding it would be a route
+                        // into `RowAction` from a page whose subject is a description — the same
+                        // wiring decision `verbs.slint` makes about the facts under `About this
+                        // iPod`.
+                        reveal(y, h) => {
+                            scroll.ensure-visible(y, h);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

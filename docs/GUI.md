@@ -420,9 +420,17 @@ row. §16.8 has the platform caveat and §17.Q4 is the open question about Windo
 
 ## 5. The primitive vocabulary
 
-Nine, closed. Anything the window shows is one of these. A tenth requires editing this document
+Ten, closed. Anything the window shows is one of these. An eleventh requires editing this document
 first — and note that this revision adds three (**Cradle**, **Gauge**, **Scroll**) and retires one
 (**Tile**), which is exactly the edit this rule demands.
+
+**Tile is back, and this paragraph is the edit its own rule demanded** *(2026-09-07, §22.5)*. It was
+retired with the device grid and the carousel, and both of those were rejected for reasons that are
+about **devices**: a grid of iPods you have composed is a builder's inventory, and the carousel
+animated `body-height` on a live framebuffer. Neither reason reaches a shelf of **games**.
+`LaunchingArtwork` is the picture the iPod itself puts on screen as a title starts; it is 320 × 216,
+it is the thing a person recognises a game by, and the list that drew it as a 24 px chip at a row's
+trailing edge is what §22.5 is about. The row below is the primitive as built.
 
 | | what it is | Slint accessibility | used for |
 |---|---|---|---|
@@ -435,6 +443,7 @@ first — and note that this revision adds three (**Cradle**, **Gauge**, **Scrol
 | **Rail** | a stream of plan, progress and results | `Region` + `accessible-live-region: polite` | the drawer's Work page |
 | **Scroll** | the **body** of a drawer page, between its fixed header and any pinned footer row. Never the bench, never the shelf, never the well | `Flickable`, `accessible-*` on its children | Readout, Parts, Composer, Games |
 | **Screen** | the framebuffer, 320 × 240, exact integer physical scale, nearest neighbour. **Obeys different laws** | `Image` | the bench's glass, fullscreen, a ROM's boot-screen preview |
+| **Tile** | a cover, its name, and whether it runs. 180 × 122 of somebody else's artwork at its own aspect, one elided name line under it, **two presses** — one arms, the second runs. A refusal is drawn *inside* the cover's rectangle rather than under the tile, so the grid stays regular. *(Reinstated 2026-09-07, §22.5)* | `Button` + `accessible-label` + `accessible-description` | the Games shelf, and only there |
 
 **Scroll is the ninth and it was missing, which was fatal.** §16.2's whole finding is that a Slint
 layout smaller than the sum of its children's minimums neither shrinks an item pinned by an explicit
@@ -4304,11 +4313,32 @@ Ctrl+, elsewhere; write the table with one column and use `Platform.os` only for
 | `↑` `↓` | the wheel, always |
 | `M` `P` `N` `B` | MENU, Play, Next, Prev — only while there is a machine |
 | `H` | the hold switch |
-| `⌘,` · `?` | Reference · Reference on help |
+| `⌘,` · `?` | **Reference — built 2026-09-07, §22.6.** Both reach it. `⌘,` is a `KeyBinding`; `?` cannot be one, because it is Shift plus a key that differs per layout (`/` on US, `+` on Nordic) and what every layout agrees on is the character, so it is answered on `event.text` in the root scope |
 | `⌘\` | the drawer |
 | **`⌃⌘F` / `F11`** | fullscreen — **the one row that is not one column**; see below |
-| `S` · `⇧S` | the panel · the window |
-| `D` | the Readout page |
+| ~~`S` · `⇧S`~~ | ~~the panel · the window~~ — **not bound, and this row was false for as long as it stood.** See below |
+| ~~`D`~~ | ~~the Readout page~~ — **not bound.** See below |
+
+> **Three rows of this table named keys nothing binds, and building §22.6's page is what found
+> them.** *(2026-09-07.)* `S`, `⇧S` and `D` are struck above rather than deleted, because what they
+> were is the point. Grepped across every `KeyBinding` and every `key-pressed` handler in `ui/`:
+> `window.slint` answers `Esc`, the machine's nine keys, `?` and the two arrows, and declares three
+> chords; `panel.slint` answers `F11` and `Esc` and declares one; `bench.slint` and
+> `primitives.slint` answer `Space` and `Return` for whatever holds focus. **There is no `S`, no
+> `⇧S` and no `D` anywhere in the program.**
+>
+> This is issue #37's shape exactly, and §21.7 already wrote the sentence for it: *a specification
+> that is correct and unimplemented reads exactly like one that is implemented*. There it cost three
+> weeks over a chord that named one modifier; here it is three rows of a table nobody could press
+> against, because until §22.6 the table had no reader inside the window.
+>
+> **They are struck rather than implemented** because a screenshot key and a Readout shortcut are
+> decisions, not omissions — the Readout already has a drawer row and the panel already has a
+> pinned `Shoot` action, so a bare letter for each is a second route somebody has to be taught. If
+> they are wanted, they are a change to this table and to `reference.rs` in one commit, which is
+> what `every_chord_the_markup_declares_is_printed_on_the_reference_page` and
+> `every_key_the_machine_answers_is_printed_on_the_reference_page` now make mechanical: **the page
+> and the program cannot disagree about the keys again**, in either direction.
 
 **The four machine rows were built 2026-08-24, and the table understated two of them.**
 
@@ -6800,6 +6830,30 @@ without the front page changing shape under anybody.
 **Status: proposed, 2026-09-07.** §21 built a window whose *information architecture* was right and
 whose *surface* is not. The operator has now said three times that it is complicated and ugly, and
 he is right. This section is what §21 should have been.
+
+> **§22.3, §22.5 and §22.6 are BUILT, 2026-09-07 — and §22.3 is built differently from the way it
+> is drawn below.** The sketch puts a two-button chooser in front of the device. §22.7's own list of
+> what this section does *not* overturn opens with §21.2's *the window is the iPod*, and those two
+> cannot both be had. The picture is what settles it: `_out/gui/bench-empty.png` is a drawn iPod, a
+> headline, and one instruction — it is the one page in this program that looks like the thing the
+> program is, and answering *complicated and ugly* by putting two rectangles in front of it would
+> be answering it with a form. So **the two intents are offered on the device, not instead of it**:
+> `Use an iPod ›` and `Play a game ›` on the cradle's own caption line, in the slot §7.6 built for
+> `why ›`, drawn only while the library is empty and the drawer is shut. That is §22.3's *asked
+> once* read literally — the question is not re-asked once there is an iPod to answer it — and it
+> costs nothing from §9.6's vertical budget, which two 44 px buttons would have taken out of the
+> device at every window size for the sake of one state. §22.3 below is left as written; the shape
+> that was built is recorded here.
+>
+> **What §22.3 is right about, and it is the load-bearing half:** a person who came for a game was
+> being told to build an iPod. `Play a game` reaches the shelf and touches no device apparatus —
+> `play` never calls `map_hardware`, so there is no ROM, no IPSW, no drive and no boot on that
+> branch, and now no wait for one either.
+>
+> §22.5's shelf is `ui/primitives.slint`'s `Tile` — §5's tenth primitive, reinstated there with the
+> edit its own rule demands. §22.6's Reference page is `src/reference.rs` + `ui/reference.slint`,
+> reached by `⌘,`, by `?` and by the menu row that used to be disabled. **§22.2 and §22.4 are not
+> built** — they are the other half of this section and another pair of hands.
 
 ### 22.1 What §21 got wrong, precisely
 

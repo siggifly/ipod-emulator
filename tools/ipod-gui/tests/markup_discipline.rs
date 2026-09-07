@@ -790,11 +790,19 @@ fn the_new_pages_are_drawn_at_the_depth_their_slot_names() {
 
     // The strip is blank, depth 0, depth 1, depth 2, depth 3, blank — so slot `n` draws depth
     // `n - 1`.
+    // **Eleven, and three of them were missing.** `GamesPage` and `ReadoutPage` landed in the
+    // depth-1 slot without being added here, and `ReferencePage` is §22.6's. A page composed into
+    // the drawer and absent from this list is a page whose markup depth nothing compares against
+    // `Page::slot()` — which is precisely the disagreement this test exists to catch, arrived at by
+    // the list not growing with the drawer.
     for (page, depth) in [
         ("WorkPage", 1),
         ("DevicesPage", 1),
         ("PartsPage", 1),
         ("SettingsPage", 1),
+        ("GamesPage", 1),
+        ("ReadoutPage", 1),
+        ("ReferencePage", 1),
         ("ComposerRoot", 2),
         ("WhichIpodPage", 3),
         ("WhatItRunsPage", 3),

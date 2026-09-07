@@ -26,6 +26,9 @@ import { Ink, Metric, Motion } from "tokens.slint";
 import { Geometry } from "@geometry";
 import { Bench } from "bench.slint";
 import { Drawer, DrawerHandle, DrawerPage } from "drawer.slint";
+// §22.6's page carries its own row shape, and it is imported here for the same reason every other
+// page's is: this file declares the property the drawer reads it out of.
+import { KeyRow } from "reference.slint";
 // One component, for one probe: §7.2's fact row, so `fact-height` measures the row this window
 // actually draws rather than a second copy of it written here.
 import { MadeOfLine } from "devices.slint";
@@ -414,6 +417,13 @@ export component MainWindow inherits Window {
     in property <bool> readout-copy-enabled: false;
     in property <string> readout-copy-reason;
 
+    // ── §22.6's Reference ──
+    //
+    // One property, threaded straight through. `reference::page()` is a pure function of nothing,
+    // so this is pushed once at wiring and never on a tick — the only page in the drawer that is
+    // not re-pushed when something moves, because nothing it describes can move without a rebuild.
+    in property <[KeyRow]> reference-rows;
+
     // ── §11.2's Composer ──
     //
     // **`composer-generation` exists for exactly one job.** Every two-press control in
@@ -547,6 +557,19 @@ export component MainWindow inherits Window {
     callback composer-commit();
 
     property <bool> has-devices: root.devices.length > 0;
+    /// §22.3: **the question is open only while there is nothing to answer it with.**
+    ///
+    /// Derived here rather than pushed, and that is the opposite call from `ghost` two hundred
+    /// lines up — deliberately. `ghost` is pushed because §10.2 wants it to change on
+    /// `Source::identity()` answering, which is *before* the device reaches the list, so a markup
+    /// expression over `has-devices` would have to be unpicked to get there. This has no such
+    /// future: an iPod either is in the library or is not, the two controls are drawn for exactly
+    /// the second case, and there is no state between them anybody has asked for.
+    ///
+    /// **And not while the drawer is open**, because `Play a game` opens the drawer onto the shelf
+    /// — leaving the pair drawn underneath it would be a control offering a page that is already
+    /// on screen over the top of it.
+    property <bool> intents: !root.has-devices && !root.drawer-open;
     property <DeviceRow> current: root.has-devices ? root.devices[root.selected] : root.empty-device;
 
     // ── The overlay (§4, §7.5, §8.1 item 1, §21.2) ──
@@ -593,7 +616,18 @@ export component MainWindow inherits Window {
         // modifier names are exactly `Alt` / `Control` / `Meta` / `Shift` and nothing else; `Cmd`
         // and `Command` are hard errors. `Comma` is `LocalizedShiftable` and sets `ignore_shift`
         // itself, so adding `Shift` to it is a hard error too.
-        // **It opens the menu, not Reference, and that is not a placeholder.** §7.5 lists `⌘,` as one
+        // **It opens Reference, which is what it always meant to open** — §22.6, built 2026-09-07.
+        // For a revision it opened the menu instead, and the comment below records why: pointing it
+        // at depth 1 / Reference navigated to a slot containing no page — 420 px of `bg-raised`
+        // with no header and therefore no visible way out — and bypassed the very row that states
+        // the gap. The page exists now, `nav::Page::Reference` answers `Some(1)`, and the
+        // retirement condition the comment names two paragraphs down is met.
+        //
+        // The paragraph that stood here is kept rather than deleted (AGENTS.md §5): what it was
+        // wrong about is that the destination could not be built, and the wrong answer is how the
+        // next person avoids re-deriving the guard in `Stack::go` that made the interim safe.
+        // ---- historical ----
+        // §7.5 lists `⌘,` as one
         // of the four routes in and the key is right; its destination is not built. Pointing it at
         // depth 1 / Reference navigated to a slot containing no page — 420 px of `bg-raised` with no
         // header and therefore no visible way out — and bypassed the very row that states the gap
@@ -630,7 +664,7 @@ export component MainWindow inherits Window {
         KeyBinding {
             keys: @keys(Control + Comma);
             activated => {
-                root.open-page(DrawerPage.none, 0);
+                root.open-page(DrawerPage.reference, 1);
             }
         }
         // `BackSlash` has a capital S. Two KeyBindings under one FocusScope with the same keys is a
@@ -658,6 +692,23 @@ export component MainWindow inherits Window {
             bench.keyboard-was-used();
             if (event.text == Key.Escape) {
                 root.escape-pressed();
+                return accept;
+            }
+            // §22.6's second route to Reference, and it is **not** a `KeyBinding`.
+            //
+            // `?` is Shift and a key that differs per layout — `/` on US, `+` on the Nordic layout
+            // this machine is set to — so there is no modifier-plus-key chord that names it. What
+            // every layout agrees on is the CHARACTER it produces, and that is what `event.text`
+            // carries. §16.8's own rule about `event.text` cuts the other way here: the thing that
+            // makes a bare character dangerous for the machine's keys is that `⌘M` still reads as
+            // `m`, and the guard for that is one line below rather than here, because `?` is not
+            // one of the machine's.
+            //
+            // **The `TextInput` exception covers it for free** (§16.8): a focused field consumes a
+            // character key's press before it can bubble to this scope, so typing `?` into the
+            // Composer's Name field cannot open a drawer page. That is focus, not a mode.
+            if (event.text == "?") {
+                root.open-page(DrawerPage.reference, 1);
                 return accept;
             }
             // ── §16.8's four machine rows, asked before anything else claims the key ──
@@ -990,6 +1041,22 @@ export component MainWindow inherits Window {
                 why => {
                     root.explain(root.selected);
                 }
+                // §22.3's two intents, drawn on the cradle line while there is no iPod.
+                //
+                // **Both are acts this window already performs, invoked rather than repeated.**
+                // `Use an iPod` is `start-device(root.selected)` — the same callback the drawn
+                // centre button raises, so the first run, a half-made device and every refusal are
+                // told apart in the one place that knows how; and `Play a game` is
+                // `open-page(DrawerPage.games, 1)`, the same navigation the menu's own row does.
+                // A second start path or a second navigation here is how two of them come to
+                // disagree, which is the note `on_verb_act` already carries about its three rows.
+                intents: root.intents;
+                use-an-ipod => {
+                    root.start-device(root.selected);
+                }
+                play-a-game => {
+                    root.open-page(DrawerPage.games, 1);
+                }
                 // §7.4. These were declared by `Bench` and deliberately left unbound while there
                 // was no `emu::Link::push` to bind them to — *wiring a handler to a stream that
                 // cannot arrive is the phantom route §19.1 indicts*. There is one now, so the
@@ -1097,6 +1164,7 @@ export component MainWindow inherits Window {
 
                 readout-headings: root.readout-headings;
                 readout-rows: root.readout-rows;
+                reference-rows: root.reference-rows;
                 readout-provenance: root.readout-provenance;
                 readout-empty-line: root.readout-empty-line;
                 readout-has-machine: root.readout-has-machine;

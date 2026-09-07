@@ -23,7 +23,8 @@
 // anywhere look identical, and only one of them is the operator's to fix.
 
 import { Ink, Metric } from "tokens.slint";
-import { DrawerHeader, Row, Scroll, TitleRow } from "primitives.slint";
+import { Geometry } from "@geometry";
+import { DrawerHeader, Row, Scroll, Tile, TitleRow } from "primitives.slint";
 
 export component GamesPage inherits Rectangle {
     callback back-pressed();
@@ -42,6 +43,31 @@ export component GamesPage inherits Rectangle {
     /// Run this title. The index is into `titles`, because a name is not a key: two shelves can
     /// hold the same game.
     callback play(int);
+
+    /// **Which tile the first press armed, and `-1` for none** — §22.5's double-press.
+    ///
+    /// It lives on the page rather than inside `Tile` so there is one writer: a tile that
+    /// remembered its own arm would let two be armed at once, and the second press would then be
+    /// ambiguous about which title it was the second press *of*. `Pressable` keeps its own `armed`
+    /// for the same rule read the other way — it is one control, so it is its own page.
+    ///
+    /// **It is not reset when the shelf changes**, and that is deliberate rather than overlooked:
+    /// `refresh_titles` re-pushes the model on every save, and an arm cleared by a background
+    /// re-push would be a press that stopped counting because something else happened. What clears
+    /// it is a second press, or a press on another tile.
+    property <int> armed: -1;
+
+    /// §22.5's two columns, and the rows that follow from the shelf's length.
+    ///
+    /// **Read off `Geometry` rather than typed**, so the count that lays the covers out and the
+    /// count the viewport is sized from cannot come apart — which is the arithmetic bug a grid
+    /// invites and the one thing that would scroll a shelf to the wrong place.
+    /// **A `float` rather than an `int`, and both halves of that matter.** `Geometry.cover-cols` is
+    /// a `Ratio`, so it arrives as one; and `length / cols` under integer division would answer 1
+    /// for three titles in two columns, which is a viewport one row short and a third cover drawn
+    /// past the bottom of a container that neither shrinks nor clips it (§16.2).
+    property <float> cols: Geometry.cover-cols;
+    property <float> rows: Math.ceil(root.titles.length / root.cols);
 
     background: Ink.bg;
     accessible-role: AccessibleRole.region;
@@ -114,58 +140,64 @@ export component GamesPage inherits Rectangle {
                         : "Nothing in that folder holds Executables/<name>.bin, as itself or one level down.";
                 }
 
-                // ── One title: its own name, its own cover, and whether it runs here ───────
+                // ── The shelf: one cover per title, two across ─────────────────────────────
                 //
                 // **Everything drawn is out of the title's `Manifest.plist`** — issue #29. The
                 // name is the top-level `Name`, the cover is what the 5G build's `LaunchingArtwork`
                 // points at, and `runs` is whether the manifest lists a `PlatformID 1` build at
                 // all. `main::title_row` reads all three; this page words none of it.
                 //
-                // **The cover is beside the row rather than above a page of its own.** §13.2 draws
-                // a title's own page with the art at the top, and that page is the binding matrix,
-                // which is 0.6. What the list needs is the thing a person recognises, at the size a
-                // list row is — and the row is `ROW_H` tall, so the cover is drawn to that.
-                // **No path under the title, and that is issue #29's own complaint.** Every row
-                // carried its absolute path in `mono`, which is developer information in a
-                // player's list — and it is not even information: `TitleRow::name`'s own note is
-                // that *"the directory is often an opaque id — 50513, 88888, 1500C"*, so what was
-                // drawn under `Tetris` was the shelf's path with a number on the end of it. Where
-                // the titles are is said **once**, on the row above, which is the place a person
-                // can act on it. `TitleRow::path` is still on the row — `on_games_play` finds the
-                // executable from it — it is simply not something to look at.
-                for t[i] in root.titles: Row {
-                    index: i + 1;
-                    count: root.titles.length + 1;
-                    label: t.name;
-                    // A title that cannot run says why, in place, and is never hidden — §14.1.
-                    // `PlatformID` answers it before anything is loaded.
-                    enabled: t.runs;
-                    reason: t.reason;
-                    // §9.4's two kinds: this is *this cannot work, ever* — the title ships no build
-                    // for the iPod this emulator is, and no amount of fetching changes that.
-                    machine-rule: true;
-                    // **No chevron, and that is a correction rather than a style choice.** §21.3:
-                    // a chevron is a claim that pressing goes one level deeper, and pressing a
-                    // title starts a machine — §13.3's *there is no boot; press the centre button
-                    // and the title is there*. It never opened a page, and the `›` was the same
-                    // false claim §21.3 records against `Doom` and `Diagnostics`. Removing it also
-                    // puts the cover at the trailing edge with nothing between it and the name.
-                    chevron: false;
-                    activated => {
-                        root.play(i);
-                    }
-                    gained-focus => {
-                        scroll.ensure-visible(self.absolute-position.y, self.height);
-                    }
+                // **It was a list of names with a 24 px stamp on the trailing edge, and §22.5
+                // retires that.** Read the old one off `_out/gui/games.png`: three titles in the
+                // top 200 px of an 820 px page, each recognisable only by its name, with the
+                // artwork the iPod itself draws reduced to a coloured chip. `LaunchingArtwork` is
+                // the picture a person recognises a game by, so it is the primary and the name is
+                // the fallback — which is what a `Tile` is and why §5 has a tenth primitive again.
+                //
+                // **A `Rectangle` with computed positions, not a `GridLayout`.** Slint's grid takes
+                // static children; a shelf is a repeater over a model whose length is somebody's
+                // folder. So the arithmetic is here, and every term in it is `Geometry`'s —
+                // `no_geometry_literal_survives_in_the_markup` is what keeps it that way.
+                //
+                // **`Math.mod` and `Math.floor` on the index** is the whole of the layout: column
+                // `i mod cols`, row `floor(i / cols)`. The viewport is sized from the same two
+                // numbers below, so a shelf of 40 titles scrolls rather than drawing 18 rows past
+                // the bottom edge — §16.2's finding, which is that a layout shorter than its
+                // children neither shrinks nor clips them.
+                if root.titles.length > 0: shelf := Rectangle {
+                    // **One row's advance times the rows, plus the air above the first.** Every
+                    // term is `Geometry`'s and the advance is the same constant the tiles are laid
+                    // out on, so the height this reports and the position they are drawn at cannot
+                    // disagree — which is the arithmetic a hand-positioned grid invites, and whose
+                    // symptom is a shelf that stops one row short of its own last cover.
+                    height: root.rows * Geometry.cover-row-adv + Geometry.cover-gap;
 
-                    // **`if`, not `visible`**: a title with no artwork reserves nothing, because
-                    // §13.2's rule for that case is that there is no placeholder to reserve room
-                    // for. §16.3's anti-shuffle argument does not reach it — this is absolutely
-                    // positioned inside the row, so nothing moves either way.
-                    // The cover goes through `Row`'s own trailing gutter rather than as a child
-                    // here — see `primitives.slint`'s `thumb` for why a child overflowed the
-                    // drawer.
-                    thumb: t.cover;
+                    for t[i] in root.titles: Tile {
+                        x: Geometry.page-margin
+                            + Math.mod(i, root.cols) * (Geometry.cover-w + Geometry.cover-gap);
+                        y: Geometry.cover-gap
+                            + Math.floor(i / root.cols) * Geometry.cover-row-adv;
+                        label: t.name;
+                        cover: t.cover;
+                        // A title that cannot run says why, in place, and is never hidden — §14.1.
+                        // `PlatformID` answers it before anything is loaded, and the sentence is
+                        // drawn where the picture would have been rather than under the tile.
+                        enabled: t.runs;
+                        reason: t.reason;
+                        // §22.5's double-press, and the arm is the PAGE's so only one can hold it.
+                        armed: root.armed == i;
+                        activated => {
+                            if (root.armed == i) {
+                                root.armed = -1;
+                                root.play(i);
+                            } else {
+                                root.armed = i;
+                            }
+                        }
+                        gained-focus => {
+                            scroll.ensure-visible(self.absolute-position.y, self.height);
+                        }
+                    }
                 }
             }
         }

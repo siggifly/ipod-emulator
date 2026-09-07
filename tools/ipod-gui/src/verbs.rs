@@ -188,6 +188,9 @@ impl Verb {
                 | Verb::Parts
                 | Verb::Readout
                 | Verb::Work
+                // §22.6, and it is on this list for the same reason `Games` had to be: a chevron
+                // is a claim that pressing goes one level deeper, and this row now does.
+                | Verb::Reference
         )
     }
 }
@@ -314,14 +317,21 @@ pub fn view(s: &Settings, d: Option<&Device>, seen: &mut Presence, caps: Caps, n
             Verb::Parts => Row::go(Verb::Parts, ""),
             Verb::Readout => Row::go(Verb::Readout, ""),
             Verb::Work => Row::go(Verb::Work, ""),
-            // The one row with nothing behind it. `ReferencePage` exists in no markup file, so its
-            // refusal is true — and `nav::Page::Reference` returns `None` from `slot()`, which is
-            // the second, quieter statement of the same thing.
-            Verb::Reference => Row::no(
-                Verb::Reference,
-                "The keyboard table and the stated limits have no page yet.".into(),
-                false,
-            ),
+            // **It was the one row with nothing behind it, and §22.6 built the page.** The refusal
+            // that stood here — *"The keyboard table and the stated limits have no page yet."* —
+            // named its own retirement condition and this is it: `ui/reference.slint` draws
+            // `reference::page()`, `nav::Page::Reference` answers `Some(1)` from `slot()`, and
+            // `⌘,` and `?` both reach it. All three had to move together, which is what
+            // `every_built_page_is_reachable_from_its_row` measures.
+            //
+            // **The value column carries `⌘,`'s printed form**, for `panel_row`'s reason: a key
+            // that appeared only where it works would be discoverable exactly when it is no longer
+            // needed. This one is the opposite case — the key is how most people will arrive — so
+            // the row is where somebody finds out the key exists at all.
+            Verb::Reference => Row {
+                value: "Cmd-,".into(),
+                ..Row::go(Verb::Reference, "every key this program binds")
+            },
         };
         row.rule_above = out
             .last()

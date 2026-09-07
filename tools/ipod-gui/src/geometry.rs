@@ -533,6 +533,64 @@ geometry! {
     /// window's geometry as lengths would invite drawing it at 1:1 in a 420 px drawer.
     COVER_ASPECT:     Ratio = 320.0 / 216.0;
 
+    // ── §22.5's shelf of covers ─────────────────────────────────────────────────────────────────
+    //
+    // §5's tenth primitive. Every number here is derived from [`REFUSAL_MEASURE`], which is the
+    // drawer's body — so a re-measured drawer or page margin moves the whole shelf rather than
+    // leaving a typed column width to disagree with the page it sits in.
+
+    /// How many covers stand side by side.
+    ///
+    /// **Two, and it is a decision about a 420 px drawer rather than a responsive rule.** At
+    /// [`COVER_COLS`] 2 a cover is 180 px wide, which is wider than the 160 px iTunes drew album
+    /// art at and about half the drawer; at 3 it is 116, which is below the size a person
+    /// recognises a game by and is the postage stamp §22.5 exists to retire. The drawer does not
+    /// change width — it is [`DRAWER_W`] at every window size — so there is no state in which a
+    /// third column would have room, and a column count computed from a width that cannot vary
+    /// would be arithmetic dressed as flexibility.
+    ///
+    /// A `Ratio` because it is a count, exactly as [`PLAN_MAX_ROWS`] and [`DRAWER_MAX_DEPTH`] are.
+    COVER_COLS:       Ratio = 2.0;
+    /// The air between two covers, across and down. §6.3's 12 — the same step `Metric.s3` is.
+    COVER_GAP:        Px = 12.0;
+    /// One cover's width: the page body, less the gaps between the columns, divided by them.
+    ///
+    /// **Written as the expression** for [`FIELD_VALUE_W`]'s reason: the alternative is a typed 180
+    /// that goes on being 180 after somebody re-measures the margin it was derived from.
+    COVER_W:          Px = (REFUSAL_MEASURE - (COVER_COLS - 1.0) * COVER_GAP) / COVER_COLS;
+    /// …and its height, which is the width through [`COVER_ASPECT`] and nothing else.
+    ///
+    /// A cover squeezed into any other shape is somebody's artwork drawn wrong, and the aspect is
+    /// measured across all twenty titles on hand rather than assumed.
+    COVER_H:          Px = COVER_W / COVER_ASPECT;
+    /// The whole tile: the cover, the air under it, and the name's line box.
+    ///
+    /// **Uniform across every tile, including a refused one** — §22.5's *the grid stays regular*.
+    /// A refused title draws its reason inside the cover's own rectangle rather than in a slot
+    /// hung under the tile, which is what keeps this one number true for all of them.
+    COVER_TILE_H:     Px = COVER_H + COVER_GAP / 2.0 + LINE_BODY;
+    /// One row of the shelf, top edge to top edge — a tile and the air under it.
+    ///
+    /// **Declared rather than written twice**, because the markup needs it in two places that must
+    /// not disagree: the `y` a tile is laid out at, and the height the shelf reports so its
+    /// `Scroll` can size a viewport. Those two coming apart is the arithmetic a hand-positioned
+    /// grid invites, and its symptom is a shelf that scrolls to the wrong place or stops one row
+    /// short — §16.2's *neither shrinks nor clips them, it draws them past the bottom edge*.
+    COVER_ROW_ADV:    Px = COVER_TILE_H + COVER_GAP;
+    /// The measure a refused cover's sentence wraps at — the cover, less [`COVER_PAD`] a side.
+    ///
+    /// §14.1's refusal is drawn where the picture would have been, so its column is the picture's.
+    /// `every_refusal_a_cover_draws_fits_the_cover_it_is_drawn_in` is the gate that measures a
+    /// sentence against it, and it measures **height**: the text wraps rather than eliding, so what
+    /// can go wrong is lines drawn past the bottom of the box, which is [`COVER_H`]'s business and
+    /// not a width budget's.
+    COVER_REASON_W:   Px = COVER_W - 2.0 * COVER_PAD;
+    /// The inset of a refused cover's sentence inside the cover's rectangle.
+    ///
+    /// §6.3's 8 rather than its 12: the box is 180 px wide and every pixel spent on air is a pixel
+    /// the sentence has to wrap in.
+    COVER_PAD:        Px = 8.0;
+
     /// The panel's own pixels — `emu::FB_W` and `emu::FB_H`, stated here as the geometry they are.
     ///
     /// **Every iPod this program emulates has this screen**, which is why §15 struck `320x240` off
@@ -782,7 +840,7 @@ pub const ACT_MEASURE: f64 = REFUSAL_MEASURE - 2.0 * PAGE_MARGIN;
 ///
 /// **Written as the expression rather than as 48**, so a re-measured [`BODY_ADVANCE`] or a
 /// re-measured body moves every sentence that has to fit rather than leaving a stale number here.
-/// The label is `width: frame.width` (`ui/bench.slint:967`), and the frame is the body plus one
+/// The label is `width: frame.width` (`ui/bench.slint:983`), and the frame is the body plus one
 /// [`CRADLE_BAND`] on each side:
 ///
 /// ```text
@@ -993,6 +1051,9 @@ mod tests {
         "preview.slint",
         "primitives.slint",
         "rail.slint",
+        // §22.6's page — every key this program binds. Declared the day the file landed, per this
+        // list's own rule.
+        "reference.slint",
         "tokens.slint",
         // §21.3's root page — the drawer's own, which is why it is declared beside the drawer's
         // children rather than inside `drawer.slint` where `MenuPage` used to live. Declared the
