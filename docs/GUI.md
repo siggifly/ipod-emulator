@@ -6792,3 +6792,109 @@ schedule, and it does not change because the front page did.
 Drawing it disabled rather than omitting it is §14.1, and it is also what makes the redesign
 truthful: the shape of the finished program is visible from the first run, and the arm lights up
 without the front page changing shape under anybody.
+
+---
+
+## 22. The redesign, second pass — two intents, and one switch
+
+**Status: proposed, 2026-09-07.** §21 built a window whose *information architecture* was right and
+whose *surface* is not. The operator has now said three times that it is complicated and ugly, and
+he is right. This section is what §21 should have been.
+
+### 22.1 What §21 got wrong, precisely
+
+Not the direction — the drawer's move from nouns to verbs was correct and stays. Three specific
+errors:
+
+**§14.1 was applied uniformly, and it is not a uniform rule.** *Disable with a reason, never hide*
+earns its place for **capability** refusals: *"Diagnostics lives inside the boot ROM's image
+directory, and a generated ROM has none"* teaches a person something true about the iPod in front of
+them. Applied to **transient state** it produced four rows saying *"My 5.5G is not running"* in four
+phrasings. That is not teaching, it is nagging, and it is most of the grey.
+
+**Twelve rows where there are two questions.** Apple · Rockbox · Doom · Diagnostics · Games · Start ·
+Suspend · Resume · Kill · Restart · Files · Panel. Five of those are one control wearing five hats.
+
+**A word nobody uses.** `Kill` is what a process manager does. The operator looked for a way to turn
+the iPod off, found `Suspend` and `Kill`, and concluded there wasn't one. **§21.6's argument — name
+emulator controls as emulator controls — was right and did not require naming them badly.**
+
+### 22.2 The rule that replaces uniform disabling
+
+> **Disable only what is impossible. If an action would unblock it, take that action.**
+
+| | §21 | §22 |
+|---|---|---|
+| Rockbox while the iPod runs | *"is running. Stop it first."* | **stop it, install, start it** |
+| Doom without its WADs | *"nothing fetches them"* | **fetch them** — the URL answers, and `ipod-boot doom-assets` already does it |
+| Diagnostics on a generated ROM | greyed, with the reason | **greyed, with the reason** — nothing can unblock it, and this is where §14.1 earns its keep |
+
+The operator's words: *"i dont want to turn off the ipod to install rockbox etc. i want to be able
+to easily do things without things being disabled."* A verb that tells you to go and do something
+first is a form rejecting your input.
+
+**A refusal is now evidence of a design failure until proven otherwise.** Every remaining one must
+name a fact about the hardware or the library that no action of ours can change.
+
+### 22.3 Two intents, asked once
+
+A person arriving wants one of two things, and the window should ask that and nothing else:
+
+```
+        ┌──────────────────────┐   ┌──────────────────────┐
+        │     Use an iPod      │   │     Play a game      │
+        └──────────────────────┘   └──────────────────────┘
+```
+
+**Use an iPod** defaults to Apple's software on a 5.5G — no question asked, because §21.4's default
+already needs no ROM dump and no IPSW anybody has to find. What can be *added* to it lives one level
+in: Rockbox, Rockbox's assets, the disk image, ipodloader2, iPodLinux.
+
+**Play a game** needs no iPod at all — `play` never calls `map_hardware`, so there is no ROM, no
+IPSW, no drive and no boot on that branch. It should not touch the device apparatus even once.
+
+### 22.4 One switch, not five controls
+
+A person's model of an iPod is **off** and **on**. The centre button already expresses both on the
+drawn device. So the menu carries **one** control, and it is a switch rather than a pair of verbs:
+
+```
+   Turn off  ●———○
+```
+
+`Suspend`, `Resume`, `Kill` and `Restart` are not deleted as *capabilities* — the snapshot machinery
+is what makes a second start cost 0.15 s. They stop being **five rows**. Restart is the switch
+twice; Suspend and Resume are what the switch does when a restore point is whole, which is a fact
+the program already knows and does not need to ask about.
+
+### 22.5 Graphical, and what that means here
+
+The operator: *"lets make things graphical and nice."* Two places, and neither is decoration:
+
+**The game library is a grid of covers, not a list of rows.** `LaunchingArtwork` is the artwork the
+iPod itself shows, and a shelf of covers is how a person recognises a game — the name is the
+fallback, not the primary. Double-press plays.
+
+**The menu's rows carry their meaning, not a paragraph.** A row that needs three lines of grey prose
+under it is a row that has not been designed. The sentence stays where §14.1 requires it — under a
+genuine impossibility — and nowhere else.
+
+### 22.6 `⌘,`, and the shortcuts that cannot be seen
+
+The menu expands from the window on **`⌘,`**, the platform's own convention for exactly this.
+
+**This does not violate §14.4.** *Nothing floats* is about `PopupWindow`, `ContextMenu`,
+`TooltipArea`, toasts and OpenEmu's HUD — things that float **over** content and dismiss themselves.
+A sheet anchored to the window, dismissed deliberately, is ordinary layout, which is what §14.4 asks
+for.
+
+**And `⌘,` is currently bound to nothing.** `Page::Reference` exists in `nav.rs` carrying the comment
+*"nothing draws a Reference page"* — so §16.8's table of every binding in the program is
+documentation that no one inside the window can reach. The Reference page is built, it lists every
+key, and `⌘,` and `?` both reach it.
+
+### 22.7 What this section does not overturn
+
+The drawn device and its geometry · the wheel, its ghost and its haptics · §21.2's window-is-the-iPod
+· §21.3's verbs-not-nouns · §14.1 **for capability refusals** · §12.6's fullscreen arithmetic ·
+§21.7's second view · the piezo as the only thing that asks for a click.
