@@ -162,6 +162,12 @@ mod settings_page;
 // words nothing either of them already words.
 mod verbs;
 
+// §22.6: every key this program binds, as a page a person inside the window can reach. It is
+// declared after `parts` because it produces `parts::Detail`s — the two-column fact `MadeOfLine`
+// already renders on two other surfaces, rather than a third row construction that would measure
+// its own text a third way.
+mod reference;
+
 // The two routes a file takes into this program from outside — docs/GUI.md §11.4 and §16.4, and
 // §17 Q3 answered. It owns `rfd` and the coalescing window winit's event stream does not provide,
 // and it is what `caps()`'s `file_picker`, `drop_target` and `reveal` are now read from rather
@@ -2432,6 +2438,8 @@ fn wire(
                 verbs::Verb::Parts => open(nav::Page::Parts),
                 verbs::Verb::Readout => open(nav::Page::Readout),
                 verbs::Verb::Work => open(nav::Page::Work),
+                // §22.6. It was on the arm below, refused, until the page existed.
+                verbs::Verb::Reference => open(nav::Page::Reference),
 
                 // ── The three that start a machine, and they are ONE press ──
                 //
@@ -2586,7 +2594,7 @@ fn wire(
                 // Drawn, refused, and it says why — §14.1. A press reaches here only through an
                 // `activated` on a `Pressable` that is `enabled: false`, which §16.5 keeps alive so
                 // it can be focused and announced. Nothing to do is the honest answer.
-                verbs::Verb::Files | verbs::Verb::Reference => {}
+                verbs::Verb::Files => {}
             }
             repaint_all();
         });
@@ -2620,6 +2628,14 @@ fn wire(
     let readout_headings: Rc<VecModel<slint::SharedString>> = Rc::new(VecModel::default());
     window.set_readout_rows(ModelRc::from(readout_rows.clone()));
     window.set_readout_headings(ModelRc::from(readout_headings.clone()));
+
+    // ── §22.6's Reference ───────────────────────────────────────────────────────────────────────
+    //
+    // **Pushed once, and it is the only page in the drawer that is.** `reference::page()` is a pure
+    // function of nothing: the keys this program binds do not depend on the library, the machine or
+    // the moment, so a repaint entry for this page would be a re-push of a constant at 10 Hz. There
+    // is deliberately no `Repaint` registered for `nav::Page::Reference`.
+    window.set_reference_rows(reference_rows());
     let repaint_readout: Repaint = {
         let rows = readout_rows.clone();
         let headings = readout_headings.clone();
@@ -6687,6 +6703,33 @@ fn to_fix(f: &composer::FixRow) -> FixRow {
         presses: i32::from(f.presses),
         consequence: f.consequence.clone().into(),
     }
+}
+
+/// §22.6's page, across the boundary.
+///
+/// **A heading and a binding are one model rather than two**, because the order between them is the
+/// page — four bands, each a heading and its rows — and two parallel lists cannot express an order
+/// between themselves. `heading` non-empty is what tells them apart, which is the same test
+/// `MadeOfLine` already makes on an empty `label`.
+fn reference_rows() -> ModelRc<KeyRow> {
+    let rows: Vec<KeyRow> = reference::page()
+        .into_iter()
+        .map(|r| match r {
+            reference::Row::Heading(h) => KeyRow {
+                heading: h.into(),
+                keys: slint::SharedString::new(),
+                does: slint::SharedString::new(),
+                note: false,
+            },
+            reference::Row::Binding(d) => KeyRow {
+                heading: slint::SharedString::new(),
+                keys: d.label.into(),
+                does: d.value.into(),
+                note: d.machine_rule,
+            },
+        })
+        .collect();
+    ModelRc::from(Rc::new(VecModel::from(rows)))
 }
 
 /// One line inside an expanded row, for **both** pages that draw one.
@@ -15009,6 +15052,32 @@ pub(crate) mod tests {
             seen.len()
         }
 
+        /// **How many distinct colours the drawer's BODY holds** — the page, without the window
+        /// around it and without its own header.
+        ///
+        /// [`Shot::colours`] asks the same question of the whole frame and cannot answer this one.
+        /// A drawer page that draws nothing at all still sits inside a window holding the drawn
+        /// iPod, the `bg-sunken` ground, the header's gradient and the anti-aliased word at the top
+        /// of the page — hundreds of colours, none of them the page's. `_out/gui/reference.png`
+        /// shipped exactly like that for one commit: a header over 776 px of white, `colours()`
+        /// answering in the hundreds, and every test green.
+        ///
+        /// The region is the drawer's own rectangle — right-anchored, [`geometry::DRAWER_W`] wide —
+        /// from the bottom of its [`geometry::DRAWER_HEADER_H`] header to the bottom of the window.
+        /// A page drawing nothing answers **1**, which is `Ink.bg` and nothing else.
+        fn page_colours(&self) -> usize {
+            let x0 = self.w.saturating_sub(geometry::DRAWER_W as u32);
+            let y0 = geometry::DRAWER_HEADER_H as u32;
+            let mut seen = std::collections::HashSet::new();
+            for y in y0..self.h {
+                for x in x0..self.w {
+                    let i = ((y * self.w + x) * 3) as usize;
+                    seen.insert([self.rgb[i], self.rgb[i + 1], self.rgb[i + 2]]);
+                }
+            }
+            seen.len()
+        }
+
         /// **How many bands of §6.5's material this page draws down its drawer**, and how tall
         /// each one is.
         ///
@@ -15344,6 +15413,15 @@ pub(crate) mod tests {
             w.set_readout_headings(ModelRc::from(self.r_headings.clone()));
             w.set_verbs(ModelRc::from(self.v_rows.clone()));
             w.set_verbs_about(ModelRc::from(self.v_about.clone()));
+            // §22.6, through the same producer `wire` calls. **This fixture is a second front end
+            // and this line is what that costs**: `Furniture` does not call `wire`, it re-pushes
+            // every page's model itself, so a page wired in one and not the other is photographed
+            // blank while every test stays green. That is exactly what happened —
+            // `_out/gui/reference.png` was a header over 776 px of white, and `colours() > 256`
+            // passed it because the window's own chrome around the page is not blank. The gate
+            // that catches it now is `every_drawer_page_this_window_shoots_draws_something`, and
+            // the reason it had to be written is this line's absence.
+            w.set_reference_rows(reference_rows());
             // §13's list, through `refresh_titles` — the same call `wire` makes and the same one
             // that reads each title's manifest for its name, its cover and its `PlatformID`. A
             // fixture that filled the model itself would photograph a list this program does not
@@ -16073,7 +16151,7 @@ pub(crate) mod tests {
 
         // `None` is the bench — the drawer shut. Every other entry names a page, at the level
         // `Page::slot` says draws it, which is the only level `Stack::go` will accept.
-        let pages: [(&str, Option<nav::Page>, &Furniture); 13] = [
+        let pages: [(&str, Option<nav::Page>, &Furniture); 14] = [
             ("bench", None, &full),
             // **§21.4's first run, which is the first thing anybody sees and had no picture.**
             // Every other shot in this list is of a furnished library; this is an empty data
@@ -16098,7 +16176,20 @@ pub(crate) mod tests {
             // this repository writes — and one of the three ships no 5G build, so the shot carries
             // §14.1's refusal beside the two that run.
             ("games", Some(nav::Page::Games), &games),
+            // **§22.6, and there was nothing to photograph until now**: `nav::Page::Reference`
+            // answered `None` from `slot()`, so `a_stack` could not even reach it. The library it
+            // is shot against does not matter — `reference::page()` is a pure function of nothing,
+            // which is the one page in this drawer that is true of — so it stands on the furnished
+            // one with the rest.
+            ("reference", Some(nav::Page::Reference), &full),
         ];
+
+        // **Which of these shots is a picture of a drawer PAGE**, kept before the array is consumed
+        // so `every_drawer_page_this_window_shoots_draws_something` below can ask about the drawer's
+        // own rectangle rather than about the whole frame. `Page::None` is the menu, which is a page
+        // and draws rows; a `None` stack is the bench, which has no drawer on screen at all.
+        let page_shots: Vec<&str> =
+            pages.iter().filter(|(_, p, _)| p.is_some()).map(|(n, _, _)| *n).collect();
 
         let mut shots: Vec<(&str, Shot)> = pages
             .into_iter()
@@ -16355,6 +16446,68 @@ pub(crate) mod tests {
                 shot.at.display()
             );
         }
+
+        // ── A page that draws nothing, which the whole-frame count cannot see ──────────────────
+        //
+        // **`colours() > 256` passes a completely blank page** and this is not hypothetical: it
+        // passed `reference.png` when that page was a header over 776 px of white, because the
+        // window around the drawer holds the drawn iPod, the `bg-sunken` ground and the header's
+        // own gradient. Every one of those hundreds of colours belongs to something other than the
+        // page. `Furniture` had simply not been given the model — it is a second front end that
+        // re-pushes each page itself rather than calling `wire`, so a page wired in one and not the
+        // other photographs blank with the suite green.
+        //
+        // So the question is asked of the drawer's own rectangle, below its header, where a page
+        // that drew nothing answers **1**.
+        //
+        // **How to make it go red:** delete `w.set_reference_rows(...)` from `Furniture::push`.
+        for name in &page_shots {
+            let shot = &shots.iter().find(|(n, _)| n == name).expect("a page shot").1;
+            let drawn = shot.page_colours();
+            assert!(
+                drawn > 32,
+                "{name}'s drawer body holds {drawn} colour(s) below its header — the page drew \
+                 nothing, or nearly nothing, and the frame's own {} colours are the window around \
+                 it rather than the page. {}",
+                shot.colours(),
+                shot.at.display()
+            );
+        }
+        // ── Two controls, because the assertion above is an inequality and both ends can lie ────
+        //
+        // **It has to be able to answer 1.** Asked of a uniform buffer the size of a real shot, it
+        // must count exactly one colour — otherwise it is reading outside the region, or reading
+        // nothing and returning a constant.
+        //
+        // The first attempt at this control was *the same rectangle over `bench-empty`, where no
+        // drawer is on screen, must be small*, and it failed at **729**. That was the control being
+        // wrong rather than the function: `DRAWER_W` is 420 of the window's 460, so the drawer's
+        // rectangle over a bench shot is very nearly the whole window and the drawn iPod is inside
+        // it. Recorded rather than quietly replaced, because a reader is otherwise owed an
+        // explanation of why the obvious control is not the one here (AGENTS.md §5).
+        let blank = Shot {
+            at: std::path::PathBuf::from("<synthetic>"),
+            w: geometry::PREF_WIDTH as u32,
+            h: geometry::PREF_HEIGHT as u32,
+            rgb: vec![0xF7; (geometry::PREF_WIDTH * geometry::PREF_HEIGHT * 3.0) as usize],
+        };
+        assert_eq!(
+            blank.page_colours(),
+            1,
+            "a uniform frame reports more than one colour in the drawer body, so the region is \
+             reading something that is not there"
+        );
+
+        // **And it has to be less than the whole frame**, or it is `colours()` under another name —
+        // which is the exact instrument this was written to replace.
+        let menu = shots.iter().find(|(n, _)| *n == "menu").expect("the menu shot").1.at.clone();
+        let menu_shot = &shots.iter().find(|(n, _)| *n == "menu").expect("the menu shot").1;
+        assert!(
+            menu_shot.page_colours() < menu_shot.colours(),
+            "the drawer body of {} holds as many colours as the whole frame, so this is measuring \
+             the whole frame",
+            menu.display()
+        );
 
         // ── §6.5, off the pixels ──────────────────────────────────────────────────────────────
         //
@@ -17428,9 +17581,9 @@ pub(crate) mod tests {
              parser that finds nothing makes every verdict below vacuous"
         );
         assert!(
-            has_page("Games") && !has_page("Nonexistent") && !has_page("Reference"),
-            "the page-body matcher answers the same for a page that is there, one that is not, and \
-             the page this gate exists to permit having no row"
+            has_page("Games") && !has_page("Nonexistent"),
+            "the page-body matcher answers the same for a page that is there and one that is not, \
+             so every verdict below it is about the constant `true`"
         );
 
         // A row that navigates must have somewhere to go: a `nav::Page` with the slot the press
@@ -17449,6 +17602,7 @@ pub(crate) mod tests {
                 "Work" => DrawerPage::Work,
                 "Readout" => DrawerPage::Readout,
                 "Settings" => DrawerPage::Settings,
+                "Reference" => DrawerPage::Reference,
                 other => panic!("`open(nav::Page::{other})` is new; say which markup page draws it"),
             });
             assert_eq!(
@@ -17466,19 +17620,30 @@ pub(crate) mod tests {
         // the operator found it by pressing it. So: every page the drawer draws at depth 1 has a
         // verb that opens it, and a page with a body and no row is the same defect from the other
         // side — a surface that is in the source and reachable from nothing.
-        for page in ["Devices", "Parts", "Games", "Work", "Readout", "Settings"] {
+        //
+        // **`Reference` came off the disabled side of this gate, and that is what §22.6 is.** It
+        // stood below as *the honest disabled row* — no component drew it, `nav::Page::slot()`
+        // answered `None`, and `verbs::view` refused it with a sentence naming the gap. All three
+        // were true, and all three had to move together, because a page needs every one of them
+        // and this gate is the only thing that checks they agree. It is on the list now, which is
+        // the whole of that change stated as an assertion.
+        //
+        // **And the disabled side is empty**, which is worth asserting rather than leaving as the
+        // absence of a line: no row on §21.3's list names a page nothing draws. A row added
+        // tomorrow in that state fails the second loop until somebody either draws its page or
+        // takes the navigation off it.
+        for page in ["Devices", "Parts", "Games", "Work", "Readout", "Settings", "Reference"] {
             assert!(
                 opens.iter().any(|o| o == page),
                 "ui/drawer.slint draws a {page}Page and no row on §21.3's list opens it — the \
                  page is reachable from nothing"
             );
+            assert!(
+                has_page(page),
+                "no `{page}Page {{` body in ui/drawer.slint, so the row that opens it lands on a \
+                 blank 420 px panel with no header and therefore no visible way out"
+            );
         }
-        // `Reference` is the honest disabled row: no component draws it, `nav::Page::slot()`
-        // answers `None`, and `verbs::view` refuses it with a reason naming the gap.
-        assert!(
-            !opens.iter().any(|o| o == "Reference"),
-            "a row navigates to Reference, which no markup file draws"
-        );
     }
 
 
@@ -20929,8 +21094,8 @@ pub(crate) mod tests {
     ///
     /// It also pins the four bindings that were reading the **bench's** two fields: `enabled` and
     /// `reason` came from `DeviceRow.startable` and `.cradle-label`, which the drawn iPod reads as
-    /// `root.current.startable` (`window.slint:942`) and `root.current.cradle-label`
-    /// (`window.slint:909`); `machine-rule` was a literal `true`. **Each number is written beside
+    /// `root.current.startable` (`window.slint:993`) and `root.current.cradle-label`
+    /// (`window.slint:960`); `machine-rule` was a literal `true`. **Each number is written beside
     /// the binding it names**, because the pair used to be two fields followed by two line numbers
     /// in the opposite order, and one of the two numbers was a blank line.
     #[test]
@@ -21032,7 +21197,7 @@ pub(crate) mod tests {
         assert!(!w.get_setting_copy_enabled());
         assert!(!w.get_setting_copy_reason().is_empty(), "`Copy path` is disabled and says nothing");
 
-        // The one live control. `drawer.slint:474` fires this ordinal as
+        // The one live control. `drawer.slint:482` fires this ordinal as
         // `root.setting-toggled(1)`; `Row::CheckUpdates` is 1.
         let before = settings.borrow().check_updates_on_start;
         assert_eq!(w.get_setting_check_updates(), before, "the box does not reflect the library");
@@ -21467,6 +21632,349 @@ pub(crate) mod tests {
         assert!(
             wiring.panel.borrow().is_some(),
             "⌃⌘P — the chord the row prints and §21.7 documents — opened no window"
+        );
+    }
+
+    /// **Every chord the markup declares is printed on the Reference page, and nothing else is.**
+    ///
+    /// §22.6. This is the gate that closes the half of issue #37 a derivation cannot: `reference.rs`
+    /// makes the *printed* form follow the *declared* one, so those two can no longer disagree —
+    /// but nothing in that arrangement stops the table naming a chord `ui/` does not declare, or
+    /// `ui/` growing a `KeyBinding` the page never mentions. Both would be a Reference page that
+    /// documents a different program from the one it is inside, which is precisely what §16.8 was
+    /// doing about `S`, `⇧S` and `D` when this page was built.
+    ///
+    /// **Both directions**, because a one-way check is how a table comes to be a superset nobody
+    /// notices. The sets are compared verbatim on the `@keys(…)` argument text, whitespace
+    /// normalised — the same string, read from two places that have no other reason to agree.
+    ///
+    /// **How to make it go red:** put `@keys(Control + "p")` back in `window.slint`. That is issue
+    /// #37 as it shipped, and the declaration would stop matching this table's
+    /// `Control + Meta + "p"`.
+    #[test]
+    fn every_chord_the_markup_declares_is_printed_on_the_reference_page() {
+        // Every `@keys(…)` argument in the markup, whitespace collapsed so a wrapped declaration
+        // and a one-line one compare equal.
+        let squash = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+        let mut in_markup: Vec<String> = Vec::new();
+        for (name, text) in tests::markup_sources() {
+            for (n, line) in text.lines().enumerate() {
+                // A comment quoting a binding is prose about the program, not a binding — and this
+                // file's own headers quote `@keys(Control + "p")` four times over while explaining
+                // why it was wrong.
+                if line.trim_start().starts_with("//") {
+                    continue;
+                }
+                let Some((_, rest)) = line.split_once("@keys(") else { continue };
+                let arg = rest.rsplit_once(')').map_or(rest, |(a, _)| a);
+                in_markup.push(squash(arg));
+                assert!(
+                    !arg.is_empty(),
+                    "ui/{name}:{}: `@keys()` with nothing in it",
+                    n + 1
+                );
+            }
+        }
+
+        // ── The control, before any verdict ─────────────────────────────────────────────────────
+        //
+        // A sweep that read no markup would find no chords and agree with a table that named none.
+        assert!(
+            in_markup.len() >= 4,
+            "the markup sweep found {} `@keys` declarations across {} files, and this program has \
+             four — the sweep is not reading: {in_markup:?}",
+            in_markup.len(),
+            tests::markup_sources().len()
+        );
+
+        let mut printed: Vec<String> =
+            reference::declared_chords().into_iter().map(squash).collect();
+        in_markup.sort();
+        printed.sort();
+        assert_eq!(
+            printed, in_markup,
+            "the Reference page and ui/*.slint disagree about what this program binds. The page is \
+             the only place inside the window that answers *what are the keys*, so a chord in one \
+             list and not the other is a program documenting itself wrongly — which is the defect \
+             issue #37 cost three weeks, arrived at from the other side"
+        );
+    }
+
+    /// **Every key the machine answers is printed on the Reference page.**
+    ///
+    /// §16.8's four machine rows, driven through `keyed` — the **shipped** function that decides
+    /// them — rather than through a copy of its table written here. A key the emulator takes and
+    /// the page does not mention is a control with no documentation anywhere a person inside the
+    /// window can reach, which is the whole of what §22.6 is for.
+    ///
+    /// **How to make it go red:** add an arm to `keyed` and not a row to `reference::IPOD`.
+    #[test]
+    fn every_key_the_machine_answers_is_printed_on_the_reference_page() {
+        use slint::platform::Key;
+
+        let band: String = reference::Group::Ipod
+            .bindings()
+            .iter()
+            .map(|b| b.keys.printed())
+            .collect::<Vec<_>>()
+            .join(" / ");
+
+        // The five letters and the four arrows, by the name the page gives them. Each is put to
+        // `keyed` first, so a key this sweep believes in but the machine has stopped taking fails
+        // here rather than being reported as covered.
+        for (text, legend) in [
+            (String::from("m"), "M"),
+            (String::from("p"), "P"),
+            (String::from("n"), "N"),
+            (String::from("b"), "B"),
+            (String::from("h"), "H"),
+            (String::from(char::from(Key::UpArrow)), "Up"),
+            (String::from(char::from(Key::DownArrow)), "Down"),
+            (String::from(char::from(Key::LeftArrow)), "Left"),
+            (String::from(char::from(Key::RightArrow)), "Right"),
+        ] {
+            assert!(
+                keyed(&text).is_some(),
+                "`keyed` no longer answers for {legend}, so this sweep is asking about a key the \
+                 machine does not take"
+            );
+            assert!(
+                band.contains(legend),
+                "the machine answers {legend} and the Reference page's iPod band does not name \
+                 it:\n  {band}"
+            );
+        }
+
+        // The control: a key the machine does NOT answer is not silently reported as covered.
+        assert!(keyed("z").is_none(), "`keyed` answers for `z`, so the control below proves nothing");
+        assert!(
+            !band.contains(" Z ") && !band.ends_with(" Z"),
+            "the page names a key the machine does not answer"
+        );
+    }
+
+    /// **`⌘,` and `?` both open the Reference page, pressed as real keystrokes.**
+    ///
+    /// §22.6. Neither had a destination before this: `⌘,` was bound to `open-page(none, 0)` — the
+    /// menu, which is not settings — and `?` was in §16.8's table and bound to nothing at all.
+    ///
+    /// **Pressed rather than invoked**, which is §21.7's own lesson from issue #37 in as many
+    /// words: *no amount of pressing the verb could have found this, which is why the test that
+    /// presses the verb is not the test that covers the key*. Calling `invoke_open_page` here would
+    /// prove the page exists and say nothing about whether any keystroke reaches it.
+    ///
+    /// **The two arrive by different mechanisms and that is the point of testing both.** `⌘,` is a
+    /// `KeyBinding`, which runs ahead of `key-pressed` entirely; `?` cannot be one — it is Shift
+    /// plus a key that differs per layout, and what every layout agrees on is the character — so it
+    /// is answered on `event.text` in the root scope. A test covering one would say nothing about
+    /// the other.
+    #[test]
+    fn cmd_comma_and_question_both_open_the_reference_page() {
+        let dir = temp_dir("reference-keys");
+        let settings = Rc::new(RefCell::new(a_furnished_library(&dir)));
+        let w = a_window();
+        let _wiring =
+            wire(&w, settings, args::Machine::default(), Rc::new(drops::Shell::Native));
+
+        let press = |t: slint::SharedString| {
+            w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed { text: t.clone() });
+            w.window().dispatch_event(slint::platform::WindowEvent::KeyReleased { text: t });
+        };
+        // **Read off the WINDOW rather than off `nav::Stack`.** `Wiring` does not hand the stack
+        // back, and it should not have to: what a person sees is the pushed properties, and a
+        // keystroke that moved the stack without pushing them would be a page the program believes
+        // it is on and does not draw. `on_open_page` is what does both.
+        let at = || (w.get_drawer_page(), w.get_drawer_depth());
+
+        // The control: the drawer starts shut and on no page, so arriving at Reference is this
+        // keystroke's doing rather than the state it was already in.
+        assert_eq!(at(), (DrawerPage::None, 0), "the window did not start on the menu");
+
+        // ── `⌘,` — `@keys(Control + Comma)`, and `Control` is ⌘ on Apple platforms ──────────────
+        let cmd: slint::SharedString = slint::platform::Key::Control.into();
+        w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed { text: cmd.clone() });
+        press(",".into());
+        w.window().dispatch_event(slint::platform::WindowEvent::KeyReleased { text: cmd });
+        assert_eq!(
+            at(),
+            (DrawerPage::Reference, 1),
+            "⌘, did not open Reference. It is the platform's own chord for exactly this page and \
+             for a revision it opened the menu instead, because the page did not exist"
+        );
+        assert!(w.get_drawer_open(), "⌘, left the drawer shut");
+
+        // Back to the menu, so the second key is proved from the same start as the first.
+        w.invoke_open_page(DrawerPage::None, 0);
+        assert_eq!(at(), (DrawerPage::None, 0));
+
+        // ── `?` — a bare character, answered in the root scope ─────────────────────────────────
+        press("?".into());
+        assert_eq!(
+            at(),
+            (DrawerPage::Reference, 1),
+            "`?` did not open Reference. §16.8 has listed it since the table was written and \
+             nothing bound it"
+        );
+
+        // And the control for the character route: a key this program does not claim must not
+        // navigate, or the assertion above is about any keystroke at all.
+        w.invoke_open_page(DrawerPage::None, 0);
+        press("q".into());
+        assert_eq!(at(), (DrawerPage::None, 0), "`q` navigated somewhere, so `?` proves nothing");
+    }
+
+    /// **Every refusal a cover draws fits the cover it is drawn in.**
+    ///
+    /// §22.5 puts a refused title's sentence inside the picture's own rectangle rather than under
+    /// the tile, which is what keeps the shelf regular — and it is also a **height** budget, which
+    /// no other gate in this program measures. `Tile`'s refusal `Text` has `wrap: word-wrap` and no
+    /// `overflow: elide`, so what goes wrong is not a clause cut off mid-word: it is lines drawn
+    /// past the bottom of a `clip: true` rectangle, which looks like a shorter sentence and says
+    /// nothing about the part that is gone.
+    ///
+    /// The arithmetic is `MadeOfLine`'s, for the reason that component's own note gives — Slint's
+    /// vertical `layout_info` for a wrapping `Text` **under-reports**, answering 24 px for a
+    /// sentence that draws in two 16 px lines, so the natural width is measured off a
+    /// non-wrapping probe and divided by the column instead.
+    ///
+    /// **Both title refusals `title_row` can produce**, named here rather than swept off a shelf,
+    /// because a fixture reaches one of them and no fixture on disk reaches the other (AGENTS.md
+    /// §6): a manifest listing no builds at all is a file this repository does not have and must
+    /// not add, since `resources/` never enters git.
+    ///
+    /// **How to make it go red:** put the 76-character first draft back —
+    /// *"This title ships no build for an iPod 5G, which is the only iPod this emulator is."*
+    #[test]
+    fn every_refusal_a_cover_draws_fits_the_cover_it_is_drawn_in() {
+        let w = a_window();
+        // The same face and weight `Tile`'s refusal draws in: `label-size` at `weight-label`.
+        let natural = |text: &str| -> f64 {
+            w.set_reason_probe(text.into());
+            f64::from(w.get_reason_width())
+        };
+        let lines = |text: &str| -> f64 {
+            (natural(text) / geometry::COVER_REASON_W).ceil().max(1.0)
+        };
+        // **One line of slack, and it is not padding — it is the error in the estimate.**
+        // `natural / column` assumes the text can be cut anywhere, and word-wrap cannot: a column
+        // ends on a word boundary and the remainder of that word starts the next line, so the drawn
+        // height is at or above this. `geometry::BODY_ADVANCE`'s own note states the principle —
+        // *a budget above the measurement errs toward the safe direction* — and here the safe
+        // direction is refusing a sentence that would have fitted rather than passing one that
+        // would not. The 173-character control below lands exactly in that band: six lines by this
+        // arithmetic, 96 px against a 105.5 px box, and visibly too long once wrapped.
+        let box_h = geometry::COVER_H - 2.0 * geometry::COVER_PAD - geometry::LINE_LABEL;
+
+        // Every sentence `title_row` can put on a refused title. The `[]` arm is verbatim; the
+        // other is `format!`ed over the platform ids a manifest lists, so the worst case is the
+        // one to measure — a title listing several generations.
+        let refusals = [
+            "Its manifest lists no builds at all.".to_string(),
+            format!(
+                "Built for {}. This emulator is an iPod 5G, platform {}.",
+                [2, 3, 4, 5, 6].map(|i| i.to_string()).join(" and "),
+                ipod_machine::title::PLATFORM_5G
+            ),
+        ];
+
+        // The control, first: the arithmetic has to be able to answer *too tall*. This is the
+        // first draft of the sentence, at 76 characters, and it is what §14.1's note in
+        // `title_row` records as having been cut off mid-clause once already.
+        let long = "This title ships no build for an iPod 5G, which is the only iPod this \
+                    emulator is, and there is nothing that can be fetched to change that — the \
+                    build simply was not made.";
+        assert!(
+            lines(long) * geometry::LINE_LABEL > box_h,
+            "a {}-character sentence fits the cover box, so this measurement is not measuring \
+             and every verdict below it is about zero. It wants {:.0} px in a {:.0} px column, \
+             which is {:.0} lines of {:.0} px against a {:.0} px box",
+            long.len(),
+            natural(long),
+            geometry::COVER_REASON_W,
+            lines(long),
+            geometry::LINE_LABEL,
+            box_h
+        );
+
+        for r in &refusals {
+            let drawn = lines(r) * geometry::LINE_LABEL;
+            assert!(
+                drawn <= box_h,
+                "a refused cover draws {r:?} in {:.0} lines — {drawn:.0} px against the {box_h:.0} \
+                 px inside a {:.0} px cover. `Tile`'s box clips, so the tail is not elided, it is \
+                 simply not there",
+                lines(r),
+                geometry::COVER_H
+            );
+        }
+    }
+
+    /// **Every legend the Reference page draws fits the column it is drawn in.**
+    ///
+    /// §22.6's page is a new surface that words things, and
+    /// `every_reason_this_window_draws_fits_the_slot_it_is_drawn_in` does not sweep it: that gate
+    /// measures §9.4's *reason* slots, and a key legend is a `MadeOfLine` **label**, which is a
+    /// different column — `geometry::FIELD_LABEL_W`, 96 px, budgeted for the word `Bootloader`.
+    ///
+    /// **It caught two on its first run**, which is why it exists rather than being assumed:
+    /// `Scroll on the wheel` and `A MacBook trackpad` drew as *Scroll on the w…* and
+    /// *A MacBook tra…* — visible in `_out/gui/reference.png` and in nothing else, because a label
+    /// that elides is still a label. The measurement goes through the window's own
+    /// `reason-probe`, which is a `Text` at `label-size` / `weight-label` with the eliding taken
+    /// off — the same face and the same weight `MadeOfLine` draws a fact label in.
+    ///
+    /// **The value column needs no gate and that is worth saying rather than leaving as a gap.**
+    /// `MadeOfLine`'s fact branch measures the sentence's natural width off a hidden non-wrapping
+    /// twin, divides by the column and grows the row to hold the lines — so a long `does` wraps
+    /// instead of clipping. It is the label that has `overflow: elide` and therefore a budget.
+    ///
+    /// **How to make it go red:** put `Scroll on the wheel` back in `reference::POINTER`.
+    #[test]
+    fn every_legend_the_reference_page_draws_fits_the_column_it_is_drawn_in() {
+        let w = a_window();
+        let measure = |text: &str| -> f64 {
+            w.set_reason_probe(text.into());
+            f64::from(w.get_reason_width())
+        };
+
+        // The control, first, so a probe measuring nothing cannot pass this quietly. This is the
+        // legend the first draft shipped, and it visibly did not fit.
+        let was = "Scroll on the wheel";
+        let control = measure(was);
+        assert!(
+            control > geometry::FIELD_LABEL_W,
+            "the probe measured {was:?} at {control:.1} px against a {:.1} px column it visibly did \
+             not fit — so the probe is not measuring and every assertion below is about zero",
+            geometry::FIELD_LABEL_W
+        );
+
+        let mut over: Vec<String> = Vec::new();
+        let mut swept = 0;
+        for g in reference::Group::ALL {
+            for b in g.bindings() {
+                let legend = b.keys.printed();
+                // A note has no legend; its sentence is drawn across the whole body by
+                // `MadeOfLine`'s machine-rule branch, which is not this column.
+                if legend.is_empty() {
+                    continue;
+                }
+                swept += 1;
+                let drawn = measure(&legend);
+                if drawn > geometry::FIELD_LABEL_W {
+                    over.push(format!(
+                        "  {g:?}: {legend:?} is {drawn:.1} px in a {:.1} px column",
+                        geometry::FIELD_LABEL_W
+                    ));
+                }
+            }
+        }
+        assert!(swept > 15, "only {swept} legends were swept; the sweep is not reading the page");
+        assert!(
+            over.is_empty(),
+            "{} of {swept} legends are wider than the column that draws them, so each one is cut \
+             off mid-word on the one page whose whole job is to say what the keys are:\n{}",
+            over.len(),
+            over.join("\n")
         );
     }
 

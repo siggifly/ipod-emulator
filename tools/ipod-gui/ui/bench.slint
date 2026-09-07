@@ -321,6 +321,22 @@ export component Bench inherits Rectangle {
     // instant for a title. It is the model's sentence, verbatim; this file never words it.
     in property <string> device-name;
     in property <string> cradle-label;
+    /// §22.3: **there is no iPod, so the question is still open.**
+    ///
+    /// Pushed from `main.rs` rather than derived here, for `ghost`'s reason one property up: the
+    /// window is where *what state is this program in* is decided, and a markup expression over
+    /// `has-devices` would be a second answer to it. It is false the moment there is an iPod,
+    /// which is §22.3's *asked once* — the question is not re-asked once it has an answer.
+    in property <bool> intents: false;
+    /// The first of the two. **The same act the centre button performs** — `on_start_device`, which
+    /// is where the first run, a half-made device, a composed one and every refusal are told apart.
+    /// A second start path here is how two of them come to disagree about whether a press may start
+    /// anything, which is the note `on_verb_act` already carries about its own three rows.
+    callback use-an-ipod();
+    /// The second. It opens the shelf and **must not touch the device apparatus once**: `play`
+    /// never calls `map_hardware`, so a person who came for a game waits for no ROM, no IPSW, no
+    /// drive and no boot.
+    callback play-a-game();
     in property <CradleRing> cradle-ring: CradleRing.accent;
     // §6.4, §16.6: `Path` has no dash array, so a refusal is a **broken** ring — four segments
     // with gaps at the corners. A gap is a shape and a shape is buildable, and a cradle that
@@ -971,7 +987,88 @@ export component Bench inherits Rectangle {
             // binding would chase an already-moving target and the label would trail the device it
             // belongs to. One animated property on this surface, and this reads it.
 
-            Text {
+            // ── §22.3's two intents, on the one screen where the question is live ────────────
+            //
+            // **A person arriving wants one of two things**, and until now this line offered only
+            // one of them: *Press the centre button to make an iPod*. Somebody who came to play a
+            // game was told to build an iPod first — and `play` never calls `map_hardware`, so
+            // that is not merely a longer route, it is a route to somewhere they did not need to
+            // go. No ROM, no IPSW, no drive, no boot: a title is bare RAM, the image, and the
+            // sixty stubs its imports trap into.
+            //
+            // **On the drawn iPod rather than in front of it, and that is §22.7's own line.**
+            // §22.3 sketches this as a chooser standing where the device is; §22.7's list of what
+            // §22 does *not* overturn opens with §21.2's *the window is the iPod*. Those two cannot
+            // both be had, and the picture settles it — `_out/gui/bench-empty.png` is the one page
+            // in this program that looks like the thing the program is, and putting two rectangles
+            // in front of it would answer *complicated and ugly* with a form. So the choice is
+            // offered **on** the device, on the line a person is already reading, in the slot §7.6
+            // built for exactly this shape of control.
+            //
+            // **`if`, not `visible`**, for the identical reason `why ›` gives one element down: the
+            // label is `horizontal-stretch: 1` and takes whatever is left, so nothing below moves
+            // when these appear or go.
+            //
+            // **Both are drawn only where `intents` is true**, which `main.rs` pushes as *there is
+            // no iPod and the drawer is shut* — §22.3's *asked once*. With an iPod on the bench the
+            // question is answered and the line goes back to saying what a press costs.
+            // **The two, in one stretched cell, so they centre together.** A pair of controls at
+            // either end of a hidden spring is two choices at opposite edges of the device; the
+            // question is one question and reads as one only if the answers are adjacent.
+            if root.intents: HorizontalLayout {
+                horizontal-stretch: 1;
+                alignment: center;
+                spacing: Metric.s5;
+
+                BenchControl {
+                    a11y-label: "Use an iPod";
+                    // The bill and the route, which is what the line said before these two arrived
+                    // — *Press the centre button to make an iPod*. It is the same act, so it is the
+                    // same sentence, fetched rather than reworded.
+                    a11y-description: root.cradle-label;
+                    activated => { root.use-an-ipod(); }
+
+                    Text {
+                        text: "Use an iPod";
+                        font-size: Metric.body-size;
+                        font-weight: Metric.weight-strong;
+                        color: Ink.accent;
+                        vertical-alignment: center;
+                    }
+                    Chevron { ink: Ink.accent; }
+                }
+
+                BenchControl {
+                    a11y-label: "Play a game";
+                    a11y-description: "opens the shelf of titles. A game needs no iPod at all";
+                    activated => { root.play-a-game(); }
+
+                    Text {
+                        text: "Play a game";
+                        font-size: Metric.body-size;
+                        font-weight: Metric.weight-strong;
+                        color: Ink.accent;
+                        vertical-alignment: center;
+                    }
+                    Chevron { ink: Ink.accent; }
+                }
+            }
+
+            // **`if`, not `visible`, and this is the one place on this line where that is the
+            // right way round.** §16.3's rule reserves a cell wherever something below would
+            // otherwise shuffle; here the row's height is pinned at `Geometry.cradle-label` and
+            // these two are alternatives filling one line, so nothing can move either way. What
+            // `visible: false` *does* cost is the cell itself: a hidden `Text` still reports its
+            // preferred width, and this sentence is long — so with it in the layout the two
+            // controls above were shoved to the leading edge instead of centring. Read it off
+            // `_out/gui/bench-empty.png` before this change: `Use an iPod › Play a game ›` hard
+            // against the left of the device.
+            //
+            // `press-label` still says *Press the centre button to make an iPod* and the centre
+            // button still does it — `Use an iPod` is that same act, named — so drawing both would
+            // be one route stated twice on one line in 420 px. The sentence is not lost: it is the
+            // control's own `accessible-description`.
+            if !root.intents: Text {
                 text: root.held-sentence != "" ? root.held-sentence : root.cradle-label;
                 font-size: Metric.body-size;
                 font-weight: Metric.weight-body;

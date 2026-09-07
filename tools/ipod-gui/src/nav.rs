@@ -71,20 +71,23 @@ impl Page {
             // landed straight back on the menu — the control was live, drew a chevron, and did
             // nothing. Two independent statements of *this page does not exist*, in two files, and
             // fixing the loud one made the quiet one the whole bug.
+            // **Seven now, and Reference is the seventh and the last.** Its `MenuPage` row was
+            // disabled with *"The keyboard table and the stated limits have no page yet."* — a
+            // sentence naming its own retirement condition, met by §22.6's page: `ReferencePage`
+            // draws `reference::page()`, `⌘,` and `?` both reach it, and the list this comment sat
+            // on is now empty.
             Page::Devices
             | Page::Parts
             | Page::Work
             | Page::Settings
             | Page::Readout
-            | Page::Games => Some(1),
+            | Page::Games
+            | Page::Reference => Some(1),
             // §11.2's root, one level deeper than the Devices page it is entered from.
             Page::Composer => Some(2),
             // …and its three levels, one deeper again. Each `›` slides one level and comes straight
             // back; §4's three-level maximum is exactly reached here and nowhere else.
             Page::ComposerIpod | Page::ComposerRuns | Page::ComposerName => Some(3),
-            // Not built. Its `MenuPage` row is disabled and names its escape hatch, which is where
-            // a person is told about it.
-            Page::Reference => None,
         }
     }
 }
@@ -189,8 +192,26 @@ impl Stack {
     /// row was disabled and said the page was not built. [`Page::slot`] is the exhaustive match that
     /// makes that a *decision* rather than an accident: adding a page is a compile error there until
     /// somebody says which level draws it.
+    ///
+    /// **Every page has a slot today** — §22.6's Reference was the last one that did not — so the
+    /// guard below is a rule nothing in this program currently trips. It stays, and it is still
+    /// proved: [`Stack::go_at`] is the half that takes the answer rather than asking for it, so
+    /// `a_page_nothing_draws_lands_on_the_menu` can hand it a `None` and watch the refusal happen.
+    /// Deleting the guard because the enum has stopped needing it would delete the mechanism that
+    /// makes the *next* unbuilt page safe, and a test looping over an empty list of slotless pages
+    /// would have gone green while doing nothing at all (AGENTS.md §6).
     pub fn go(&mut self, p: Page, depth: i32) {
-        let Some(slot) = p.slot() else {
+        self.go_at(p.slot(), p, depth);
+    }
+
+    /// [`Stack::go`] with the slot supplied rather than asked for.
+    ///
+    /// The split exists so the *no slot* arm can be exercised now that no page takes it. It is
+    /// private: nothing outside this module may navigate to a slot of its own choosing, because
+    /// that is precisely the disagreement between `Page::slot` and the markup that
+    /// `every_built_page_is_reachable_from_its_row` exists to catch.
+    fn go_at(&mut self, slot: Option<i32>, p: Page, depth: i32) {
+        let Some(slot) = slot else {
             // Nothing draws it. §9.1 forbids a bare *nothing here* on every surface, and a slot with
             // no page is worse than that — it does not even say so. The menu does.
             self.open = true;
@@ -548,12 +569,19 @@ mod tests {
     /// limits have no page yet."* Every other unbuilt page in this program is unreachable and says
     /// why; that was the one hole in the policy.
     ///
-    /// **Devices, Parts, Settings, the Readout and now Games came off this list**, and that is
-    /// five deliberate lines rather than a slip: `ui/drawer.slint`'s depth-1 slot draws each of
-    /// them now. The list shrinks as pages land, one row at a time, exactly as `Page::slot`'s own
-    /// doc says — and `Reference` is what is left.
+    /// **Devices, Parts, Settings, the Readout, Games and now Reference came off this list**, and
+    /// that is six deliberate lines rather than a slip: `ui/drawer.slint`'s depth-1 slot draws
+    /// each of them. The list shrank as pages landed, one row at a time, exactly as `Page::slot`'s
+    /// own doc says — and §22.6's Reference was the last of them, so **it is empty**.
     ///
-    /// **Games leaving this list is the second half of a fix whose first half was not enough.**
+    /// **Which is why this test no longer walks the enum, and that change is the whole point.** A
+    /// `for p in []` loop passes while asserting nothing, and a green test that cannot fail is the
+    /// instrument AGENTS.md §6 is about — it would go on reading green if the guard were deleted
+    /// tomorrow and the next unbuilt page landed a person on a blank 420 px panel. So the refusal
+    /// is driven through [`Stack::go_at`], which takes the slot rather than asking a page for it:
+    /// the rule is exercised on every depth, by a `None` no variant currently produces.
+    ///
+    /// **Games leaving this list was the second half of a fix whose first half was not enough.**
     /// Its `MenuPage` row had been disabled over a working page; enabling it produced a control
     /// that drew a chevron and did nothing, because this list is a second, quieter statement of
     /// *nothing draws it* and `Stack::go` reads this one. A page needs both to be reachable, and
@@ -561,20 +589,32 @@ mod tests {
     /// now.
     #[test]
     fn a_page_nothing_draws_lands_on_the_menu() {
-        for p in [Page::Reference] {
-            assert_eq!(p.slot(), None, "{p:?} claims a depth slot; which child draws it?");
-            for depth in 0..=4 {
-                let mut s = Stack::new();
-                s.go(p, depth);
-                assert!(s.open(), "{p:?} at {depth} did not open the drawer at all");
-                assert_eq!(
-                    s.depth(),
-                    0,
-                    "{p:?} at depth {depth} navigated to a slot with no page in it — a blank panel \
-                     with no header and therefore no visible way out"
-                );
-                assert_eq!(s.page(), Page::None, "{p:?} at {depth} is drawn by nothing");
-            }
+        // The guard itself, with a slot no page answers today. `Page::Reference` stands in as the
+        // page being navigated to, because what is under test is the *slot* and not the variant.
+        for depth in 0..=4 {
+            let mut s = Stack::new();
+            s.go_at(None, Page::Reference, depth);
+            assert!(s.open(), "a slotless page at {depth} did not open the drawer at all");
+            assert_eq!(
+                s.depth(),
+                0,
+                "a slotless page at depth {depth} navigated to a slot with no page in it — a \
+                 blank panel with no header and therefore no visible way out"
+            );
+            assert_eq!(s.page(), Page::None, "a slotless page at {depth} is drawn by nothing");
+        }
+
+        // **And every page in the enum has one**, which is the state this program is in and the
+        // reason the loop above cannot be driven off `slot()` any more. Stated as an assertion so
+        // that a page added tomorrow with no slot is a failure here rather than a silent return to
+        // the old shape.
+        for p in EVERY_PAGE {
+            assert!(
+                p.slot().is_some(),
+                "{p:?} answers `None` from `slot()`. That is allowed — the guard above is exactly \
+                 for it — but this assertion is how the decision gets made out loud: add the page \
+                 to `ui/drawer.slint`'s slot, or say here why it has none"
+            );
         }
 
         // The control: every page that IS drawn still goes where it is sent.
