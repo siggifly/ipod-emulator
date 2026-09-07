@@ -1,19 +1,26 @@
 // The drawer — docs/GUI.md §4, §7.5, §8.1, §9.1, §14.3, §16.3.
 //
-// **420 px, right-anchored, and it OVERLAYS** (§21.2). It occupies the full client height minus
-// the window's own height and slides in over the device; the device does not move. It is not a sidebar wearing a
-// hat and it does not float: §2.4 bans floating, and floating is a thing with a shadow, its own
-// edges and a surface behind it on all four sides. This is anchored to an edge, full-height, with
-// a 1 px rule and no shadow — the same construction it always was, minus the push.
+// **The whole client, and it COVERS** (§21.2, §22.8). It slides in over the device from the
+// trailing edge and does not stop 40 px short of the leading one; the device does not move and,
+// once the slide has finished, is not on screen at all. It is not a sidebar wearing a hat and it
+// does not float: §2.4 bans floating, and floating is a thing with a shadow, its own edges and a
+// surface behind it on all four sides. This is the surface — full-height, full-width, no shadow,
+// dismissed deliberately. Settings, or iPod.
+//
+// **It was 420 px right-anchored inside a 460 px window** (issue #41), which left the iPod a 40 px
+// sliver down the leading edge and gave every row 372 px to say its sentence in. The column of rows
+// is still `Geometry.drawer-w` — 460 now, the widest the narrowest window can hold — and `strip`
+// centres it in whatever the client is.
 //
 // **The push was right while the device shared the window with a field of nothing.** §3's pushed
 // `hero` bought that the device was never occluded, and there were 760 px of `bg-sunken` to push
 // it into. §21.2 spends those pixels: the window is the device now, so there is nothing to push
 // into and a device that shrank whenever this opened would be the window fidgeting.
 //
-// **Max three levels deep**, and the depth slides — the borrowed iPod motion, inside a 420 px panel
-// where no framebuffer can be (§6.1). Every route in is a route out: `⌘\`, the handle, the bench's
-// row-3 leading slot, the menu bar. `Esc` is not one of them (§4) — it only ever goes outwards.
+// **Max three levels deep**, and the depth slides — the borrowed iPod motion, inside a 460 px
+// column where no framebuffer can be (§6.1). Every route in is a route out: `⌘\`, the handle,
+// the bench's row-3 leading slot, the menu bar. `Esc` is not one of them (§4) — it only ever goes
+// outwards.
 
 import { Ink, Metric, Motion } from "tokens.slint";
 import { Geometry } from "@geometry";
@@ -57,8 +64,8 @@ import { VerbsPage } from "verbs.slint";
 //
 // **Four variants for the Composer, not "the Composer is `Page::Devices` at depth 2."**
 // `nav::Page::slot()` returns ONE slot per page, and a page cannot have two; a second page drawn at
-// a depth its own `slot()` denies is a blank 420 px panel with no header and no way out, which is
-// the hole `⌘,` fell into and which `Stack::go`'s guard now refuses.
+// a depth its own `slot()` denies is a blank page with no header and no way out, which is the
+// hole `⌘,` fell into and which `Stack::go`'s guard now refuses.
 export enum DrawerPage {
     none,
     devices,
@@ -83,9 +90,10 @@ export component Drawer inherits Rectangle {
     // because a drawer whose pages blanked the instant `Esc` was pressed would slide out empty.
     //
     // It is read by `on-screen` below and it is the difference between a closed drawer being gone
-    // and a closed drawer being 420 px off the right edge, still in the tab order and still
-    // announced by a screen reader. It was declared and read by nothing, which is §20 item 15's
-    // defect in a new place — a property nobody reads is indistinguishable from one nobody wrote.
+    // and a closed drawer being one whole client width off the right edge, still in the tab
+    // order and still announced by a screen reader. It was declared and read by nothing, which is
+    // §20 item 15's defect in a new place — a property nobody reads is indistinguishable from one
+    // nobody wrote.
     in property <bool> open: false;
     // 0..=3. **`in`, not `in-out`** — `nav::Stack` in Rust is the single source of truth, and the
     // markup fires callbacks rather than writing state. Four entrances plus `Esc` writing the same
@@ -112,6 +120,13 @@ export component Drawer inherits Rectangle {
     // cannot read `parent`** — Slint says `Cannot access id 'parent'`. It is the whole client now:
     // §7.5's shelf was the one thing the drawer ever stopped short of, and it is gone.
     in property <length> client-height;
+    // …and the client width, for the same reason and since §22.8. The menu covers the window
+    // rather than sitting in it, so this is what it is as wide as — while the **column** of rows
+    // stays [`Geometry.drawer-w`] and is centred in it. Those are two different jobs and it costs a
+    // whole property to keep them apart: a page stretched to a 1200 px window would put a row's
+    // value 1100 px from its label, and a page that stayed 460 px wide against the right edge would
+    // be the sidebar again wearing a wider frame.
+    in property <length> client-width;
 
     // The Work page's inputs, passed straight through. The contract's property list stops at
     // `rail-failures`; a drawer that owns the Work page has to be given what the Work page reads,
@@ -270,7 +285,9 @@ export component Drawer inherits Rectangle {
     callback composer-act(int);
     callback composer-commit();
 
-    width: Geometry.drawer-w;
+    // §22.8: the full client, both ways. The surface is the window; the column inside it is
+    // [`Geometry.drawer-w`] and `strip` centres it.
+    width: root.client-width;
     // The full client height. §9.5's *above the shelf* was an argument about a band that no longer
     // exists — it kept a full-height drawer from covering the shelf's rows — so with the shelf
     // deleted the drawer runs edge to edge and covers nothing but the device it overlays.
@@ -292,18 +309,22 @@ export component Drawer inherits Rectangle {
     // order and out of the accessible tree.
     //
     // **And the whole drawer answers `false` while it is off stage**, which is the same argument one
-    // level up: a closed drawer is parked a full 420 px past the right edge, where `clip` stops it
-    // being drawn and stops nothing else.
+    // level up: a closed drawer is parked a full client width past the right edge, where `clip`
+    // stops it being drawn and stops nothing else.
     //
     // Without this, every level of the drawer is reachable by `Tab` and announced by a screen
-    // reader while it is 420 px off screen behind a `clip`. Nothing in the design's own `visible`
-    // versus `if` rule covers it: §16.3 is about a layout cell, and a page sitting outside the
+    // reader while it is a whole window off screen behind a `clip`. Nothing in the design's own
+    // `visible` versus `if` rule covers it: §16.3 is about a layout cell, and a page sitting outside the
     // clip is not a cell. `visible` here keeps the subtree alive exactly as §16.3 requires — a
     // page you come back to still has its scroll offset, its hover and its focus.
+    // **The viewport is the drawer's own width and it is no longer the column's** (§22.8). Both
+    // bounds used to be `Geometry.drawer-w` because the two were the same number; the surface is
+    // the client now and the column is not, so the far bound is `root.width`. At the window
+    // minimum they are equal again and this is the expression it always was.
     pure function on-screen(n: int) -> bool {
         return root.open
             && strip.x + n * Geometry.drawer-w > -Geometry.drawer-w
-            && strip.x + n * Geometry.drawer-w < Geometry.drawer-w;
+            && strip.x + n * Geometry.drawer-w < root.width;
     }
 
     // **Six slots for four levels.** `lively` is `ease-out-back` and overshoots by design; without
@@ -315,7 +336,10 @@ export component Drawer inherits Rectangle {
     strip := Rectangle {
         width: Geometry.drawer-strip-slots * Geometry.drawer-w;
         height: 100%;
-        x: -Geometry.drawer-w * root.slot;
+        // **Centred, and that is the whole of §22.8's second half.** The first term is where the
+        // column sits in a surface wider than it; the second is which slot is showing. At the
+        // window minimum the first term is zero and this is the expression it was.
+        x: (root.width - Geometry.drawer-w) / 2 - Geometry.drawer-w * root.slot;
 
         // **The one and only use site of `Motion.lively` in the whole program.** §8's table says
         // drawer page depth only, nothing else, ever. A second use site is a design change.
@@ -721,7 +745,7 @@ export component DrawerHandle inherits Rectangle {
         width: 100%;
         height: 100%;
         label: root.open ? "Close the drawer" : "Open the drawer";
-        accessible-description: "420 pixels, right; it slides over the iPod and the iPod stays put.";
+        accessible-description: "it covers the window; the iPod stays put behind it.";
         activated => {
             root.toggled();
         }

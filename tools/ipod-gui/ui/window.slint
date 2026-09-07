@@ -585,7 +585,13 @@ export component MainWindow inherits Window {
     // device was never occluded, which was worth buying while the device shared the window with a
     // field of nothing; §21.2 retires the field, and a device that shrinks every time the drawer
     // opens is the window fidgeting.
-    property <length> drawer-out: root.drawer-open ? Geometry.drawer-w : 0;
+    //
+    // **And it comes ALL the way in** (§22.8). It was `Geometry.drawer-w`, which parked the menu's
+    // trailing edge on the window's and left `client.width - 420` of iPod showing beside it — 40 px
+    // at the window minimum, which is the whole of issue #41. The distance is the client's own
+    // width now, so the covering surface arrives at `x == 0` at every window size and there is no
+    // arrangement in which the two share the frame. Settings, or iPod.
+    property <length> drawer-out: root.drawer-open ? client.width : 0;
     animate drawer-out {
         duration: Motion.gentle;
         easing: ease-out-quart;
@@ -1086,17 +1092,20 @@ export component MainWindow inherits Window {
                 }
             }
 
-            // §4: 420 px, right-anchored, the **full** client height. It stopped 44 px short of
-            // the bottom while §7.5's shelf was there; the shelf is gone, so the reason is gone
-            // with it and the drawer runs to the window's own edge. Parked one full width off the
-            // right edge when closed, so `x` is the only thing that ever moves.
+            // §22.8: **the whole client, both ways.** It was 420 px right-anchored, which is the
+            // sidebar issue #41 is about — the menu took 420 of 460 and the iPod kept 40. It is
+            // the client's own width now, so when it is out it is the only thing on screen, and
+            // the column of rows inside it is centred rather than stretched (`drawer.slint`).
+            // Parked one full width off the right edge when closed, so `x` is still the only thing
+            // that ever moves.
             //
             // **Declared after the bench, so it draws over it** (§21.2). Slint paints siblings in
             // declaration order and it always did; what changed is that the bench no longer gets
-            // out of the way first.
+            // out of the way first — and now there is nothing of it left to see.
             drawer := Drawer {
                 x: client.width - root.drawer-out;
                 y: 0;
+                client-width: client.width;
                 client-height: client.height;
 
                 open: root.drawer-on-stage;

@@ -7522,13 +7522,13 @@ fn refresh_devices(
             "".into()
         } else {
             // A machine rule: the tool is not here, and no amount of asking changes that.
-            "this build has no `curl`, and Apple's firmware has to be downloaded".into()
+            MAKE_ONE_REFUSAL.into()
         },
         escape_hatch: "".into(),
         machine_rule: true,
         presses: 1,
         // What it will do, before it is pressed. The figures are the plan's own.
-        consequence: "downloads Apple's firmware and builds an 8 GB drive — about a minute".into(),
+        consequence: MAKE_ONE_COST.into(),
     });
     // **Derived from the page's own slot**, exactly like `caps.devices_page`: `Page::Composer`
     // answers `Some` on the day `ui/drawer.slint` gains a child that draws it, which is the day
@@ -7975,6 +7975,23 @@ fn push_devices_detail(
 /// §21.3's heading over the demoted fact table. Empty where there is no device, which is how
 /// `verbs.slint` knows not to draw an `About` over six blank rows.
 const ABOUT: &str = "About this iPod";
+
+/// §10's first run, as the Devices page's pinned primary says it — the two sentences `Make me one`
+/// draws, named so the sweep and the control cannot come to word them differently.
+///
+/// **They were literals in `push_static` and nothing measured them**, which is how
+/// `_out/gui/devices.png` came to draw *"…an 8 GB drive — about a …"* under this program's most
+/// pressed button with every gate green. `every_reason_this_window_draws_fits_the_slot_it_is_drawn_in`
+/// sweeps the four producers plus whatever `main.rs` hands it by name, and what it is handed is
+/// exactly what somebody remembered to hand it.
+const MAKE_ONE_REFUSAL: &str = "this build has no `curl`, and Apple's firmware has to be downloaded";
+/// **One conjunction went and the clause stayed**, which is the difference §22.8 is about. As
+/// shipped — *"downloads Apple's firmware **and** builds an 8 GB drive — about a minute"* — it
+/// measured **382 px** against [`geometry::ACT_MEASURE`], which was **324** and is **364**. At 324
+/// the only edit that reaches is deleting the estimate; at 364 it is `and` → `,`, and the reader
+/// keeps the one fact they cannot get anywhere else, which is how long they are about to wait.
+/// Both numbers are the probe's, off `every_reason_this_window_draws_fits_the_slot_it_is_drawn_in`.
+const MAKE_ONE_COST: &str = "downloads Apple's firmware, builds an 8 GB drive — about a minute";
 
 /// §21.3 and §21.6's root page — **the rows, and the fact table under them.**
 ///
@@ -14702,11 +14719,15 @@ pub(crate) mod tests {
             2.0 * geometry::WELL_AIR
         );
 
-        // The drawer still has to fit inside the window it covers, which is the one thing the
-        // push arithmetic bought that an overlay still needs.
-        assert!(
-            geometry::MIN_WIDTH > geometry::DRAWER_W,
-            "the drawer is {} px and the narrowest window is {}",
+        // **§22.8: the menu's column IS the narrowest window**, which is the difference between a
+        // menu that covers and a menu that shares. It used to be `MIN_WIDTH > DRAWER_W`, and the
+        // 40 px that inequality allowed was the sliver of iPod drawn beside the open menu — issue
+        // #41. Wider than the window and it is clipped; narrower and the leftover is the sidebar.
+        assert_eq!(
+            geometry::MIN_WIDTH,
+            geometry::DRAWER_W,
+            "the menu's column is {} px and the narrowest window is {}, so the difference is drawn \
+             as iPod beside an open menu",
             geometry::DRAWER_W,
             geometry::MIN_WIDTH
         );
@@ -14721,6 +14742,98 @@ pub(crate) mod tests {
                 !bench.contains(pushing),
                 "ui/bench.slint reads `{pushing}`, so the surface the device is drawn on still \
                  gives way to the drawer and the device moves when it opens"
+            );
+        }
+    }
+
+    /// **§22.8, off the pixels: an open menu covers the device, and none of it is left showing.**
+    ///
+    /// Issue #41, in the operator's words: *"i hate that its a sidebar inside this fixed width."*
+    /// The menu was 420 px right-anchored in a 460 px window, so opening it left a 40 px strip of
+    /// drawn iPod down the leading edge — a sliver too narrow to be a picture of anything, beside a
+    /// column too narrow for its own sentences.
+    ///
+    /// **The instrument is a column comparison and it names no colour.** With the menu shut and
+    /// with the menu open, at the same window size, no column of the frame may be the same column
+    /// of pixels in both. A column is the full height of the window, so for one to match the menu
+    /// would have to be drawing the bench there — which is exactly the claim.
+    ///
+    /// `Ink.bg-sunken` looked like the obvious detector and is not one: `primitives.slint`'s
+    /// `Switch` track is `bg-sunken` when off, and §22.4's `Turn on` switch is on the menu's own
+    /// root page. Recorded rather than quietly avoided (AGENTS.md §5) — a reader is otherwise owed
+    /// an explanation of why the simpler test is not the one here.
+    ///
+    /// **Two window sizes, and the second is the one a source sweep could not replace.** At the
+    /// minimum the menu's column and the window are the same 460 px, so a menu that only ever
+    /// opens `Geometry.drawer-w` wide covers it by coincidence. 300 px wider, it does not: the
+    /// pre-§22.8 markup parks a 460 px panel against the trailing edge and leaves 300 px of bench
+    /// beside it. That is a fact about `client.width` that only a laid-out window has.
+    ///
+    /// **How to make it go red**, both measured. `drawer-out: root.drawer-open ? Geometry.drawer-w
+    /// : 0` in `window.slint` fails the wide arm at **288 of 760 columns**; `width:
+    /// Geometry.drawer-w` in place of `width: root.client-width` on `Drawer` fails it at **264**.
+    /// The narrow arm passes under both, which is the whole reason the wide one is here.
+    ///
+    /// **What does NOT make it red, and the first draft of this note said it would:** putting
+    /// `DRAWER_W: Px = 420.0` back. Covering is the markup's job and the constant is the column's,
+    /// and once they were separated a 420 px column simply sits inside a covering surface with
+    /// 20 px of `bg-raised` a side. Written down rather than deleted (AGENTS.md §5): a red-proof
+    /// that was never run is a claim, and this one was wrong. `geometry::the_short_pane_fits_the_
+    /// narrowest_well_this_window_has` is what holds the column to the window.
+    #[test]
+    fn an_open_menu_covers_the_device_rather_than_sharing_the_window_with_it() {
+        let _held = use_a_scratch_data_dir();
+        let w = a_window();
+        dress_the_bench(&w);
+        let full = Furniture::new(a_furnished_library(&temp_dir("cover")));
+        full.open_the_first_device();
+
+        // How many columns of `a` are, pixel for pixel over the whole height, columns of `b`.
+        let shared = |a: &Shot, b: &Shot| -> usize {
+            assert_eq!((a.w, a.h), (b.w, b.h), "two frames of different sizes cannot be compared");
+            (0..a.w)
+                .filter(|x| {
+                    (0..a.h).all(|y| {
+                        let i = ((y * a.w + x) * 3) as usize;
+                        a.rgb[i..i + 3] == b.rgb[i..i + 3]
+                    })
+                })
+                .count()
+        };
+
+        for extra in [0.0_f32, 300.0] {
+            w.window().set_size(slint::LogicalSize::new(
+                geometry::PREF_WIDTH as f32 + extra,
+                geometry::PREF_HEIGHT as f32,
+            ));
+            let name = std::path::PathBuf::from(format!("<menu at {} px wide>", 460.0 + f64::from(extra)));
+            let shut = snap(&w, &nav::Stack::new(), &full, &name);
+            let open = snap(&w, &a_stack(nav::Page::None), &full, &name);
+
+            // **The control, first**, per AGENTS.md §6: a comparator that answers zero for every
+            // pair reports every menu as covering. The bench against itself is every column.
+            let itself = shared(&shut, &shut);
+            assert_eq!(
+                itself, shut.w as usize,
+                "the bench does not match itself in {itself} of {} columns, so the comparator is \
+                 not comparing and the verdict below is about the number zero",
+                shut.w
+            );
+            assert!(
+                shut.colours() > 256 && open.colours() > 256,
+                "one of the two frames is flat — {} shut, {} open — so nothing was drawn at {}",
+                shut.colours(),
+                open.colours(),
+                name.display()
+            );
+
+            let left = shared(&shut, &open);
+            assert_eq!(
+                left, 0,
+                "{left} of {} columns are the bench, drawn beside the open menu at {} — the menu \
+                 is a sidebar sharing the window with the iPod, which is issue #41",
+                shut.w,
+                name.display()
             );
         }
     }
@@ -15789,6 +15902,23 @@ pub(crate) mod tests {
     /// that module was written to make, at 1180x846 rather than at the framebuffer's 320x240. Seven
     /// of them is 21 MB per run, in a directory whose whole purpose is to be thrown away.
     fn shoot(w: &MainWindow, at: &nav::Stack, f: &Furniture, name: &str) -> Shot {
+        let shot = snap(w, at, f, &std::path::PathBuf::from(format!("<{name}>")));
+
+        let dir = shots_dir();
+        std::fs::create_dir_all(&dir).expect("the shots directory");
+        let file = dir.join(format!("{name}.png"));
+        std::fs::write(&file, png::encode(&shot.rgb, shot.w as usize, shot.h as usize))
+            .expect("the shot is written");
+        Shot { at: file, ..shot }
+    }
+
+    /// **[`draw`] the window and take the frame, writing nothing.**
+    ///
+    /// Split out of [`shoot`] for the tests that want a picture as a *measurement* rather than as
+    /// something to look at — `an_open_menu_covers_the_device_rather_than_sharing_the_window_with_it`
+    /// takes four of them at two window sizes, and four more megabytes in `_out/gui/` would be four
+    /// files nobody opens sitting beside the fourteen that exist to be opened.
+    fn snap(w: &MainWindow, at: &nav::Stack, f: &Furniture, named: &std::path::Path) -> Shot {
         draw(w, at, f);
 
         let rgba = w
@@ -15804,13 +15934,7 @@ pub(crate) mod tests {
         for px in rgba.as_slice() {
             rgb.extend_from_slice(&[px.r, px.g, px.b]);
         }
-
-        let dir = shots_dir();
-        std::fs::create_dir_all(&dir).expect("the shots directory");
-        let file = dir.join(format!("{name}.png"));
-        std::fs::write(&file, png::encode(&rgb, width as usize, height as usize))
-            .expect("the shot is written");
-        Shot { at: file, w: width, h: height, rgb }
+        Shot { at: named.to_path_buf(), w: width, h: height, rgb }
     }
 
     /// A library pointed at three fixture titles, two of which run here.
@@ -21094,8 +21218,8 @@ pub(crate) mod tests {
     ///
     /// It also pins the four bindings that were reading the **bench's** two fields: `enabled` and
     /// `reason` came from `DeviceRow.startable` and `.cradle-label`, which the drawn iPod reads as
-    /// `root.current.startable` (`window.slint:993`) and `root.current.cradle-label`
-    /// (`window.slint:960`); `machine-rule` was a literal `true`. **Each number is written beside
+    /// `root.current.startable` (`window.slint:999`) and `root.current.cradle-label`
+    /// (`window.slint:966`); `machine-rule` was a literal `true`. **Each number is written beside
     /// the binding it names**, because the pair used to be two fields followed by two line numbers
     /// in the opposite order, and one of the two numbers was a blank line.
     #[test]
@@ -21197,7 +21321,7 @@ pub(crate) mod tests {
         assert!(!w.get_setting_copy_enabled());
         assert!(!w.get_setting_copy_reason().is_empty(), "`Copy path` is disabled and says nothing");
 
-        // The one live control. `drawer.slint:482` fires this ordinal as
+        // The one live control. `drawer.slint:506` fires this ordinal as
         // `root.setting-toggled(1)`; `Row::CheckUpdates` is 1.
         let before = settings.borrow().check_updates_on_start;
         assert_eq!(w.get_setting_check_updates(), before, "the box does not reflect the library");
@@ -21566,6 +21690,223 @@ pub(crate) mod tests {
         assert!(wiring.panel.borrow().is_none(), "pressing it again did not put the window away");
     }
 
+    /// **§12.6's scale, on a television** — issue #37's remaining half, and it is software.
+    ///
+    /// It stood open as *"needs the operator's hardware"*, and that claim did not survive being
+    /// interrogated the way AGENTS.md §6 asks a zero to be. Fullscreen on a second display reduces
+    /// to **a window of a given size at a given scale factor**, which is an assertion; the tests
+    /// beside this one already stand two windows up, already dispatch `⌃⌘F` through Slint's own
+    /// modifier state, and already call `set_size`. Nothing was missing but somebody driving the
+    /// popped-out window at a television's geometry.
+    ///
+    /// **Four geometries: 1920 x 1080 and 3840 x 2160, each at scale factor 1 and 2.** The scale
+    /// factor is in there because `panel_k` takes the **physical** backing store and §12.6's table
+    /// was computed in logical pixels against it for a whole revision — so a 4K panel must draw the
+    /// same physical rectangle whether the platform calls it 3840 logical at 1x or 1920 at 2x, and
+    /// that equality is the thing that revision got wrong.
+    ///
+    /// **What is asserted, and each is a different way to be wrong:**
+    ///
+    ///   1. `K = floor(min(W_phys / 320, H_phys / 240))`, clamped at [`geometry::K_MAX`], which is
+    ///      §12.6's own arithmetic recomputed rather than restated. **The clamp bites at 4K**: the
+    ///      rule alone answers 9 and this program draws 8, and a test that only used 1080p would
+    ///      never have said so.
+    ///   2. the window is handed `K x 320` by `K x 240` **physical** pixels to draw into.
+    ///   3. the framebuffer lands there, centred, measured off the snapshot's own bounding box
+    ///      rather than off the property that asked for it.
+    ///   4. it is drawn **pixelated**: the fixture's 1 px white border comes out one block wide
+    ///      with an abrupt edge. Under any smoothing the last of those columns is a blend of white
+    ///      and the ramp beside it, so this is `image-rendering: pixelated` read off the pixels
+    ///      instead of off the markup.
+    ///
+    /// **3 and 4 run at scale factor 1 only, and the reason is the instrument.** The testing
+    /// backend sizes its snapshot from the physical backing store and lays the content out in
+    /// logical units mapped straight into it, so at 2x the frame is 1920 wide with a 640 px
+    /// rectangle in it while the program is drawing 1280 physical. The sf 2 arms assert **that**,
+    /// so a backend that starts rasterizing at the scale factor turns this red instead of leaving
+    /// a carve-out nobody revisits. 1 and 2 — which are what sf 2 is here to check — run at every
+    /// scale factor.
+    ///
+    /// **What genuinely cannot be tested, and it is two things rather than the whole issue.**
+    /// Whether macOS puts the window on the display somebody dragged it to — that is the window
+    /// manager's business and this program never asks — and whether it looks right on a real
+    /// television, which is a judgement and not a measurement. §12.6 says so in those terms.
+    #[test]
+    fn the_popped_out_panel_draws_a_whole_multiple_at_a_televisions_geometry() {
+        let dir = temp_dir("pop-out-tv");
+        let s = a_furnished_library(&dir);
+        let first = s.devices.first().expect("the fixture's iPod").clone();
+        let settings = Rc::new(RefCell::new(s));
+        let w = a_window();
+        let wiring =
+            wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
+        *wiring.live.borrow_mut() = Some(a_running_machine(&first));
+        (wiring.machine_tick)();
+        assert!(w.get_panel_lit(), "the bench has no lit panel, so this proves nothing");
+
+        w.invoke_verb_act(verbs::Verb::Panel.ordinal());
+        let held = wiring.panel.borrow();
+        let p = held.as_ref().expect("the second window");
+
+        // display, physical backing store, and the scale factor the platform reports for it.
+        let sets: &[(&str, u32, u32, f32)] = &[
+            ("1080p @1", 1920, 1080, 1.0),
+            ("1080p @2", 1920, 1080, 2.0),
+            ("4K @1", 3840, 2160, 1.0),
+            ("4K @2", 3840, 2160, 2.0),
+        ];
+        for (name, wp, hp, sf) in sets {
+            // **Scale factor first, then the size.** `set_size` takes a `PhysicalSize` and Slint
+            // converts through whatever factor is current, so setting them the other way round
+            // measures a window of some third size.
+            p.window()
+                .dispatch_event(slint::platform::WindowEvent::ScaleFactorChanged { scale_factor: *sf });
+            p.window().set_size(slint::PhysicalSize::new(*wp, *hp));
+            push_panel_frame(p, &w);
+
+            let got = p.window().size();
+            assert_eq!(
+                (got.width, got.height),
+                (*wp, *hp),
+                "{name}: the window came back {}x{} physical, so everything below is about some \
+                 other display",
+                got.width,
+                got.height
+            );
+
+            // 1 — §12.6's rule, recomputed.
+            let want_k = (f64::from(*wp) / geometry::PANEL_PX_W)
+                .min(f64::from(*hp) / geometry::PANEL_PX_H)
+                .floor()
+                .min(f64::from(geometry::K_MAX)) as i32;
+            let k = geometry::panel_k(f64::from(*wp), f64::from(*hp));
+            assert_eq!(k, want_k, "{name}: panel_k says {k} and §12.6's rule says {want_k}");
+            assert!(k >= 1, "{name}: a television drew the panel at k={k}");
+
+            // 2 — and that is the size the window was handed, in physical pixels.
+            let drawn_w = (f64::from(p.get_draw_w()) * f64::from(*sf)).round();
+            let drawn_h = (f64::from(p.get_draw_h()) * f64::from(*sf)).round();
+            assert_eq!(
+                (drawn_w, drawn_h),
+                (f64::from(k) * geometry::PANEL_PX_W, f64::from(k) * geometry::PANEL_PX_H),
+                "{name}: the window was told to draw {drawn_w}x{drawn_h} physical and k={k} is \
+                 {}x{}",
+                f64::from(k) * geometry::PANEL_PX_W,
+                f64::from(k) * geometry::PANEL_PX_H
+            );
+            assert!(
+                drawn_w <= f64::from(*wp) && drawn_h <= f64::from(*hp),
+                "{name}: {drawn_w}x{drawn_h} does not fit {wp}x{hp}, which is what `floor` is for"
+            );
+
+            // 3 — where it actually landed, off the frame rather than off the property.
+            let shot = p.window().take_snapshot().expect("the testing backend rasterizes");
+            let (sw, sh) = (shot.width(), shot.height());
+            let px: Vec<[u8; 3]> = shot.as_slice().iter().map(|q| [q.r, q.g, q.b]).collect();
+            let ground = px[0];
+            let (mut x0, mut x1, mut y0, mut y1) = (u32::MAX, 0u32, u32::MAX, 0u32);
+            for y in 0..sh {
+                for x in 0..sw {
+                    if px[(y * sw + x) as usize] != ground {
+                        x0 = x0.min(x);
+                        x1 = x1.max(x);
+                        y0 = y0.min(y);
+                        y1 = y1.max(y);
+                    }
+                }
+            }
+            assert!(x0 != u32::MAX, "{name}: nothing but {ground:?} — the frame never arrived");
+            let (bw, bh) = (x1 - x0 + 1, y1 - y0 + 1);
+
+            // **The snapshot lies at any scale factor but 1, and here is the measurement rather
+            // than the excuse** (AGENTS.md §6). `i-slint-backend-testing` sizes the buffer from the
+            // **physical** backing store and lays the content out in **logical** units mapped 1:1
+            // into it — so a 1920 x 1080 window at sf 2 hands back a 1920-wide frame with a
+            // 640 x 480 rectangle in it, where the program is drawing 1280 x 960 physical and the
+            // layout thinks the window is 960 x 540. Two of those three numbers are right and no
+            // ratio reconciles them, because the frame is not a picture of the window at all.
+            //
+            // So the pixel half runs at sf 1, where buffer and layout agree, and at sf 2 this
+            // asserts the artefact instead — pinned, so that the day the backend is fixed this
+            // goes red and says so rather than quietly measuring nothing. The **arithmetic** half
+            // above runs at every scale factor and is the half sf 2 exists to check: `panel_k`
+            // takes the backing store, so 4K at 1x and 4K at 2x must draw the same physical
+            // rectangle, and that is asserted for both.
+            let logical = f64::from(*wp) / f64::from(*sf);
+            let want_w = drawn_w / f64::from(*sf);
+            let want_h = drawn_h / f64::from(*sf);
+            assert_eq!(
+                (f64::from(bw), f64::from(bh)),
+                (want_w, want_h),
+                "{name}: the drawn rectangle measures {bw}x{bh} in a {sw}x{sh} frame and k={k} at \
+                 sf={sf} is {want_w}x{want_h} logical"
+            );
+            if (*sf - 1.0).abs() > f32::EPSILON {
+                assert_eq!(
+                    f64::from(sw),
+                    f64::from(*wp),
+                    "{name}: the testing backend sized its buffer at something other than the \
+                     backing store, so the note above is out of date — re-measure it"
+                );
+                // **The artefact, in one formula, measured.** Positions come out of the item tree
+                // multiplied by the scale factor and sizes do not, so the centred rectangle lands
+                // at `sf x (frame − size) / 2` instead of half that: 1280 in a 1920 frame at 2x,
+                // 2560 in 3840. Pinned rather than skipped — a backend that starts rasterizing
+                // properly fails here and at the size assertion above, and says which.
+                let artefact = f64::from(*sf) * (f64::from(sw) - want_w) / 2.0;
+                assert!(
+                    (f64::from(x0) - artefact).abs() <= 1.0,
+                    "{name}: the drawn rectangle starts at {x0} in a {sw} px frame; the backend's \
+                     own arithmetic puts it at {artefact:.0} and centred is {:.0}. The layout \
+                     thinks it has {logical} logical pixels",
+                    (f64::from(sw) - want_w) / 2.0
+                );
+                continue;
+            }
+            // …centred. One pixel of slack, because the centring is done in logical units and a
+            // half-logical-pixel offset is a whole one after conversion.
+            let want_x = (f64::from(sw) - want_w) / 2.0;
+            let want_y = (f64::from(sh) - want_h) / 2.0;
+            assert!(
+                (f64::from(x0) - want_x).abs() <= 1.0 && (f64::from(y0) - want_y).abs() <= 1.0,
+                "{name}: the panel sits at {x0},{y0} in a {sw}x{sh} frame and centred is \
+                 {want_x:.0},{want_y:.0}"
+            );
+
+            // 4 — pixelated, off the pixels. The fixture's leftmost source column is the white
+            // border and the one beside it is the ramp, so one source pixel is `block` columns of
+            // pure white and the next one is not. A smoothed scale blends them.
+            let block = f64::from(bw) / geometry::PANEL_PX_W;
+            assert!(
+                (block - block.round()).abs() < 1e-9 && block >= 1.0,
+                "{name}: one source pixel is {block} of this frame, which is not a whole number of \
+                 columns to look at"
+            );
+            let block = block.round() as u32;
+            let mid = y0 + bh / 2;
+            let at = |x: u32| px[(mid * sw + x) as usize];
+            let white = [0xff, 0xff, 0xff];
+            for i in 0..block {
+                assert_eq!(
+                    at(x0 + i),
+                    white,
+                    "{name}: column {i} of the panel's own left border is {:?} rather than white, \
+                     so the {block}x scale is interpolating",
+                    at(x0 + i)
+                );
+            }
+            assert_ne!(
+                at(x0 + block),
+                white,
+                "{name}: the white border runs past {block} columns, so the source pixel is not \
+                 being drawn as a {block}x{block} block"
+            );
+        }
+        drop(held);
+        w.invoke_verb_act(verbs::Verb::Panel.ordinal());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// **The chord this program prints is the chord that opens the panel** — issue #37.
     ///
     /// `verbs::panel_row` draws `Ctrl-Cmd-P` on the row, `docs/GUI.md` §21.7 writes it `⌃⌘P`, and
@@ -21880,9 +22221,17 @@ pub(crate) mod tests {
         // The control, first: the arithmetic has to be able to answer *too tall*. This is the
         // first draft of the sentence, at 76 characters, and it is what §14.1's note in
         // `title_row` records as having been cut off mid-clause once already.
+        //
+        // **It was lengthened by §22.8 and that is the control working.** The menu covers the
+        // window now, so [`geometry::COVER_W`] is derived from a 412 px body rather than a 372 px
+        // one and every cover is wider — at which point the old 173-character control fitted in
+        // five lines and the assertion below started reporting *the arithmetic cannot answer too
+        // tall*. A control that goes quiet when the thing it measures gets easier is a control
+        // doing its job; the sentence grows to stay outside the box.
         let long = "This title ships no build for an iPod 5G, which is the only iPod this \
                     emulator is, and there is nothing that can be fetched to change that — the \
-                    build simply was not made.";
+                    build simply was not made, and no amount of looking in the manifest for one \
+                    is going to turn a build that does not exist into a game you can play here.";
         assert!(
             lines(long) * geometry::LINE_LABEL > box_h,
             "a {}-character sentence fits the cover box, so this measurement is not measuring \
@@ -22881,6 +23230,66 @@ pub(crate) mod tests {
             "main.rs: the `New device` footer's reason",
             "the Composer has no page in this build yet",
         );
+        // **And the footer above it, which this sweep could not see and a picture could.**
+        // `_out/gui/devices.png` drew *"downloads Apple's firmware and builds an 8 GB drive —
+        // about a …"* under `Make me one`, on a page every gate in this file reported clean. It is
+        // the same `push_static` block as the row below it and was left out for no reason but
+        // that nobody looked: the `New device` entry above went in when its own sentence was
+        // found, and the control beside it — the one a first-time user actually presses — did
+        // not. AGENTS.md §6's shape, in the direction nobody checks: the instrument was not
+        // wrong about what it measured, it was measuring one of two.
+        //
+        // **Both of its sentences**, because `ReasonSlot` draws `enabled ? consequence : reason`
+        // and the enabled arm is the one that ships: `caps.download` is true wherever `curl` is.
+        say(Slot::Act, "main.rs: the `Make me one` footer's reason", MAKE_ONE_REFUSAL);
+        say(
+            Slot::Act,
+            "main.rs: the `Make me one` footer's consequence",
+            MAKE_ONE_COST,
+        );
+
+        // ── composer.rs, the FIFTH producer, which §9.4 named and nothing swept ────────────────
+        //
+        // §9.4's own words: *"Not yet applied to `composer.rs`, which is the fifth producer of
+        // §9.4 sentences"* — and `_out/gui/composer-ipod-dumped.png` is what that costs. The page
+        // draws `Copy the command line` over *this build has no clipboard, so there is nowhere for
+        // the command t…*, which is the same sentence, built the same way out of
+        // `rail::Next::CopyDetails`, that the Settings page had cut once already. One surface was
+        // fixed and its twin was not, because only one of them was measured.
+        //
+        // **The three sentences `copy_command_row` can word, and `Lock`'s four.** Named rather
+        // than driven, exactly as `settings_page::SAVE_FAILED` and `NO_PATH` are: a `Composer` far
+        // enough into a compose to answer these is a fixture, and a fixture that has to be built
+        // to measure a constant is a second way for the constant to be wrong.
+        //
+        // **`Slot::Act` for both**, off the markup: `ui/composer.slint`'s copy control and its
+        // pickers are `Pressable`s carrying `pad: Geometry.page-margin`, which is §9.4's second
+        // 372 reached the other way. The identity `Field`s draw `Lock::reason` at
+        // [`geometry::PAGE_REASON_MEASURE`] as well, and that is the wider of the two — a sentence
+        // that fits the act fits the field.
+        //
+        // **What this still does not reach, said rather than implied:** the rest of the page.
+        // `NO_IPOD` and `SERIAL_NEEDS_GUID` are drawn in wrapping paragraph blocks rather than in
+        // an eliding `ReasonSlot`, so this budget is not theirs; `Fix`'s and `Pick`'s own
+        // `format!`ed arms are reached only by driving a `Composer`, and nothing here drives one.
+        say(Slot::Act, "composer.rs: NO_CLIPBOARD", composer::NO_CLIPBOARD);
+        say(
+            Slot::Act,
+            "composer.rs: `Copy the command line` over a typed identity",
+            composer::TYPED_HAS_NO_SEED,
+        );
+        say(
+            Slot::Act,
+            "composer.rs: `Copy the command line` over a dump",
+            composer::DUMP_HAS_NO_RECIPE,
+        );
+        for lock in [
+            composer::Lock::Dump,
+            composer::Lock::Shared { devices: 2 },
+            composer::Lock::Building,
+        ] {
+            say(Slot::Act, &format!("composer.rs: `Lock::{lock:?}`'s reason"), &lock.reason());
+        }
 
         // ── The three drawer pages, swept out of what they would draw ─────────────────────────
         //
@@ -23116,6 +23525,17 @@ pub(crate) mod tests {
                 Slot::Page,
                 "settings_page.rs: SAVE_FAILED",
                 settings_page::SAVE_FAILED,
+            );
+            // **The Developer row's own sentence, which nothing measured either.**
+            // `_out/gui/settings.png` is what sent me looking: it draws *"…and the boot recipes
+            // under Start as…"*, and the trailing `…` there is the author's — part of the name of
+            // the `Start as…` control — which is precisely why an elision on this row would be
+            // invisible to a reader. `view()` produces it on every build, so unlike `SAVE_FAILED`
+            // it is not hard to reach; it was simply never listed.
+            say(
+                Slot::Page,
+                "settings_page.rs: DEVELOPER_SHOWS",
+                settings_page::DEVELOPER_SHOWS,
             );
         }
 
