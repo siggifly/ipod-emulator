@@ -17085,11 +17085,19 @@ pub(crate) mod tests {
         // The bench as every other test in this file meets it: a window tall enough for the iPod.
         draw(&w, &at, &f);
         let tall = text_on_screen(&w);
-        let cradle = w.get_empty_device().cradle_label.to_string();
+        // **The landmark is §22.3's intent, not the cradle label.** It was
+        // `get_empty_device().cradle_label` — "Press the centre button to make an iPod" — until
+        // §22.3 replaced the drawn line with the two intents and left that string reachable only
+        // as an `accessible-description`. The model still carries it, so the old assertion went
+        // red against a window that draws something else. What this test needs is any landmark
+        // proving it is looking at the bench; what it must NOT do is assert a caption's wording,
+        // which is a design decision and not this test's subject. Issue #42 carries the open
+        // question of whether the sentence that taught the wheel should come back.
+        let cradle = "Use an iPod".to_string();
         assert!(
             tall.contains(&cradle),
-            "the cradle label {cradle:?} is not on a window tall enough to draw the device, so \
-             this test is measuring something other than the bench: {tall:?}"
+            "{cradle:?} is not on a window tall enough to draw the device, so this test is \
+             measuring something other than the bench: {tall:?}"
         );
 
         // …and the same window told it is too short. **Only the boolean moves**, which is what
@@ -17886,19 +17894,22 @@ pub(crate) mod tests {
                  one value for everything and the assertions above cannot tell the two apart"
             );
 
-            // …and the one row whose refusal is about this program rather than about the library.
-            // `ReferencePage` exists in no markup file, so it is refused whatever is on disk —
-            // which makes it the anchor that survives a change of fixture.
+            // …and one row whose refusal is a FACT ABOUT THE HARDWARE, which is the only kind
+            // §22.2 leaves standing. `Reference` used to be the anchor here on the grounds that
+            // `ReferencePage` "exists in no markup file, so it is refused whatever is on disk" —
+            // §22.6 built it, and an anchor chosen for being permanently broken stops being one
+            // the moment somebody fixes it. Diagnostics on a generated ROM cannot be unblocked by
+            // any action of ours, which is what makes it durable.
             if developer {
-                let unbuilt = by_label("Reference");
+                let unbuilt = by_label("Diagnostics");
                 assert_eq!(
                     unbuilt.accessible_enabled(),
                     Some(false),
-                    "the `Reference` row claims to work; the page behind it is not built"
+                    "the `Diagnostics` row claims to work on a generated ROM, which carries no image"
                 );
                 assert!(
                     !unbuilt.accessible_description().unwrap_or_default().is_empty(),
-                    "the `Reference` row is disabled and says nothing about why, which is §19.1's \
+                    "the `Diagnostics` row is disabled and says nothing about why, which is §19.1's \
                      finding with the label changed"
                 );
             }
