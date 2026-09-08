@@ -420,9 +420,17 @@ row. §16.8 has the platform caveat and §17.Q4 is the open question about Windo
 
 ## 5. The primitive vocabulary
 
-Ten, closed. Anything the window shows is one of these. An eleventh requires editing this document
+Eleven, closed. Anything the window shows is one of these. A twelfth requires editing this document
 first — and note that this revision adds three (**Cradle**, **Gauge**, **Scroll**) and retires one
 (**Tile**), which is exactly the edit this rule demands.
+
+**Button is the eleventh, and this paragraph is the edit its own rule demanded** *(2026-09-08,
+§25)*. Every act in this program was a `Row` — 44 px, full bleed, on a drawer page — an `Act` (a
+24 px icon disc), a `Tile`, or the drawn iPod itself. So the bench, whose whole job is to offer one
+act, had nothing to offer it with, and the offer went into 14 px of `fg-dim` at the foot of the
+page; §25 is the operator reporting the consequence. It is deliberately not a shrunk `Row`: a
+`Row`'s silhouette is the page's own edge, which is why §23.3 had to inset its focus ring, and a
+silhouette of its own is exactly the thing that was missing.
 
 **Tile is back, and this paragraph is the edit its own rule demanded** *(2026-09-07, §22.5)*. It was
 retired with the device grid and the carousel, and both of those were rejected for reasons that are
@@ -443,6 +451,7 @@ trailing edge is what §22.5 is about. The row below is the primitive as built.
 | **Rail** | a stream of plan, progress and results | `Region` + `accessible-live-region: polite` | the drawer's Work page |
 | **Scroll** | the **body** of a drawer page, between its fixed header and any pinned footer row. Never the bench, never the shelf, never the well | `Flickable`, `accessible-*` on its children | Readout, Parts, Composer, Games |
 | **Screen** | the framebuffer, 320 × 240, exact integer physical scale, nearest neighbour. **Obeys different laws** | `Image` | the bench's glass, fullscreen, a ROM's boot-screen preview |
+| **Button** | a compact labelled control: `Geometry.button-h` tall — which **is** `LINE_TITLE`, so it costs §9.6's column nothing — a pill (`BUTTON_R` is half the height), flat `Ink.accent` under `Ink.on-material` when live, and `Act`'s outline when refused. **One per surface.** *(Added 2026-09-08, §25)* | `Button` + `accessible-label` + `accessible-description` + `accessible-enabled` | the bench's primary action, and only there |
 | **Tile** | a cover, its name, and whether it runs. 180 × 122 of somebody else's artwork at its own aspect, one elided name line under it, **two presses** — one arms, the second runs. A refusal is drawn *inside* the cover's rectangle rather than under the tile, so the grid stays regular. *(Reinstated 2026-09-07, §22.5)* | `Button` + `accessible-label` + `accessible-description` | the Games shelf, and only there |
 
 **Scroll is the ninth and it was missing, which was fatal.** §16.2's whole finding is that a Slint
@@ -1078,7 +1087,7 @@ on either side. Its geometry is constant. Only its colour and its continuity cha
 | **first run, partly done** | `fg-dim` | `press ● to finish making My 5.5G` |
 | **booting** | `fg-dim` | `booting · 62 %` — or `booting · 412 M instructions` with no denominator — **and always** ` · press ● to stop` |
 | running | `fg-dim` | `the wheel and buttons are the iPod's now` — was `running`, until §12.2's shelf slot became that same word; see §7.4 |
-| working | `fg-dim` | `building · 41 % · fetching Rockbox 4.0` |
+| working | `fg-dim` | `building · 41 % · fetching Rockbox 4.0` — **shipped as `making an iPod`, and until §25 this row was routed by nothing at all.** See §25.4: the fraction is the 3 px rule eight pixels below and the step is the Rail's own line directly under this caption with real bytes, so a caption carrying either is one fact printed twice fifty pixels apart — which is the defect the speed was taken off the `running` row for |
 | parking | `fg-dim` | `parking · 0.7 of 1.6 GB` |
 | stopped | `danger` | `stopped — Lost(0xe19b0000)` |
 | **cannot start, one part gone** | `fg-dim`, **broken ring** | `cannot start — my-5.5g.img is not where it was` |
@@ -2142,10 +2151,18 @@ are not available (§9.3's `volume` class) the number *is* 8.6 GB and the sub-li
 
 **One press.** With the mouse, with `Space`, with `Enter`, by pressing centre on the wheel, or — on a
 display too short to draw the wheel — on §9.5's primary row, which carries the same label and the
-same callback. There is one interactive element on the bench and it is the centre button of the
-object you came to look at. There is no Start button anywhere in this program, because the operator's
-own instruction was *"just pressing on a button would start it so no need for any buttons"* and this
-design takes it literally: **the button is on the iPod.**
+same callback. The centre button of the object you came to look at is the press this section is about, and it is
+still the press: one press makes an iPod, and §24's caption is what teaches that the centre of a
+click wheel is a button.
+
+**What this paragraph used to say, and §25 overturns:** *"There is no Start button anywhere in this
+program, because the operator's own instruction was 'just pressing on a button would start it so no
+need for any buttons' and this design takes it literally: the button is on the iPod."* That
+instruction was about not putting a **form** in front of an iPod, and it is kept. Read as *no chrome
+may offer the act*, it left the program's only offer in 14 px of `fg-dim` at the foot of a 460 px
+window, and the operator opened a fresh profile and could not find a way to start. The bench has one
+`Button` now, in the caption row above the device; it presses `main::throw_the_switch`, which is the
+same act by the same route. See §25.
 
 In order, narrated in the Work Rail, as a `Recipe` with ticked `Step`s:
 
@@ -5000,6 +5017,7 @@ is cheap rather than archaeological.
 | **The `space` failure class** | one class, `Nothing has been written.` | **`space, pre-flight` · `space, mid-write` · `volume`** | The wording is false 41 GB in, and free bytes are not the only thing FAT32 refuses |
 | **`Fix`** | "one press applies it" | **one press, except `BuildFromIpsw`, and none when the value is disabled** | One of the four shapes silently detached a 55.9 GB reference; another set a value the picker forbids |
 | **When the iPod is filed** | at the mint — *"the moment it is made, not on `Create`"* (§11.2) | **on `Create`**, restated rather than duplicated on a re-save | It was asserted for months and built by nothing, in the design and in two doc comments in `settings.rs`. Its own promise is already kept better by the mint's two-press confirmation naming the seed, and filing at the mint would make that sentence false, restate an entry per keystroke in `Serial`, and leave an iPod in Parts behind every abandoned compose |
+| **"There is no Start button anywhere in this program"** (§10.2) | the offer is the drawn centre button and the caption under it, and nothing else | **one `Button`, in the caption row above the device** (§25) | The instruction it came from — *"just pressing on a button would start it so no need for any buttons"* — was about not putting a form in front of an iPod, and that is kept. Read as *no chrome may offer the act*, it put the whole offer in 14 px of `fg-dim` at the foot of a 460 px window: the operator opened a fresh profile, read it as a sidebar, pressed the one thing with a control's shape (the menu `Act`), and reported *"no clear way to start it"*. Teaching is not offering |
 | **`Rename` as a row control** | the seventh of nine `RowAction`s, with a label and two refusals | **deleted; §11.2 level ③ is the route** | Nothing built the row on either page, so the two *exhaustive* arms refusing it were free to disagree about whose control it was — and did. A row control carries two integers; a name is text |
 
 ### 18.2 Settled
@@ -7718,3 +7736,254 @@ ten. That is one row spent to close a circle, and it is the only row this sectio
   intents never showed it because they sat in their own `alignment: center` row; **`why ›` has had
   the same defect since §7.6, beside a stretching `Text`, and no shot this program takes draws it.**
   Fixed on the component (`horizontal-stretch: 0`), which is both use sites at once.
+
+---
+
+## 25. The offer is a control, and the second press was the caption asking for it
+
+**Status: BUILT, 2026-09-08.** The operator opened the shipped window on a fresh profile and could
+not start an iPod:
+
+> it starts up in some window / the sidebar which i cannot choose anything and no clear way to start
+> it. very confusing, i have to press on menu at the top which takes me to some view that is the
+> most confusing, then if i press close i get the ipod and i press center two times to start it
+
+and then said what he wanted: *"we need a start button or something that makes the ipod view
+activate and start the ipod."*
+
+### 25.1 It is not a routing bug, and every move he made was reasonable
+
+The running window's own control socket answers `ok bench=empty — no machine is running. Start one
+in the window (the centre button on the bench)`. The bench **was** what was on screen. So this is a
+legibility failure, and the shot is the evidence: `_out/gui/bench-empty.png` before this pass is a
+460 × 822 window — tall, narrow, no toolbar, which reads as a *sidebar* rather than an application —
+holding a pale ghost iPod, with the entire offer to start being one grey 14 px sentence at the foot
+of the page.
+
+Given that, going to look for the real interface is correct. The only thing on that screen with a
+control's shape is the `Act` in the top-right corner, which opens the menu — put there when §7.5's
+shelf went, because deleting the shelf otherwise left the drawer reachable by keyboard alone. So he
+pressed it, landed in the drawer, pressed `‹ Close`, and came back.
+
+**§24's caption is not the thing that was wrong, and it stays.** Issue #42 is why it exists — it is
+the only sentence in the program that tells a first-timer the centre of a click wheel is a button,
+and `what-the-window-must-make-possible.md` opens its cast with exactly that person. But **teaching
+is not offering.** A sentence in `fg-dim` at the bottom of a panel-shaped window is a caption; it
+has no shape, no weight and no hit target, and a person scanning for *where do I start this* does
+not read it before they act.
+
+### 25.2 What it says, where it stands, and what it does once there is a device
+
+**One control, in the caption row above the device, after the state.**
+
+```
+ ┌──────────────────────────────────────────────┐   ← MARGIN_TOP, the only elastic term
+ │  No iPod yet    nothing mounted [Make an iPod]│   ← LINE_TITLE 28: name · state · the button
+ │                                              │   ← LINE_BODY 20, §11.4's identifications
+ │              ╭─────────────╮                 │
+ │              │  the iPod   │                 │
+ │              ╰─────────────╯                 │
+ │  Press the centre button to make an iPod  ›  │   ← CRADLE_LABEL 24, §24, unchanged
+ │  6.5 MB to download, about 28 MB on disk.    │   ← LINE_LABEL 16, the bill
+ └──────────────────────────────────────────────┘
+```
+
+**Where it stands is decided by §9.6's budget and by where he actually looked.** §22.3's two 44 px
+intents were refused because *"they would have taken height out of the device at every window size
+for the sake of one state"*, and that argument is exactly as good against a button under the
+caption. So the control goes in a row the column **already reserves**: `geometry::BUTTON_H` **is**
+`LINE_TITLE`, written as the term rather than as a second 28, so `CHROME_MIN` stays 130,
+`CHROME_PREF` stays 166, `PREF_HEIGHT` stays 822 and `k` decides the same scale on the same
+displays. `the_primary_control_costs_the_vertical_column_nothing` is the assertion, and giving
+`BUTTON_H` a value of its own — 32, which is what a button *feels* like it should be — is what makes
+it red.
+
+And it is the corner he went to. There was already a control there; what was missing was one that
+does the thing the window is for.
+
+**It rides the device's column, not the window's, and the two never collide.** The caption row is
+`body-x` wide by `body-w`, so its trailing edge is `(W + body_w) / 2` — **424** at `MIN_WIDTH`,
+which is exactly where the menu `Act` begins (`W − 24 − Metric.s3`). They abut at 460 and separate
+at every width above it, because the header's edge moves at half the rate the window's does. That is
+not a coincidence to rely on quietly: it is the reason the button is in the device's column rather
+than pinned to the window edge, where at 460 px it would have had to share 24 px with the menu.
+
+**What it says is `machine::Primary`, which is `machine::centre` named for a control rather than for
+a press.** Five states, and four of the five words already existed in this program:
+
+| bench | button | and it is |
+|---|---|---|
+| no iPod at all | **`Make an iPod`** | §21.4's first run. **Not `Turn on`** — there is nothing to turn on, and a switch offering to power up a device that does not exist is the claim §7.2 already had to delete once, off `Start` over a drive-less iPod |
+| a first run in flight | **`Making an iPod…`**, refused | §25.4 |
+| `Off` / `Stopped`, startable | **`Turn on`** | §22.4's switch, off. `verbs::power_row`'s own word |
+| §10.3's half-made device, no run | **`Finish making it`** | `devices::start_row` already says exactly this about the same device, one surface over |
+| `Booting` / `Running` | **`Turn off`** | §22.4's switch, on |
+| any §14.1 refusal | `Turn on`, **disabled** | the sentence is the cradle caption one band down, where §7.3 already puts *why this cannot be pressed*, next to the device it is about. Two copies of a refusal on one screen is what §7.6 spent a section refusing |
+
+**So it persists, and that is the whole answer to *is this the empty bench's only?*** A control that
+exists on one screen and vanishes on the next is §22.3's chooser in a different slot: the surface
+changes shape under you, and the one state that most needs a legible offer — a person who has just
+*made* an iPod and now has to start it — is the state it would have vanished for. `TURN_ON` and
+`TURN_OFF` moved from `verbs.rs` to `machine.rs` when the second reader arrived, which is that
+file's own rule about a fifth spelling applied one level up, and
+`the_bench_button_and_the_menu_switch_say_one_word` checks the two producers against each other
+rather than trusting a shared constant nobody re-reads.
+
+**What it does is `main::throw_the_switch`, and there is exactly one implementation.** §22.4's menu
+switch called `invoke_start_device` when the machine is off and `power_off` when it is alive; that
+is now a named function and the bench's button raises it. `machine::Act`'s own doc says why: *three
+answers to "can this be pressed" is how two of them come to disagree silently*. It is deliberately
+**not** `start-device` directly — over a live machine `machine::centre` answers `Act::ToMachine` and
+gives the press to the wheel, so a button labelled `Turn off` wired there would press Select.
+
+**`Play a game ›` is untouched** and keeps the caption's trailing slot. §24.2's argument is
+unchanged and is not weakened by a button in a different band: it is the intent the centre button
+does not perform — `play` never calls `map_hardware`, so a title needs no ROM, no IPSW, no drive and
+no boot — and it stays first-class by construction.
+
+**And §5 gains its eleventh primitive**, which is the edit that rule demands. Every act in this
+program was a `Row` (44 px, full bleed, on a drawer page), an `Act` (a 24 px icon disc), a `Tile` or
+the drawn iPod itself, so the bench — whose whole job is to offer one act — had nothing to offer it
+with. `Button` is not a shrunk `Row`: a `Row`'s silhouette is the page's own edge, which is why
+§23.3 had to inset its focus ring, and a silhouette is the thing that was missing.
+
+**It is a flat `Ink.accent` fill and that is not §6.5's material.** The material is the three-stop
+gradient and §6.5 spends it on drawer rows; this is the same flat accent the bench's own progress
+bar already wears, under `Ink.on-material` at 5.14 : 1 — the role §23.2 named for exactly this
+question. Refused, it gives the fill up entirely and draws `Act`'s outline, because §6.5 has already
+recorded what a disabled label on a full-opacity accent measures: **1.18 : 1**, which is not a
+label.
+
+### 25.3 What this overturns
+
+§10.2 said, in as many words: **"There is no Start button anywhere in this program, because the
+operator's own instruction was *'just pressing on a button would start it so no need for any
+buttons'* and this design takes it literally: the button is on the iPod."**
+
+That instruction was about **not making a person fill in a form before an iPod appears**, and it is
+kept: one press still makes an iPod, the press is still on the drawn centre button, and §24's
+caption still teaches that. What it was read as — *no chrome may offer the act* — is what put the
+program's only offer into 14 px of `fg-dim` at the bottom of the page, and the operator has now
+reported the consequence. §18.1 carries the row.
+
+### 25.4 The second press: the caption was asking for it
+
+*"i press center two times to start it"* is **issue #35 seen again, before the point its fix
+reaches.** #35 was the same defect *after* the handoff: one press built and booted and never started
+the window's own 60 Hz clock, so the panel stayed dark and the caption went on inviting a press.
+`hand_off` takes the clock now, and every one of the two `start_machine` call sites takes it.
+
+This is the minute **before** the handoff, and nothing was looking at it.
+
+`work::Queue::press` mints the identity and files the device **with no drive** before it spawns
+anything — the drive is what the run is for — so from the press until §12.2's handoff the iPod on
+the bench answers `machine::Blocked::Unfinished`, and §10.3's caption for that device is
+`Press the centre button to finish making My 5.5G`. That sentence is *correct* for a run that has
+stopped, and it is an invitation to press again drawn on top of the run the press just started. He
+pressed twice because the window asked him to. The second press reaches `Queue::press`, sees
+`busy()`, files *a run is already going* on the Rail and does nothing; the iPod starts a minute
+later because the **first** press started it.
+
+**§7.3 has always had the row for this and nothing ever routed one.** Its table lists a `working`
+state — `building · 41 % · fetching Rockbox 4.0` — and `machine::cradle` had arms for `parking`,
+`Booting`, `Running`, `Stopped` and `Off` and none for a build. `Stand` gains `making`, exactly as
+it carries `parking`, and `work::Queue::making` is what answers it: a `Run::First` with a live
+worker, named by the device it will hand back.
+
+**The caption is `making an iPod` and not §7.3's three clauses**, and that is the same finding the
+`Running` arm already records one screen up. The fraction is the 3 px rule drawn on the well's
+bottom edge and the step is the Rail's own line drawn *directly under this caption* with real bytes
+— so a caption carrying either would be one fact printed twice, fifty pixels apart, which is what
+took the speed off `WHEEL_IS_LIVE`'s row. What is left is the half neither of those can say: the
+press has been taken, and there is nothing to press. Lower case and bare, like `parking`, because
+they are the same kind of row.
+
+**The test drives it from an empty data directory**, and it has to: the state exists only between
+the mint and the handoff, so a library that already has a drive never passes through it, which is
+why none of the 655 existing tests could see it.
+`one_press_on_an_empty_data_directory_stops_the_bench_asking_for_it_again` presses the registered
+handler once on a fresh installation — with the drives directory replaced by a file, so
+`volume::probe` refuses and nothing is fetched, built or downloaded — and then reads the shelf the
+press itself pushed. **Both arms**, because the sentence is right in one of them: with the run
+stopped it must still say *finish making it*, and that is the control that stops the other arm being
+a tautology.
+
+`a_real_first_run_from_the_registered_centre_button` is where the whole chain runs with a real
+worker; it is `#[ignore]`d because it reaches Apple's servers, and it is where `Queue::making`'s
+positive arm is exercised end to end.
+
+**And the other test in this pair lied on its first draft, which is AGENTS.md §6 paying for
+itself.** `a_queue_that_minted_an_ipod_and_started_nothing_is_not_making_one` holds the arm that
+stops a finished run captioning the bench `making an iPod` for ever. Written first against a queue
+whose press was refused for want of `curl` — which refuses *before* the mint — it asked a queue with
+`device: None`, so the answer was `None` for a reason that has nothing to do with a worker.
+**Deleting `busy()` from `making()` left it green.** Blocking the drives directory instead refuses
+at `volume::probe`, which is after the mint and before the spawn, and the same deletion then fails
+it. Five of the six controls run against this pass were red first time; this was the sixth.
+
+### 25.5 What the shots found that no gate could
+
+`bench-making` is a new page in `every_page_this_window_draws_can_be_shot_with_no_window`, and
+photographing the state found two things immediately:
+
+- **`pump_machine` updates the machine's row in place and my two new fields were not in its list.**
+  §16.9's in-place update exists so the cradle's focus ring survives a tick; it writes
+  `cradle-label`, `press-label`, `state`, the ring and §12.3's rule. A property with a producer and
+  no setter on the one path that redraws its row is invisible to a source sweep and to every
+  assertion in the suite — `bench-running.png` came out with a button reading **`Turn on`** beside a
+  state slot reading **`running`**, and looking at the picture is what said so.
+- **The fixture was drawing an iPod this program never makes.** `a_library_being_made` pushed a
+  `Device::default()`, which is `chassis: None`, which the shelf draws **black** (§7.2). Building it
+  the way `Queue::press` builds it — `set_ipod`, then `remember_as` — is what makes the shot a
+  picture of the real state.
+
+**And a fresh profile is not `Settings::default()`.** `Settings::load` seeds: `seed_resources` files
+the live boot ROM as a resource and sets `library_seeded`, so a first launch has a **part** in the
+library where `bench-empty.png`'s fixture has none. Measured rather than assumed — the two benches
+came out **pixel for pixel identical**, which is why there is no `bench-seeded.png` beside the others
+(the no-two-pages-alike assertion refused one) and why
+`a_fresh_profile_seeds_a_part_and_draws_the_empty_bench` states the equality instead. The bench draws
+devices; seeding files no device.
+
+### 25.6 Whether the window should look like an application
+
+The 460 px width is §21.2's and is not touched here. The question it raises is fair — *the sidebar
+which i cannot choose anything* is a report about the window's **shape** — and the answer this pass
+found is that the shape was not the whole of it:
+
+**A title on the left and a primary action on the right is the grammar of an application window**,
+and that row already existed; it was carrying a name and a status and offering nothing. With
+`My 5.5G` · `off` · `Turn on` in it, the same 460 px reads as an app rather than as a panel, at zero
+cost to the device. That is worth saying because it is the cheap half of the answer and it did not
+need a pixel of width.
+
+**What would still help, and is not built here** because each is a decision above this task:
+
+- **A real title bar.** The window is `no-frame`-adjacent in feel: the topmost thing is a 24 px
+  margin. A platform title bar with the device's name in it would settle *this is an application*
+  before anything else is read, and it costs `MARGIN_TOP` rather than the device.
+- **The `Act` in the corner is an unlabelled disc.** It is the one control a stranger reaches for
+  first — that is measured, twice now — and it says `Menu` only to an assistive technology. A
+  labelled control there, or the two of them grouped as a strip, would read as a toolbar.
+- **`focus-visible` starts `true`** (§24.5), so the first frame has a black ring round the iPod. On
+  a window that now has a button in it, the ring on the *device* is arguably the wrong first focus
+  stop; the button is what a person is being pointed at.
+
+### 25.7 What this pass did not do
+
+- **`Queue::making` is `Run::First` only.** §22.2's stop-install-start and §21.3's `Doom` also hand
+  a device back, and their captions are wrong in the same shape for the same seconds — a bench
+  saying `Press the centre button — cold boot` while a 9 MB Rockbox install runs. *Making an iPod*
+  is not what an install is doing, and widening this wants a word per run, which is a design
+  decision rather than this one.
+- **The button's width changes with its label**, which moves the state slot beside it. Measured off
+  the shots rather than estimated — a horizontal scan at the pill's mid-height, `y = 54`, in a
+  460 px window at scale 1, taking the run that is not `Ink.bg-sunken`: **`Turn on` / `Turn off` is
+  67 px** (x 358–424), **`Make an iPod` 100 px** (x 325–424) and **`Making an iPod…` 120 px**
+  (x 305–424). The trailing edge is 424 in all four shots, so what moves is the leading one. It is a
+  state change rather than a hover, so §23.5's content-moving-under-the-cursor rule does not reach
+  it, and the alternative is a fixed-width control sized for its longest label — 53 px of empty
+  accent on every screen that says `Turn on`.
+- **Nothing was done about §9.5's short pane**, which is correct as it stands: below the threshold
+  the well is replaced, so the caption row and the button go with it and the pane's own primary Row
+  is the offer. That row already wears §6.5's material for exactly this reason.

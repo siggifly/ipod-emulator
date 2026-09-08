@@ -292,6 +292,16 @@ export struct DeviceRow {
     // `selected` the way `cradle-label` does rather than being pushed once for a bench that has
     // moved on.
     press-label: string,
+    // ── §25's primary control, per row ───────────────────────────────────────────────────────────
+    //
+    // **What the bench's one button says, and whether it can be pressed.** It is a field of this
+    // struct rather than a pair of window properties for `cradle-label`'s reason: the caption, the
+    // ring and the button are three drawings of one device's one state, and a button pushed once
+    // for a bench that has since moved on is how two of them come to disagree. `machine::Primary`
+    // is where the label is decided and `main::startable` is where the boolean is, so neither is
+    // written here and neither is derived in the markup.
+    primary-label: string,
+    primary-enabled: bool,
     // ── §12.3's boot progress, in the two shapes it can honestly take ────────────────────────────
     //
     // **Two fields and not one `float` with a sentinel**, because the two questions §12.3 asks are
@@ -900,6 +910,108 @@ export component Act inherits Rectangle {
             if (!root.enabled) {
                 return;
             }
+            root.activated();
+        }
+    }
+}
+
+// ─── Button (§5's eleventh primitive, §25) ──────────────────────────────────────────────────────
+//
+// **A compact labelled control, and this window had none.** Every act in this program is a `Row`
+// (44 px, full bleed, on a drawer page), an `Act` (a 24 px icon disc), a `Tile` or the drawn iPod
+// itself — so the bench, whose whole job is to offer one act, had nothing to offer it with. §25 is
+// the operator finding that out: *"no clear way to start it"*, on a 460 px window whose only offer
+// was a grey sentence at the foot of the page.
+//
+// It is deliberately not a `Row` shrunk. A `Row`'s silhouette is the page's own edge — which is
+// exactly why §23.3 had to inset its focus ring — and the thing missing here is a silhouette: a
+// shape with an edge of its own, at a hit target a person recognises without being told.
+//
+// **Filled with the accent, and that is not §6.5's material.** The material is the three-stop
+// gradient and §6.5 spends it on drawer rows; this is a flat `Ink.accent`, which is the same fill
+// the progress bar on this surface already wears, under `Ink.on-material` — the role §23.2 named
+// for exactly this question, measured at 5.14 : 1.
+//
+// **Disabled is `Act`'s treatment and not a dimmed fill.** §6.5 records what a disabled control on
+// a full-opacity accent measures — `#9aa0a8` on `#5493e9` is 1.18 : 1, which is not a label — so a
+// refused Button gives the fill up entirely and draws the outline every other disabled control in
+// this window draws.
+export component Button inherits Rectangle {
+    in property <string> label;
+    in property <bool> enabled: true;
+    // §9.4 — non-empty whenever `!enabled`, and it is what an assistive technology is told. The
+    // bench draws the sentence itself on the cradle caption one band down (§7.3), so this is the
+    // announcement rather than a second copy on screen.
+    in property <string> reason;
+    callback activated();
+
+    // **Intrinsically sized**, for the reason `BenchControl` records at its own use site: this
+    // inherits `Rectangle`, which reports no preferred width, and a stretching layout will hand it
+    // a share of the leftover space. §24.5 found that defect the expensive way, in a shot.
+    horizontal-stretch: 0;
+    height: Geometry.button-h;
+    border-radius: Geometry.button-r;
+    background: root.enabled
+        ? (touch.has-hover ? Ink.material-rule : Ink.accent)
+        : Ink.bg;
+    border-width: root.enabled ? 0px : 1px;
+    border-color: Ink.fg-disabled;
+
+    accessible-role: AccessibleRole.button;
+    accessible-label: root.label;
+    accessible-description: root.reason;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        root.activated();
+    }
+
+    HorizontalLayout {
+        padding-left: Metric.s3;
+        padding-right: Metric.s3;
+
+        Text {
+            text: root.label;
+            font-size: Metric.label-size;
+            font-weight: Metric.weight-label;
+            color: root.enabled ? Ink.on-material : Ink.fg-disabled;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+
+    focus := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Space || event.text == Key.Return) {
+                touch.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    // §8.1 item 9: instant, always. **§23.3's offset applies** — this control's silhouette is its
+    // own and not the page's, so the ring sits outside it rather than tracing it, which is the
+    // construction `Act` declines for being a disc and `Pressable` takes for being full bleed.
+    Rectangle {
+        x: 0 - Geometry.focus-inset;
+        y: 0 - Geometry.focus-inset;
+        width: parent.width + 2 * Geometry.focus-inset;
+        height: parent.height + 2 * Geometry.focus-inset;
+        border-radius: Geometry.button-r + Geometry.focus-inset;
+        border-width: Geometry.focus-ring-w;
+        border-color: Ink.accent;
+        visible: focus.has-focus;
+    }
+
+    // §16.5: always enabled, gated inside the handler, so `has-hover` stays honest and a refused
+    // control can still be pointed at.
+    touch := TouchArea {
+        mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
+        clicked => {
+            if (!root.enabled) {
+                return;
+            }
+            focus.focus();
             root.activated();
         }
     }

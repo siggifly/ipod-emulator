@@ -862,7 +862,7 @@ fn wire(
 
     // `None`, and not because it is unknown: this runs once, before any callback is registered, so
     // nothing has had the chance to start a machine.
-    refresh_devices(window, &devices, &settings.borrow(), &showing_welcome, caps, cost, None);
+    refresh_devices(window, &devices, &settings.borrow(), &showing_welcome, caps, cost, None, None);
     push_ledger(
         window,
         offer.has_plan().then_some(cost),
@@ -1448,6 +1448,7 @@ fn wire(
             let held = live.borrow();
             refresh_devices(
                 &w, &devices, &settings.borrow(), &showing_welcome, caps, cost, held.as_ref(),
+                work.borrow().making(),
             );
             drop(held);
             push_ledger(
@@ -1460,6 +1461,26 @@ fn wire(
             // The press mints an iPod, files it and starts a run: the library moved and a build is
             // now in flight, which is both halves of what a registered page draws about the world.
             repaint_all();
+        });
+    }
+
+    // ── §25's primary control on the bench ──
+    //
+    // **The same act as §22.4's switch, and it raises the same function.** The button's LABEL is
+    // `machine::Primary`'s and the drawer row's is `verbs::power_row`'s; both read the same phase,
+    // and `the_bench_button_and_the_menu_switch_are_one_act` is what stops them coming apart. The
+    // press itself has one implementation, above.
+    {
+        let live = live.clone();
+        let rail = rail.clone();
+        let rows = rows.clone();
+        let work = work.clone();
+        let ticking_machine = ticking_machine.clone();
+        let weak = window.as_weak();
+        window.on_primary_pressed(move || {
+            let Some(w) = weak.upgrade() else { return };
+            throw_the_switch(&w, &live, &rail, &rows, &work, caps);
+            ticking_machine();
         });
     }
 
@@ -1945,6 +1966,7 @@ fn wire(
                 let held = live.borrow();
                 refresh_devices(
                     &w, &devices, &settings.borrow(), &showing_welcome, caps, cost, held.as_ref(),
+                    work.borrow().making(),
                 );
                 sync_rail(&w, &rows, &rail.borrow(), caps, work.borrow().shape());
                 push_nav(&w, &stack.borrow());
@@ -2513,11 +2535,7 @@ fn wire(
                 //
                 // `Restart` is this row pressed twice, which is what §22.4 says it is.
                 verbs::Verb::Power => {
-                    if life(&live).alive() {
-                        power_off(Some(&w), &live, &rail, &rows, &work, caps);
-                    } else {
-                        w.invoke_start_device(w.get_selected());
-                    }
+                    throw_the_switch(&w, &live, &rail, &rows, &work, caps);
                     ticking_machine();
                 }
 
@@ -2864,6 +2882,7 @@ fn wire(
                 let held = live.borrow();
                 refresh_devices(
                     &w, &devices, &settings.borrow(), &showing_welcome, caps, cost, held.as_ref(),
+                    work.borrow().making(),
                 );
             }
             if took == Took::Retried && work.borrow().owns(id as u64) {
@@ -2881,6 +2900,7 @@ fn wire(
                 let held = live.borrow();
                 refresh_devices(
                     &w, &devices, &settings.borrow(), &showing_welcome, caps, cost, held.as_ref(),
+                    work.borrow().making(),
                 );
             }
             push_nav(&w, &stack.borrow());
@@ -3699,6 +3719,7 @@ fn pump_once(
         let held = live.borrow();
         refresh_devices(
             window, devices, &settings.borrow(), showing_welcome, caps, cost, held.as_ref(),
+            work.borrow().making(),
         );
     }
     if tick.changed {
@@ -3965,6 +3986,12 @@ impl Live {
             // §12.4's ~1.6 GB write. An atomic read rather than a constant, so the day something
             // parks, the caption is already telling the truth about it.
             parking: self.link.saving.load(std::sync::atomic::Ordering::Relaxed),
+            // **False by construction, not by omission** (§25). Every route that builds or installs
+            // onto a device's drive calls `stop_dead` first — §22.2's whole stop-install-start —
+            // and `Live::drop` joins the interpreter's thread, so a machine cannot be alive while a
+            // run is writing the drive under it. The field exists for the state this one is not in:
+            // a first run, where there is no machine yet at all.
+            making: false,
             // The clock this machine is actually running at, not the window's default — `--clock=`
             // is per launch, and a measurement is only this run's if it was taken at this run's
             // clock.
@@ -4654,6 +4681,34 @@ fn power_off(
     }
 }
 
+/// **§22.4's one switch, thrown — and §25's primary control is the same throw.**
+///
+/// The press is a toggle and the phase is the position. Off, it is `invoke_start_device` — §7.3's
+/// own centre button, so `Start` and `Resume` stay one press and `machine::Launch` goes on deciding
+/// which, which is §12.4's rule rather than a question for the person. On, it is [`power_off`],
+/// which is §16.8's `Esc` performed rather than re-implemented: park from `Running`, drop from
+/// `Booting`. `Restart` is this pressed twice, which is what §22.4 says it is.
+///
+/// **It is a function because there are two controls now**, and the alternative is the shape this
+/// program has already paid for twice: §7.2 records `Start` and the bench's ring re-deriving one
+/// classification and getting two of its three questions each, and `machine::Act`'s own doc says
+/// *three answers to "can this be pressed" is how two of them come to disagree silently*. The
+/// drawer's switch and the bench's button are one act with two surfaces.
+fn throw_the_switch(
+    w: &MainWindow,
+    live: &Rc<RefCell<Option<Live>>>,
+    rail: &Rc<RefCell<rail::Rail>>,
+    rows: &Rc<VecModel<RailRow>>,
+    work: &Rc<RefCell<work::Queue>>,
+    caps: rail::Caps,
+) {
+    if life(live).alive() {
+        power_off(Some(w), live, rail, rows, work, caps);
+    } else {
+        w.invoke_start_device(w.get_selected());
+    }
+}
+
 /// **The machine, stopped dead, because something is about to write to its drive.**
 ///
 /// §22.2's stop-install-start needs a stop that has *finished* rather than one that has been asked
@@ -4968,12 +5023,21 @@ fn pump_machine(
     // (§16.9): the caption carries a speed that changes every tick, and handing the model a fresh
     // row per tick tears down the repeater instance the cradle's focus ring is on.
     if let Some(mut row) = devices.row_data(l.index) {
-        let cradle = cradle_of(Press::Centre, settings, &l.device, &l.absent, None, Some(l));
+        let cradle = cradle_of(Press::Centre, settings, &l.device, &l.absent, None, Some(l), false);
         let state: slint::SharedString = shelf_state(&l.device, &life).into();
         let label: slint::SharedString = cradle.label.into();
         let press: slint::SharedString =
-            cradle_of(Press::Here, settings, &l.device, &l.absent, None, Some(l)).label.into();
+            cradle_of(Press::Here, settings, &l.device, &l.absent, None, Some(l), false).label.into();
         let ring = ring(cradle.ring);
+        // §25's primary control, in the same update for the same reason: it is `Turn on` over a
+        // machine that is off and `Turn off` over one that is running, and those are two phases of
+        // the row this tick is about. **Left out of this list, it was a button reading `Turn on`
+        // beside a state slot reading `running`, in `bench-running.png`** — a property with a
+        // producer and no setter on the one path that redraws its row, which is the shape §16.9's
+        // in-place rule exists to make findable and the shot is what found it.
+        let primary = machine::primary(&l.stand(&life), finishes_the_first_run(settings, &l.device));
+        let primary_label: slint::SharedString = primary.label().into();
+        let primary_enabled = primary.enabled(startable(settings, &l.device, &l.absent));
         // §12.3's rule. It moves on almost every tick while a machine is booting, which is exactly
         // what it is for — and is why it is in the same in-place update as the caption rather than
         // a second `set_row_data` of its own.
@@ -4983,6 +5047,8 @@ fn pump_machine(
             || row.state != state
             || row.cradle_ring != ring
             || row.cradle_broken != cradle.broken
+            || row.primary_label != primary_label
+            || row.primary_enabled != primary_enabled
             || row.boot_measured != measured
             || row.boot_fraction != fraction
         {
@@ -4991,6 +5057,8 @@ fn pump_machine(
             row.state = state;
             row.cradle_ring = ring;
             row.cradle_broken = cradle.broken;
+            row.primary_label = primary_label;
+            row.primary_enabled = primary_enabled;
             row.boot_measured = measured;
             row.boot_fraction = fraction;
             devices.set_row_data(l.index, row);
@@ -5834,10 +5902,17 @@ fn cradle_of(
     absent: &[Absent],
     mismatch: Option<&str>,
     live: Option<&Live>,
+    // §25: a first run is finishing this iPod, so the caption says so rather than asking to be
+    // pressed again. `work::Queue::making` is the answer; see [`machine::Stand::making`].
+    making: bool,
 ) -> machine::Cradle {
     match live {
         Some(l) => {
             let life = l.life();
+            // **`making` is not passed here and cannot be true**: a run that is building this
+            // device's drive stops the machine first (`stop_dead`), so a `Live` and a build in
+            // flight over one device do not coexist. `Live::stand` says the same thing in the
+            // field's own place.
             machine::cradle(press, &l.stand(&life))
         }
         // **`cfg` is `Some` now, and that is §7.3's parked rows becoming reachable.** It was
@@ -5857,6 +5932,7 @@ fn cradle_of(
                     life: &machine::Life::Off,
                     cfg: Some(&cfg),
                     parking: false,
+                    making,
                     // **The clock a press would start this device at**, off the same `Config` the
                     // press builds — so the cold-boot measurement the caption quotes is checked
                     // against the run it is about to describe rather than against a default.
@@ -5964,7 +6040,7 @@ impl Press {
 /// the tests that walk both of [`Press::ALL`] against one device.
 #[cfg(test)]
 fn cradle_label_at(press: Press, s: &Settings, d: &Device, absent: &[Absent]) -> String {
-    cradle_of(press, s, d, absent, s.generation_mismatch(d).as_deref(), None).label
+    cradle_of(press, s, d, absent, s.generation_mismatch(d).as_deref(), None, false).label
 }
 
 /// §9.1's and §10.1's empty bench, captioned for whichever surface is drawing the press.
@@ -6082,6 +6158,13 @@ fn empty_device(first: bool, caps: rail::Caps, cost: compose::Cost) -> DeviceRow
         // unpressable for ever, with `press_is_first_run` on the other side saying the press would
         // have worked. One boolean, or they disagree silently.
         startable: caps.download,
+        // §25's primary control, on the one screen it was reported missing from. `Primary::Make`
+        // rather than §22.4's `Turn on`: there is nothing to turn on, and a switch offering to
+        // power up an iPod that does not exist is the claim §7.2 already had to delete once. The
+        // boolean is the same `caps.download` the row above and the caption below both read, so
+        // the button, the ring's announcement and the sentence cannot say three things.
+        primary_label: machine::Primary::Make.label().into(),
+        primary_enabled: machine::Primary::Make.enabled(caps.download),
         // Both fit [`geometry::CRADLE_LABEL_MAX_CHARS`]; the 58-character sentence this replaced
         // elided on every window this program allows, which took the escape hatch off the end of
         // the one line that carried one. The wording, and why the refusal arm is keyed on
@@ -7313,7 +7396,13 @@ fn ceiling_logical(win: &slint::Window) -> f64 {
 /// **The blocking half is still open**: a path under a stale network mount blocks until the mount
 /// times out, and this runs on the UI thread. The pass belongs off it, together with §11.4's
 /// `detect_mounted()`; until then a share that is not up delays the press rather than one row of it.
-fn device_rows(settings: &Settings, live: Option<&Live>) -> Vec<DeviceRow> {
+fn device_rows(
+    settings: &Settings,
+    live: Option<&Live>,
+    // §25: the device a run in flight is going to hand back, from `work::Queue::making`. At most
+    // one row can be it, which is the same shape `live` already has.
+    making: Option<&str>,
+) -> Vec<DeviceRow> {
     let mut seen = Presence::new();
     let rows: Vec<DeviceRow> = settings
         .devices
@@ -7339,7 +7428,30 @@ fn device_rows(settings: &Settings, live: Option<&Live>) -> Vec<DeviceRow> {
             // which is the step that separates this check from the one the matrix harness got
             // wrong from the other side.
             let mismatch = settings.generation_mismatch(d);
-            let cradle = cradle_of(Press::Centre, settings, d, &gone, mismatch.as_deref(), mine);
+            // §25's second press. This row's device is the one a first run is finishing, so the
+            // caption says `making an iPod` instead of asking to be pressed again — which is the
+            // sentence the operator was reading when he pressed twice.
+            let being_made = making == Some(d.name.as_str());
+            let cradle =
+                cradle_of(Press::Centre, settings, d, &gone, mismatch.as_deref(), mine, being_made);
+            // §25's primary control. **One `Stand`, so the button and the caption above cannot
+            // describe two states of one iPod** — the same argument `cradle_ring` records for the
+            // ring. `resting_config` is what `cradle_of` builds for a device with no machine, and
+            // the `Live` arm reuses the machine's own.
+            let cfg = mine.map(|l| l.cfg.clone()).unwrap_or_else(|| resting_config(settings, d));
+            let primary = machine::primary(
+                &machine::Stand {
+                    device: Some(d),
+                    absent: &gone,
+                    life: &life,
+                    cfg: Some(&cfg),
+                    parking: false,
+                    making: being_made,
+                    clock: cfg.clock as u32,
+                    mismatch: mismatch.as_deref(),
+                },
+                finishes_the_first_run(settings, d),
+            );
             // §12.3's two properties, decided together — see [`boot_rule`].
             let rule = boot_rule(&life);
                 DeviceRow {
@@ -7357,6 +7469,11 @@ fn device_rows(settings: &Settings, live: Option<&Live>) -> Vec<DeviceRow> {
                 // three questions, so a device with no drive was drawn live under a cradle
                 // refusing it. See [`startable`].
                 startable: startable(settings, d, &gone),
+                // §25. The label is the model's and the boolean is [`startable`]'s, so a button
+                // that is drawn live over an iPod the cradle is refusing is not a state this
+                // program can push.
+                primary_label: primary.label().into(),
+                primary_enabled: primary.enabled(startable(settings, d, &gone)),
                 cradle_label: cradle.label.into(),
                 // §7.3's ring and its continuity, from the same call as the sentence above.
                 cradle_ring: ring(cradle.ring),
@@ -7364,7 +7481,9 @@ fn device_rows(settings: &Settings, live: Option<&Live>) -> Vec<DeviceRow> {
                 // §9.5's pane replaces the well, so the same caption has to name the Row the
                 // reader is looking at rather than a centre button that is not on screen. One
                 // tail, two prefixes — see [`Press`].
-                press_label: cradle_of(Press::Here, settings, d, &gone, mismatch.as_deref(), mine).label.into(),
+                press_label: cradle_of(Press::Here, settings, d, &gone, mismatch.as_deref(), mine, being_made)
+                    .label
+                    .into(),
                 // §7.5's row-1 trailing slot: **the state, and time since.**
                 state: shelf_state(d, &life).into(),
                 write_target: writes.line.into(),
@@ -7439,6 +7558,10 @@ fn refresh_devices(
     // §7.2's one machine, so the row it is in the well of carries §12.2's caption and every other
     // row carries the device's. `None` is the honest `Off`: no machine exists.
     live: Option<&Live>,
+    // §25's second press: the device a first run in flight is going to hand back, or `None`. It is
+    // a parameter rather than a question this function asks, for `live`'s reason — `work::Queue`
+    // is the authority and a second derivation here is a second answer.
+    making: Option<&str>,
 ) {
     // ── §12.4: a bench with no machine on it still has a panel, and it may not be dark ──────────
     //
@@ -7462,7 +7585,7 @@ fn refresh_devices(
         window.set_panel_description(panel_description(&on_glass).into());
     }
 
-    let want = device_rows(settings, live);
+    let want = device_rows(settings, live, making);
     for (i, row) in want.iter().enumerate() {
         match model.row_data(i) {
             Some(old) if old == *row => {}
@@ -8117,7 +8240,10 @@ fn library_moved(
             // takes it: on a volume without sparse files the real cost is 8.6 GB rather than 28 MB,
             // and the shelf quoting the assumption the plan was drawn under is the whole run wrong.
             let cost = work.borrow().measured_cost().unwrap_or(cost);
-            refresh_devices(window, devices, &settings.borrow(), showing_welcome, caps, cost, live);
+            refresh_devices(
+                window, devices, &settings.borrow(), showing_welcome, caps, cost, live,
+                work.borrow().making(),
+            );
         }
         Ok(parts::Wrote::Nothing) => {}
         // §14.1: say the refusal. `Rail::note` folds a repeated sentence into one, so pressing a
@@ -9590,7 +9716,7 @@ pub(crate) mod tests {
         s.remember_as("My 5.5G");
         let s = Settings::parse(&s.render());
 
-        let row = &device_rows(&s, None)[0];
+        let row = &device_rows(&s, None, None)[0];
         let w = write_target(&s, &s.devices[0]);
         assert_eq!(
             row.write_target.to_string(),
@@ -9772,7 +9898,7 @@ pub(crate) mod tests {
         // A device that HAS booted, whose denominator was then dropped — which is exactly what
         // §12.3's rule does to a device whose bootloader changed.
         s.devices[0].cold_boot_instructions = None;
-        let without = device_rows(&s, None)[0].state.to_string();
+        let without = device_rows(&s, None, None)[0].state.to_string();
         assert!(
             !without.contains("never"),
             "the row claims history the model does not carry: {without:?}"
@@ -9780,7 +9906,7 @@ pub(crate) mod tests {
 
         s.devices[0].cold_boot_instructions = Some(3_000_000);
         assert_eq!(
-            device_rows(&s, None)[0].state.to_string(),
+            device_rows(&s, None, None)[0].state.to_string(),
             without,
             "the shelf's state slot changed when only the progress bar's denominator did"
         );
@@ -9844,7 +9970,7 @@ pub(crate) mod tests {
             None,
         );
         s.devices.push(Device { name: "mine".into(), firmware: rom.clone(), ..Device::default() });
-        let state = device_rows(&s, None)[0].state.to_string();
+        let state = device_rows(&s, None, None)[0].state.to_string();
         assert_eq!(state, "off", "the shelf does not say which of §12.2's phases this is: {state:?}");
         assert!(
             !state.contains("boot time"),
@@ -9861,7 +9987,7 @@ pub(crate) mod tests {
             parked_at: Some(now - 240),
             ..Device::default()
         });
-        let parked = device_rows(&s, None)[1].state.to_string();
+        let parked = device_rows(&s, None, None)[1].state.to_string();
         assert_eq!(parked, "off, parked 4 min ago", "{parked:?}");
 
         // A clock behind the timestamp saturates rather than wrapping, and reads as *just now*.
@@ -9978,7 +10104,7 @@ pub(crate) mod tests {
             }
 
             // What the bench draws.
-            let row = &device_rows(&s, None)[0];
+            let row = &device_rows(&s, None, None)[0];
             // What the press does.
             let pressed = resolve_for_start(&mut s, 0);
 
@@ -10026,7 +10152,7 @@ pub(crate) mod tests {
             "the fixture is not the half-made first run this arm is about"
         );
         assert!(
-            device_rows(&s, None)[0].startable,
+            device_rows(&s, None, None)[0].startable,
             "§10.3's half-made first run cannot be finished from the bench any more"
         );
         std::fs::remove_dir_all(&dir).ok();
@@ -10054,7 +10180,7 @@ pub(crate) mod tests {
             !finishes_the_first_run(&s, &s.devices[0]),
             "the fixture is the first run after all, which is the other arm"
         );
-        let row = &device_rows(&s, None)[0];
+        let row = &device_rows(&s, None, None)[0];
         assert!(
             !row.startable,
             "the bench offers to start an iPod with no drive: {:?}",
@@ -10120,6 +10246,61 @@ pub(crate) mod tests {
         // before it builds the second, and `Live::drop` waits for it to have let go.
         w.invoke_start_device(0);
         assert!(wiring.live.borrow().is_some(), "the second press left the bench with no machine");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **§25's button, driven through the handler `wire` actually registers.**
+    ///
+    /// §20 item 12's lesson, applied to the one control this section adds: the defect that shipped
+    /// last time lived inside a closure no test reached. `every_window_property_is_pushed_and_
+    /// every_callback_registered` is the gate that says so mechanically — a callback nothing in
+    /// this crate presses is a handler whose body can be gutted with the suite still green — and
+    /// `primary-pressed` went on that list the moment it was declared.
+    ///
+    /// **What it proves is that the button and the drawn centre button are one act**: the press
+    /// reaches `throw_the_switch`, which is `invoke_start_device` for a machine that is off, so the
+    /// window ends up in exactly the state
+    /// `the_registered_centre_button_handler_survives_a_device_that_resolves` puts it in by
+    /// pressing the iPod itself.
+    ///
+    /// **And it is pressed twice**, because §22.4 says `Restart` is this control twice: the second
+    /// press lands on the live-machine half — [`power_off`] — and must not panic there either.
+    #[test]
+    fn the_bench_button_is_the_switch_and_the_switch_starts_the_ipod() {
+        let dir = temp_dir("bench-primary");
+        let (mut s, d) = a_composed_device(&dir);
+        s.devices.push(d);
+        let settings = Rc::new(RefCell::new(s));
+
+        let w = a_window();
+        let wiring = wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
+        let before = w.get_devices().row_data(0).expect("the fixture's iPod");
+        assert_eq!(
+            before.primary_label,
+            machine::TURN_ON,
+            "the button over an iPod that is off offers {:?}",
+            before.primary_label
+        );
+        assert!(before.primary_enabled, "a startable iPod's button is drawn refused");
+        assert!(wiring.live.borrow().is_none(), "the fixture arrived with a machine on it");
+
+        // The real, registered handler.
+        w.invoke_primary_pressed();
+        assert!(
+            wiring.live.borrow().is_some(),
+            "§25's button started nothing — it is §22.4's switch with a second surface, and the \
+             switch off is the centre button's own press"
+        );
+        assert_eq!(
+            settings.borrow().current.as_deref(),
+            Some("iPod 1"),
+            "the press did not make the device live, so the handler did not run"
+        );
+
+        // §22.4: `Restart` is this control twice, and the second press is the other half of the
+        // switch. It must not panic — `power_off` takes `live.borrow()` and `ask_to_park` takes it
+        // again, which is §20 item 12's shape.
+        w.invoke_primary_pressed();
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -12353,7 +12534,7 @@ pub(crate) mod tests {
         let w = a_window();
         let devices: Rc<VecModel<DeviceRow>> = Rc::new(VecModel::default());
         w.set_devices(ModelRc::from(devices.clone()));
-        for row in device_rows(&s, None) {
+        for row in device_rows(&s, None, None) {
             devices.push(row);
         }
         let live = Rc::new(RefCell::new(Some(a_machine_with_no_thread(&d))));
@@ -12653,7 +12834,7 @@ pub(crate) mod tests {
         let w = a_window();
         let devices: Rc<VecModel<DeviceRow>> = Rc::new(VecModel::default());
         w.set_devices(ModelRc::from(devices.clone()));
-        for row in device_rows(&s, None) {
+        for row in device_rows(&s, None, None) {
             devices.push(row);
         }
         let live = Rc::new(RefCell::new(Some(a_machine_with_no_thread(&d))));
@@ -14505,7 +14686,7 @@ pub(crate) mod tests {
     fn the_composed_window_takes_everything_this_file_pushes() {
         let w = a_window();
 
-        w.set_devices(ModelRc::from(Rc::new(VecModel::from(device_rows(&Settings::default(), None)))));
+        w.set_devices(ModelRc::from(Rc::new(VecModel::from(device_rows(&Settings::default(), None, None)))));
         w.set_empty_device(empty_device(false, caps(), no_cost()));
         w.set_screen_source(dark_screen());
         w.set_panel_description(panel_description(&machine::Glass::Dark).into());
@@ -14548,7 +14729,7 @@ pub(crate) mod tests {
 
         // §10.1's ghost and §12.3's bar, both of which had been drawable and unbound. `set_ghost`
         // is pushed by `refresh_devices`; `set_progress` by `sync_rail`.
-        refresh_devices(&w, &Rc::new(VecModel::default()), &Settings::default(), &latch(true), caps(), no_cost(), None);
+        refresh_devices(&w, &Rc::new(VecModel::default()), &Settings::default(), &latch(true), caps(), no_cost(), None, None);
         assert!(w.get_ghost(), "an empty library did not reach the bench as a ghost");
         assert!(w.get_progress() < 0.0, "an empty Rail claims a denominator it does not have");
 
@@ -14636,7 +14817,7 @@ pub(crate) mod tests {
         w.set_devices(ModelRc::from(devices.clone()));
 
         let mut s = Settings::default();
-        refresh_devices(&w, &devices, &s, &latch(false), caps(), no_cost(), None);
+        refresh_devices(&w, &devices, &s, &latch(false), caps(), no_cost(), None, None);
         assert!(w.get_ghost(), "an empty library is not drawn as a ghost");
 
         // **A real device whose ROM did not state a colour is NOT a ghost**, and that is the case
@@ -14644,7 +14825,7 @@ pub(crate) mod tests {
         // chassis the ghost does, and the difference between them is the opacity alone.
         s = a_library_of_one();
         s.devices[0].chassis = Some(Colour::Unspecified);
-        refresh_devices(&w, &devices, &s, &latch(false), caps(), no_cost(), None);
+        refresh_devices(&w, &devices, &s, &latch(false), caps(), no_cost(), None, None);
         assert!(!w.get_ghost(), "a device in the library is drawn as a ghost");
         assert_eq!(
             devices.row_data(0).expect("the device").chassis,
@@ -14655,7 +14836,7 @@ pub(crate) mod tests {
 
         // …and the last device leaving brings it back.
         s.devices.clear();
-        refresh_devices(&w, &devices, &s, &latch(false), caps(), no_cost(), None);
+        refresh_devices(&w, &devices, &s, &latch(false), caps(), no_cost(), None, None);
         assert!(w.get_ghost(), "the last device left and the bench still draws a solid iPod");
     }
 
@@ -14878,7 +15059,7 @@ pub(crate) mod tests {
     #[test]
     fn the_centre_button_is_reachable_from_the_keyboard_with_no_pointer() {
         let w = a_window();
-        w.set_devices(ModelRc::from(Rc::new(VecModel::from(device_rows(&a_library_of_one(), None)))));
+        w.set_devices(ModelRc::from(Rc::new(VecModel::from(device_rows(&a_library_of_one(), None, None)))));
         w.set_empty_device(empty_device(false, caps(), no_cost()));
 
         let fired = Rc::new(std::cell::Cell::new(0));
@@ -15482,6 +15663,11 @@ pub(crate) mod tests {
         /// §21.3's root page — its rows and its demoted fact table.
         v_rows: Rc<VecModel<VerbRow>>,
         v_about: Rc<VecModel<DetailRow>>,
+        /// §25: the device a first run in flight is finishing, exactly as `work::Queue::making`
+        /// answers it. A fixture rather than a live `Queue` because a busy queue is a **thread**,
+        /// and what is being photographed is the window's account of one — which is the half that
+        /// was wrong.
+        making: RefCell<Option<String>>,
     }
 
     impl Furniture {
@@ -15512,7 +15698,14 @@ pub(crate) mod tests {
                 titles: Rc::new(VecModel::default()),
                 welcome: latch(first),
                 cost: if first { a_cost() } else { no_cost() },
+                making: RefCell::new(None),
             }
+        }
+
+        /// §25: put this library into the state one press on an empty data directory leaves it in
+        /// — the iPod minted and filed with no drive, and the run that gives it one still going.
+        fn is_being_made(&self, name: &str) {
+            *self.making.borrow_mut() = Some(name.to_string());
         }
 
         /// Open the first device's body.
@@ -15585,6 +15778,7 @@ pub(crate) mod tests {
                 refresh_devices(
                     w, &self.shelf, &self.settings, &self.welcome, caps(), self.cost,
                     held.as_ref(),
+                    self.making.borrow().as_deref(),
                 );
             }
             // §12.1, §12.2: whatever the machine is publishing reaches the glass, the `running`
@@ -16294,6 +16488,15 @@ pub(crate) mod tests {
         // §13's shelf, so the list has something on it to photograph.
         let games = Furniture::new(a_shelf_of_titles(&temp_dir("shelf")));
 
+        // **§25, and it is the screen the operator pressed twice at.** One press on an empty data
+        // directory mints the iPod, files it with no drive and spawns the run that gives it one —
+        // and for the whole of that run the bench was captioned *Press the centre button to finish
+        // making My 5.5G*, which is an invitation to press again drawn on top of the press that
+        // started it. Nothing photographed this state, which is why nothing could see it.
+        let making = Furniture::new(a_library_being_made());
+        making.is_being_made("My 5.5G");
+
+
         // And §11.2's **root**, which nothing had ever taken a picture of either — standing in the
         // one state of the four the shipped program could not reach, because nothing spawned the
         // read that produces it.
@@ -16302,7 +16505,7 @@ pub(crate) mod tests {
 
         // `None` is the bench — the drawer shut. Every other entry names a page, at the level
         // `Page::slot` says draws it, which is the only level `Stack::go` will accept.
-        let pages: [(&str, Option<nav::Page>, &Furniture); 14] = [
+        let pages: [(&str, Option<nav::Page>, &Furniture); 15] = [
             ("bench", None, &full),
             // **§21.4's first run, which is the first thing anybody sees and had no picture.**
             // Every other shot in this list is of a furnished library; this is an empty data
@@ -16310,6 +16513,7 @@ pub(crate) mod tests {
             // the offer and the press. `parts-empty` photographed an empty *page*; nothing
             // photographed the empty *program*.
             ("bench-empty", None, &empty),
+            ("bench-making", None, &making),
             ("menu-empty", Some(nav::Page::None), &empty),
             ("menu", Some(nav::Page::None), &full),
             ("devices", Some(nav::Page::Devices), &full),
@@ -18793,6 +18997,34 @@ pub(crate) mod tests {
         let _ = std::fs::remove_dir_all(&cache);
     }
 
+    /// §25's second press, as a library: **the state one press on an empty data directory leaves
+    /// behind** — the iPod minted, filed, and with no drive yet, because `Queue::press` mints
+    /// before it spawns anything and the drive is what the run is for.
+    ///
+    /// It is the same shape [`the_press_routes_by_the_row_it_was_given`] builds by hand and the
+    /// same shape `the_registered_centre_button_starts_the_first_run_on_an_empty_library` produces
+    /// by pressing; this is it as a fixture, so a shot and a caption test can stand on one library.
+    fn a_library_being_made() -> Settings {
+        let mut s = Settings::default();
+        let src = ipod_machine::nor::Source::Synthetic {
+            model: compose::FIRST_RUN_MODEL.into(),
+            seed: 909_090,
+            serial: None,
+            guid: None,
+            splash: None,
+        };
+        // **Filed the way the press files it, not by pushing a `Device` here.** `Queue::press`
+        // calls `set_ipod` — which resolves the case out of the ROM's `Mod#` (§7.2) — clears the
+        // live drive, and files the device with `remember_as`. A fixture that pushed
+        // `Device::default()` instead came out `chassis: None`, which the shelf draws BLACK, and
+        // `bench-making.png` was a picture of an iPod this program never makes.
+        s.set_ipod(src);
+        s.disk = None;
+        s.remember_as("My 5.5G");
+        s.welcomed = true;
+        s
+    }
+
     /// **The centre button starts the device that was pressed, not the one a session-wide flag
     /// remembers.**
     ///
@@ -18843,6 +19075,261 @@ pub(crate) mod tests {
         assert!(press_is_first_run(&Settings::default(), 0));
     }
 
+    /// **One press must not leave the bench asking for the same press — §25, and it is issue #35
+    /// on the path that fix could not reach.**
+    ///
+    /// #35 was the same defect after the handoff: one press built and booted and never started the
+    /// window's 60 Hz clock, so the panel stayed dark and the caption went on inviting a press.
+    /// `hand_off` takes the clock now. This is the ~minute **before** the handoff, and nothing was
+    /// looking at it.
+    ///
+    /// `Queue::press` mints the identity and files the device with **no drive** before it spawns
+    /// anything — the drive is what the run is for — so from the press until the handoff the iPod
+    /// on the bench answers `Blocked::Unfinished`, and §10.3's caption for that is *Press the
+    /// centre button to finish making My 5.5G*. That sentence is correct for a run that has
+    /// **stopped** and is an invitation to press again while one is going. The operator pressed
+    /// twice because the window asked him to; the second press reached `Queue::press`, saw
+    /// `busy()`, and filed *a run is already going*.
+    ///
+    /// **It starts from an empty data directory**, because a populated fixture cannot see this:
+    /// the state only exists between minting and the handoff, and a library that already has a
+    /// drive never passes through it. The mint is the shipped one — `Queue::press`, with the
+    /// drives directory replaced by a file so the volume probe refuses and nothing is fetched,
+    /// built or downloaded, which is the arrangement
+    /// `the_registered_centre_button_starts_the_first_run_on_an_empty_library` already uses.
+    ///
+    /// **Both arms, because the sentence is right in one of them.** With no run in flight the
+    /// caption *should* ask for the press: that is §10.3's half-made device and pressing it really
+    /// does resume the build. The defect is that the two states said the same thing.
+    ///
+    /// **How to make it go red:** delete `machine::cradle`'s `st.making` arm, or return `None`
+    /// from `work::Queue::making`. Measured both ways — the first fails on the caption, the second
+    /// on the button.
+    #[test]
+    fn one_press_on_an_empty_data_directory_stops_the_bench_asking_for_it_again() {
+        let (settings, _held) = a_fresh_installation();
+        // Nothing is written and nothing is downloaded: `create_dir_all` refuses a path that is a
+        // file, so `volume::probe` answers `Refused` and the press stops there — after the mint,
+        // which is the whole subject.
+        let drives = ipod_machine::settings::drives_dir();
+        let _ = std::fs::remove_dir_all(&drives);
+        if let Some(parent) = drives.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        std::fs::write(&drives, b"not a directory").expect("the blocking file");
+        let w = a_window();
+        let wiring = wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
+        assert_eq!(w.get_devices().row_count(), 0, "the fixture is not an empty library");
+
+        w.invoke_start_device(0);
+        let _ = std::fs::remove_file(&drives);
+
+        let name = {
+            let s = settings.borrow();
+            assert_eq!(s.devices.len(), 1, "the press minted no iPod, so there is nothing to draw");
+            let d = &s.devices[0];
+            assert!(
+                !d.names_a_disk(),
+                "the fixture is not the state this is about: the drive has still to be built"
+            );
+            d.name.clone()
+        };
+
+        // ── the control, off the window the press itself pushed ─────────────────────────────────
+        //
+        // **`on_start_device` re-pushes the shelf before it returns**, with `Queue::making`'s own
+        // answer — which is `None` here, because the probe refused and nothing is running. So this
+        // is the shipped state after one press with the run **stopped**, and the invitation is
+        // correct: pressing again really does resume the build. That is what makes the arm below a
+        // measurement rather than a tautology.
+        let pressed = w.get_devices().row_data(0).expect("the minted device");
+        assert_eq!(
+            pressed.cradle_label,
+            format!("Press the centre button to finish making {name}").as_str(),
+            "§10.3's half-made device is not captioned as one, so the arm below measures nothing"
+        );
+        assert_eq!(pressed.primary_label, machine::FINISH_MAKING);
+        assert!(pressed.primary_enabled, "the press that finishes the build is refused");
+        assert!(wiring.live.borrow().is_none(), "the fixture started a machine");
+
+        // ── and with the run this press started still going ─────────────────────────────────────
+        let rows = device_rows(&settings.borrow(), None, Some(&name));
+        let row = rows.first().expect("the minted device");
+        let (caption, button, live) = (
+            row.cradle_label.to_string(),
+            row.primary_label.to_string(),
+            row.primary_enabled,
+        );
+        assert!(
+            !caption.contains("centre button"),
+            "the bench asks for the press it has already taken: {caption:?} — this is what the \
+             operator was reading when he pressed twice"
+        );
+        assert_eq!(caption, "making an iPod");
+        assert_eq!(button, machine::MAKING_LABEL);
+        assert!(!live, "the button offers a press that would only file `a run is already going`");
+    }
+
+    /// **The other half of the pair above: `work::Queue::making` is what answers it.**
+    ///
+    /// The caption test drives `refresh_devices` with the answer; this is the answer's own
+    /// contract, and it is the arm a queue with no worker has to give — otherwise a bench whose run
+    /// has ended would go on saying `making an iPod` for ever, which is the first defect inverted.
+    ///
+    /// **The queue it asks has minted a device and started nothing**, and that combination is the
+    /// whole test. Its first draft asked a queue whose press was refused for want of `curl` — which
+    /// refuses *before* the mint, so `self.device` was `None` and the answer was `None` for a
+    /// reason that has nothing to do with a worker. Deleting `busy()` from `making()` left that
+    /// draft **green**, which is AGENTS.md §6's rule paying for itself: the control was run and the
+    /// instrument was not measuring. Blocking the drives directory instead refuses at
+    /// `volume::probe`, which is *after* the mint and before the spawn.
+    ///
+    /// **`busy()` true is a live thread and no test here can hold one.** That arm is exercised end
+    /// to end by `a_real_first_run_from_the_registered_centre_button`, which has a real worker.
+    #[test]
+    fn a_queue_that_minted_an_ipod_and_started_nothing_is_not_making_one() {
+        let (settings, _held) = a_fresh_installation();
+        let mut q = work::Queue::new();
+        assert_eq!(q.making(), None, "a queue that has pressed nothing claims to be making an iPod");
+
+        // Nothing is written and nothing is downloaded: `create_dir_all` refuses a path that is a
+        // file, so the probe answers `Refused` and the press stops there — after the mint.
+        let drives = ipod_machine::settings::drives_dir();
+        let _ = std::fs::remove_dir_all(&drives);
+        if let Some(parent) = drives.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        std::fs::write(&drives, b"not a directory").expect("the blocking file");
+        let mut r = rail::Rail::new();
+        let refused = q.press(&mut settings.borrow_mut(), &mut r, true);
+        let _ = std::fs::remove_file(&drives);
+        assert!(
+            matches!(refused, work::Press::Refused(_)),
+            "the fixture spawned a run instead of refusing: {refused:?}"
+        );
+        assert_eq!(
+            settings.borrow().devices.len(),
+            1,
+            "the press minted nothing, so this queue is not the state the test is about"
+        );
+        assert!(!q.busy(), "the fixture started a worker");
+        assert_eq!(
+            q.making(),
+            None,
+            "a run that is over left the bench captioned `making an iPod`, which is the first \
+             defect inverted — a bench that never stops saying it is working"
+        );
+    }
+
+    /// **A fresh profile is not an empty one, and its bench is the same bench.**
+    ///
+    /// `Settings::load` seeds: `seed_resources` files the live boot ROM as a resource and sets
+    /// `library_seeded`, so a first launch has a **part** in the library. `_out/gui/bench-empty.png`
+    /// is shot over `Settings::default()`, which has neither — so the question this answers is
+    /// whether the picture is of the screen a person actually opens.
+    ///
+    /// It is, and the reason is worth stating: the bench draws devices, and seeding files no
+    /// device. This was measured rather than argued — the two shots came out **pixel for pixel
+    /// identical**, which is why there is no `bench-seeded.png` beside the others and why
+    /// `every_page_this_window_draws_can_be_shot_with_no_window`'s no-two-pages-alike assertion
+    /// refused one.
+    #[test]
+    fn a_fresh_profile_seeds_a_part_and_draws_the_empty_bench() {
+        let _held = use_a_scratch_data_dir();
+        let seeded = Settings::load();
+        assert!(seeded.library_seeded, "a fresh profile did not seed, so this measures nothing");
+        assert_eq!(seeded.resources.len(), 1, "seeding filed no boot ROM");
+        assert!(seeded.devices.is_empty(), "a fresh profile came with a device on the bench");
+        assert!(seeded.disks.is_empty(), "a fresh profile came with a drive");
+
+        let w = a_window();
+        let devices: Rc<VecModel<DeviceRow>> = Rc::new(VecModel::default());
+        let row = |s: &Settings| -> DeviceRow {
+            refresh_devices(&w, &devices, s, &latch(false), caps(), a_cost(), None, None);
+            w.get_empty_device()
+        };
+        let there = row(&seeded);
+        let default = row(&Settings::default());
+        assert_eq!(there.cradle_label, default.cradle_label);
+        assert_eq!(there.primary_label, default.primary_label);
+        assert_eq!(there.primary_label, machine::MAKE_AN_IPOD);
+        assert!(there.primary_enabled, "§21.4's one press is refused on a fresh profile");
+    }
+
+    /// **§25's button and §22.4's switch are one act, and they have to say the same word.**
+    ///
+    /// The bench's primary is `machine::Primary` and the drawer row's is `verbs::power_row`; both
+    /// read the same phase, and both press `main::throw_the_switch`. Two producers for one control
+    /// is exactly the arrangement `verbs.rs`'s own note is about — *"a fifth spelling is how a
+    /// switch comes to say `Turn Off` in one phase and `Turn off` in another"* — so the labels are
+    /// checked against each other rather than trusted to a shared constant nobody re-reads.
+    ///
+    /// **The two states where they differ on purpose are named**, not skipped: with no iPod the
+    /// switch says `Turn on` and the button says `Make an iPod`, because there is nothing to turn
+    /// on; and a half-made device is `Finish making it`, which the switch has no position for.
+    #[test]
+    fn the_bench_button_and_the_menu_switch_say_one_word() {
+        let _held = use_a_scratch_data_dir();
+        let s = a_library_of_one();
+        let d = &s.devices[0];
+        let cfg = resting_config(&s, d);
+        fn a_stand<'a>(
+            d: &'a Device,
+            cfg: &'a emu::Config,
+            life: &'a machine::Life,
+        ) -> machine::Stand<'a> {
+            machine::Stand {
+                device: Some(d),
+                absent: &[],
+                life,
+                cfg: Some(cfg),
+                parking: false,
+                making: false,
+                clock: cfg.clock as u32,
+                mismatch: None,
+            }
+        }
+        let switch = |life: &machine::Life| -> String {
+            let mut seen = Presence::new();
+            verbs::view(
+                &s,
+                s.devices.first(),
+                &mut seen,
+                caps(),
+                verbs::Now {
+                    settings: &s,
+                    life,
+                    machine: None,
+                    park_bytes: None,
+                    titles: 0,
+                    games_gone: false,
+                    developer: false,
+                },
+            )
+            .into_iter()
+            .find(|r| r.verb == verbs::Verb::Power)
+            .expect("§22.4's switch is drawn")
+            .label
+        };
+        for life in [
+            machine::Life::Off,
+            machine::Life::Running { pace: machine::Pace::default(), stalled_secs: 0.0 },
+            machine::Life::Booting {
+                target: emu::BootTarget::Os,
+                progress: machine::Progress::read(0, None),
+                pace: machine::Pace::default(),
+                reached: machine::Reached::read(false, 0),
+            },
+        ] {
+            let button = machine::primary(&a_stand(d, &cfg, &life), false).label();
+            assert_eq!(
+                button,
+                switch(&life),
+                "the bench button and the menu switch disagree over {life:?}"
+            );
+        }
+    }
+
     /// **A device the Composer filed is not the first run's device, and the centre button must not
     /// treat it as one.**
     ///
@@ -18887,7 +19374,7 @@ pub(crate) mod tests {
 
         // **And §7.3's own line, because a press that refuses under a label promising to finish is
         // the same lie moved one control along.** §14.1: drawn, refused, and saying why.
-        let row = &device_rows(&s, None)[i];
+        let row = &device_rows(&s, None, None)[i];
         assert!(
             !row.startable,
             "the cradle is drawn live over a device this build cannot make a drive for"
@@ -21261,8 +21748,8 @@ pub(crate) mod tests {
     ///
     /// It also pins the four bindings that were reading the **bench's** two fields: `enabled` and
     /// `reason` came from `DeviceRow.startable` and `.cradle-label`, which the drawn iPod reads as
-    /// `root.current.startable` (`window.slint:1004`) and `root.current.cradle-label`
-    /// (`window.slint:966`); `machine-rule` was a literal `true`. **Each number is written beside
+    /// `root.current.startable` (`window.slint:1008`) and `root.current.cradle-label`
+    /// (`window.slint:970`); `machine-rule` was a literal `true`. **Each number is written beside
     /// the binding it names**, because the pair used to be two fields followed by two line numbers
     /// in the opposite order, and one of the two numbers was a blank line.
     #[test]
@@ -23134,7 +23621,7 @@ pub(crate) mod tests {
     /// `Action::unwired` is asked of all six verbs whether or not a group offers them.
     ///
     /// **`consequence` is in it now, and it is the half that was missing.**
-    /// `primitives.slint:716` is `text: root.enabled ? root.consequence : root.reason` — one slot,
+    /// `primitives.slint:726` is `text: root.enabled ? root.consequence : root.reason` — one slot,
     /// two producers — and only one of them was ever measured. So `removal_consequence` shipped at
     /// **880 px** in a 324 px slot and `devices.png` drew *The entry goes. Its iPod A446, seed
     /// 6182160 and its drive …*, cut off before the clause that says nothing is deleted, which is

@@ -53,7 +53,7 @@ import { IPod } from "ipod.slint";
 // Rust — `machine::cradle` returns it — so it has to be a field of `DeviceRow`, and `DeviceRow`
 // lives in `primitives.slint`, which this file imports. Declaring the enum here and the struct
 // there would be a cycle. Re-exported so every existing importer still names one place.
-import { Act, Pressable, CradleRing } from "primitives.slint";
+import { Act, Button, Pressable, CradleRing } from "primitives.slint";
 import { DrawerPage } from "drawer.slint";
 export { CradleRing } from "primitives.slint";
 
@@ -341,6 +341,17 @@ export component Bench inherits Rectangle {
     /// `has-devices` would be a second answer to it. It is false the moment there is an iPod,
     /// which is §22.3's *asked once* — the question is not re-asked once it has an answer.
     in property <bool> intents: false;
+
+    // ── §25's primary control ────────────────────────────────────────────────────────────────────
+    //
+    // **What it says is `machine::Primary`'s and never derived here.** `Make an iPod` on an empty
+    // bench, `Turn on` over a device, `Turn off` over a machine, `Making an iPod…` while the run
+    // that makes one is in flight — the same five states `machine::centre` answers the press in, so
+    // the button and the drawn centre button cannot come to disagree about one iPod. `main.rs`
+    // fills both fields out of one `DeviceRow`.
+    in property <string> primary-label;
+    in property <bool> primary-enabled: false;
+    callback primary();
     /// §22.3's second intent, and since §24 the only one with a control of its own. It opens the
     /// shelf and **must not touch the device apparatus once**: `play` never calls `map_hardware`,
     /// so a person who came for a game waits for no ROM, no IPSW, no drive and no boot.
@@ -624,6 +635,34 @@ export component Bench inherits Rectangle {
                     color: Ink.fg-dim;
                     vertical-alignment: center;
                     overflow: elide;
+                }
+
+                // ── §25: the offer, as a control ────────────────────────────────────────────
+                //
+                // **Here because this row is already in the vertical column and a new one is
+                // not.** §9.6's budget is the whole reason §22.3's two 44 px intents were
+                // refused — *"they would have taken height out of the device at every window
+                // size for the sake of one state"* — and `Geometry.button-h` IS `line-title`, so
+                // this control is inside the box the machine's name is already drawn in.
+                // `the_primary_control_costs_the_vertical_column_nothing` is what holds that.
+                //
+                // **And it is where the operator already looked.** §25 is a report of somebody
+                // opening this window and finding no way in: he went to the top-right, found the
+                // `Act` that opens the menu, and pressed that instead. A window's primary action
+                // belongs where a person looks for one; the caption under the device goes on
+                // doing §24's job, which is a different job.
+                //
+                // The name is `horizontal-stretch: 1` and elides, so this and the state slot get
+                // their intrinsic widths at every measure and the device's name is what gives.
+                Button {
+                    label: root.primary-label;
+                    enabled: root.primary-enabled;
+                    // §9.4's announcement, and the sentence itself is the cradle caption one
+                    // band down — where §7.3 already puts *why this cannot be pressed*, next to
+                    // the device it is about. Two copies of a refusal on one screen is what §7.6
+                    // spent a section refusing.
+                    reason: root.primary-enabled ? "" : root.cradle-label;
+                    activated => { root.primary(); }
                 }
             }
 

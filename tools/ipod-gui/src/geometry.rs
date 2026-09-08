@@ -409,6 +409,24 @@ geometry! {
     LINE_TITLE:       Px = 28.0;
     /// §6.2's `body` line box — *14 / 20*. §11.4's identifications, on the caption's second line.
     LINE_BODY:        Px = 20.0;
+
+    // ── §25's primary control ──
+    //
+    // **A button, and it costs the vertical column nothing.** §9.6's budget is why §22.3's two
+    // 44 px intents were refused — they took height out of the device at every window size for the
+    // sake of one state — so the one place a control can stand without being paid for is a row the
+    // column already reserves. That is the caption above the device: [`LINE_TITLE`] holds the
+    // machine's name and its state, and this is the same box.
+    //
+    // Written as the term rather than as a second 28, so a type-scale change moves the control with
+    // the row it sits in. `the_primary_control_costs_the_vertical_column_nothing` is what holds it.
+    BUTTON_H:         Px = LINE_TITLE;
+    /// **Half the height, so it is a pill.** [`CONTROL_R`] is 4 and belongs to a 16 px checkbox; at
+    /// 28 px the same radius reads as a field rather than as a button, which is the whole of what
+    /// this control exists to stop being. A radius is a fraction of the thing it is on (see
+    /// `CONTROL_R`'s own note), and at this height the fraction that reads as *press me* is a half —
+    /// the shape the drawn centre button under it already has.
+    BUTTON_R:         Px = BUTTON_H / 2.0;
     /// §9.5's pane: the measure its two sentences are set at, and the width of its primary Row.
     ///
     /// **Derived, never typed.** The narrowest well this window can produce is [`MIN_WIDTH`] —
@@ -905,7 +923,7 @@ pub const ACT_MEASURE: f64 = REFUSAL_MEASURE - 2.0 * PAGE_MARGIN;
 ///
 /// **Written as the expression rather than as 48**, so a re-measured [`BODY_ADVANCE`] or a
 /// re-measured body moves every sentence that has to fit rather than leaving a stale number here.
-/// The label is `width: frame.width` (`ui/bench.slint:1026`), and the frame is the body plus one
+/// The label is `width: frame.width` (`ui/bench.slint:1065`), and the frame is the body plus one
 /// [`CRADLE_BAND`] on each side:
 ///
 /// ```text
@@ -1362,6 +1380,39 @@ mod tests {
             "the pane is set at {SHORT_MEASURE} across with {WELL_AIR} of air a side, and the \
              narrowest well this window has is {narrowest}"
         );
+    }
+
+    /// **§25's primary control is inside a row the column already reserves, and costs it nothing.**
+    ///
+    /// §9.6's vertical budget is the reason §22.3's two 44 px intents were refused: *"they would
+    /// have taken height out of the device at every window size for the sake of one state."* The
+    /// button §25 adds is not that, and this is what makes the claim checkable rather than
+    /// asserted — it is drawn in the caption's own `LINE_TITLE` box, beside the machine's name, so
+    /// [`CHROME_MIN`] and [`CHROME_PREF`] are unchanged and [`k`] decides the same scale on the
+    /// same displays.
+    ///
+    /// **How to make it go red:** give [`BUTTON_H`] a value of its own — 32, say, which is what a
+    /// button *feels* like it should be — and the first assertion fires. It is the whole
+    /// difference between a control that costs a display class and one that does not.
+    #[test]
+    fn the_primary_control_costs_the_vertical_column_nothing() {
+        assert_eq!(
+            BUTTON_H, LINE_TITLE,
+            "the primary control is {BUTTON_H} tall in a row the column reserves {LINE_TITLE} for, \
+             so it is a term in CHROME_MIN and CHROME_PREF and neither of them has it"
+        );
+        // The column is unchanged, which is the same sum `the_column_terms_sum_to_the_declared_
+        // chrome` makes — restated here against the two numbers §9.6 tabulates display classes
+        // from, because what a reader wants to know is that the device did not shrink.
+        assert_eq!(CHROME_MIN, 130.0);
+        assert_eq!(CHROME_PREF, 166.0);
+        assert_eq!(PREF_HEIGHT, 822.0);
+        // A pill, not a rounded box: the radius is half the height by construction, so a
+        // type-scale change cannot leave a 28 px control wearing a 4 px corner. Both `BUTTON_R`
+        // and `CONTROL_R` are consts, so `BUTTON_R > CONTROL_R` is an assertion clippy can fold —
+        // the comparison that carries information is against the height it is derived from, and
+        // that is the one written.
+        assert_eq!(BUTTON_R * 2.0, BUTTON_H);
     }
 
     /// [`CHROME_MIN`] and [`CHROME_PREF`] are not typed-in totals.
