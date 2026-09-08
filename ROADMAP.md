@@ -466,6 +466,17 @@ with the evidence gone, because the wait would now be hidden inside generated co
 then compile. The interpreter also stays: it is the differential oracle a JIT is checked against,
 the same way two operating systems check the device models.
 
+**The halted half of the second clause is done, 2026-09-08, and it was not slowness.** A booted iPod
+at its menu is halted for about 99 % of its cycles and the loop was running a full iteration for each
+one, so the machine paid host CPU at the same rate whether it was working or waiting: 180 M cycles of
+a restored, booted machine cost 6.1 s and executed 1.69 M instructions. A halted stretch is now
+settled arithmetically (`Machine::idle_jump`) — 0.22 s for the same 180 M, byte-identical output —
+which takes idle out of the "real-time speed" question entirely. **It moves neither number in the
+first paragraph.** The ~300 s of simulated time to the menu is unchanged, because it is spent
+executing, and so is the interpreter's ~30 %. What it removes is a confound: a wall-clock figure
+taken at a menu used to be dominated by halting and is now a measurement of the executing part, which
+is the part M7 is about.
+
 **Settled by:** a cold boot reaching the language picker in a simulated time of the same order as
 the hardware, and the window reporting ≥ 100 % of real time.
 

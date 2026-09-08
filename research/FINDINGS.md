@@ -8,7 +8,7 @@ that. What it adds is a way to tell a live answer from a dead one **without read
 whole file** — because a document that grows by addendum puts its current answer at the
 bottom, and nothing on the page says so.
 
-934 headings across 18 documents — 56 dated, 19 settled, 15 retracted, 6 corrected.
+946 headings across 18 documents — 60 dated, 19 settled, 15 retracted, 6 corrected.
 
 ## Where each document stands today
 
@@ -20,11 +20,11 @@ above it in the same document may have been superseded.
 | [`01-build-log.md`](01-build-log.md) | App Store — reassessed 2026-08-11 (an earlier "realistically no" here was… | `2026-08-11` |  |
 | [`02-retailos-boot.md`](02-retailos-boot.md) | *nothing in it is dated* | — | |
 | [`03-rtxc-and-the-video-coprocessor.md`](03-rtxc-and-the-video-coprocessor.md) | 58.  The audio subsystem does start — it needs the coprocessor, 2026-09-05 | `2026-09-05` | settled |
-| [`04-bypass-ledger.md`](04-bypass-ledger.md) | Caveat on the interrupt-wake fix (2026-08-31) — it stops the machine idli… | `2026-08-31` |  |
+| [`04-bypass-ledger.md`](04-bypass-ledger.md) | #6 read off the hardware — 2026-09-24 | `2026-09-24` |  |
 | [`05-the-chip-inventory.md`](05-the-chip-inventory.md) | Scrolling settled: there is no acceleration, and the fold is ours — 2026-… | `2026-09-07` |  |
 | [`06-rockbox-as-oracle.md`](06-rockbox-as-oracle.md) | Doom is played: input reaches the game, and the press has to land inside… | `2026-09-06` |  |
 | [`07-the-flash-images.md`](07-the-flash-images.md) | The storm was the vector table, and the chord now takes input — 2026-09-06 | `2026-09-06` | settled |
-| [`08-differential-register-map.md`](08-differential-register-map.md) | *nothing in it is dated* | — | |
+| [`08-differential-register-map.md`](08-differential-register-map.md) | The IIS registers `PAUSED.md` blamed are real — 2026-09-24 | `2026-09-24` |  |
 | [`09-what-the-hardware-must-supply.md`](09-what-the-hardware-must-supply.md) | GPIOL, and what it exposed — **RESOLVED 2026-08-14, and both halves below… | `2026-08-14` |  |
 | [`10-the-resource-image.md`](10-the-resource-image.md) | 8b. The audit this fix owed, run 2026-08-13 | `2026-08-13` |  |
 | [`11-the-videocore-runtime.md`](11-the-videocore-runtime.md) | *nothing in it is dated* | — | |
@@ -112,13 +112,14 @@ and nothing dated replaced it.
 
 ### [`04-bypass-ledger.md`](04-bypass-ledger.md)
 
-27 headings, 3 of them marked or dated:
+31 headings, 4 of them marked or dated:
 
 | line | when | state | heading |
 |---|---|---|---|
 | 583 | — | settled | snapshot / restore —  faithful; the control that condemned it was wrong |
 | 858 | 2026-08-13 |  | Independent corroboration from `daniel5151/clicky` (2026-08-13) |
 | 960 | 2026-08-31 |  | Caveat on the interrupt-wake fix (2026-08-31) — it stops the machine idling |
+| 992 | 2026-09-24 |  | #6 read off the hardware — 2026-09-24 |
 
 ### [`05-the-chip-inventory.md`](05-the-chip-inventory.md)
 
@@ -143,9 +144,9 @@ and nothing dated replaced it.
 | 1300 | 2026-08-18 |  | 2026-08-18, later still: the menu's font was never on the volume the recipe mounts |
 | 1416 | 2026-08-18 |  | 2026-08-18: the yellow dashes are the gif encoder, and the raw frames say so |
 | 1499 | 2026-08-18 |  | 2026-08-18, later still: the cold boot stops powering off, and starts stalling |
-| 1908 | 2026-09-01 |  | `--cop-awake` does not unblock Doom — it stops the machine entirely (2026-09-01) |
-| 1948 | 2026-09-06 |  | What Doom was waiting for: an interrupt enable this machine threw away (2026-09-06) |
-| 2080 | 2026-09-06 |  | Doom is played: input reaches the game, and the press has to land inside a poll windo… |
+| 1917 | 2026-09-01 |  | `--cop-awake` does not unblock Doom — it stops the machine entirely (2026-09-01) |
+| 1957 | 2026-09-06 |  | What Doom was waiting for: an interrupt enable this machine threw away (2026-09-06) |
+| 2089 | 2026-09-06 |  | Doom is played: input reaches the game, and the press has to land inside a poll windo… |
 
 ### [`07-the-flash-images.md`](07-the-flash-images.md)
 
@@ -157,7 +158,13 @@ and nothing dated replaced it.
 
 ### [`08-differential-register-map.md`](08-differential-register-map.md)
 
-4 headings, none of them marked or dated.
+12 headings, 3 of them marked or dated:
+
+| line | when | state | heading |
+|---|---|---|---|
+| 90 | 2026-09-24 |  | The registers, read off the hardware at last — 2026-09-24 |
+| 141 | 2026-09-24 |  | The full 64 KB, and a live register nobody has named — 2026-09-24 |
+| 189 | 2026-09-24 |  | The IIS registers `PAUSED.md` blamed are real — 2026-09-24 |
 
 ### [`09-what-the-hardware-must-supply.md`](09-what-the-hardware-must-supply.md)
 

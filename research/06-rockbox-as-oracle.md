@@ -1502,6 +1502,15 @@ this because they are 256-colour with `dither=none`, which is a mitigation and n
 a halted core now costs a loop iteration instead of jumping to the next deadline — fixed it as a
 side effect:
 
+> **The parenthetical is superseded, the finding is not — 2026-09-08.** A halted core no longer
+> costs a loop iteration; a stretch of halted cycles is settled in closed form (`Machine::idle_jump`)
+> and only the host's walk is skipped. What made the ADC read correctly was never the iteration — it
+> was that the **clock** stopped moving ten milliseconds between two adjacent instructions, and that
+> is exactly as true now: the jump charges every microsecond it skips and lands on the cycle the walk
+> would have. Not re-measured on the recipe that produced the table below; what was measured is
+> `ipod-boot rockbox` at BUDGET=1 500 000 000, which comes out **byte-identical** across the change —
+> every i2c count in its report included — in 5.3 s instead of 41.5.
+
 | | `reg 0x2f` writes | last value |
 |---|---|---|
 | before the clock change | 9 240 | `0x00` |
