@@ -89,9 +89,22 @@ export component ReferencePage inherits Rectangle {
                     // construction and the same argument as §21.3's one horizontal rule. `if`
                     // rather than `visible` because a 1 px line holds no focus, no hover and no
                     // scroll offset, which is the whole of §16.3's rule.
+                    // **Air and an inset hair, which is §23's band break** — the same construction
+                    // `verbs.slint` uses, because this is the same thing: four sections of a list,
+                    // separated. A full-bleed `Ink.line` immediately under the last key of one
+                    // group and immediately over the heading of the next left the heading sitting
+                    // on a rule (read `_out/gui/reference.png` before this), which is a table.
                     if r.heading != "" && i > 0: Rectangle {
-                        height: 1px;
-                        background: Ink.line;
+                        height: Metric.s5;
+                        background: Ink.bg;
+
+                        Rectangle {
+                            x: Geometry.page-margin;
+                            y: (parent.height - self.height) / 2;
+                            width: parent.width - 2 * Geometry.page-margin;
+                            height: 1px;
+                            background: Ink.separator;
+                        }
                     }
 
                     if r.heading != "": Row {

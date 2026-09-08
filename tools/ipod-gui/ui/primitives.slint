@@ -694,7 +694,7 @@ export component Pressable inherits Rectangle {
                             font-weight: Metric.weight-label;
                             color: !root.enabled
                                 ? Ink.fg-disabled
-                                : (root.selected ? #ffffff : Ink.fg-dim);
+                                : (root.selected ? Ink.on-material : Ink.fg-dim);
                             overflow: elide;
                             vertical-alignment: center;
                         }
@@ -713,23 +713,59 @@ export component Pressable inherits Rectangle {
         }
     }
 
-    // §8.1 item 9: the focus ring is instant, always. A focus ring that animates is a focus ring
-    // you lose.
+    // ── §23: the ring is offset from the control, and it is not the control's outline ─────────
+    //
+    // **What this replaced traced the row exactly**: `width: 100%`, `height: 100%`, a 2 px accent
+    // border — on a component that runs from the page's leading edge to its trailing one. A focus
+    // indicator drawn on the silhouette of the thing it indicates is not read as an indicator; it
+    // is read as *that row has a box round it*, and the reader has to work out whether the box is
+    // chrome or content. The operator's own words about the cradle's version of the same mistake —
+    // *"i dont like the border around the ipod"* — are about this construction one surface over.
+    //
+    // So: inset by [`Geometry.focus-inset`], with a corner radius of its own, and a one-pixel
+    // falloff outside it in `Ink.focus-halo`. The radius is the tell. A rounded ring inside a
+    // square full-bleed row cannot be mistaken for the row's border, because the row has no
+    // corners there.
+    //
+    // **Both rings are drawn, halo first, and neither moves anything.** They are absolutely
+    // positioned siblings over the whole control, exactly as the pair they replace were — so a
+    // control that gains focus still changes no height and shuffles no row below it (principle 2).
+    //
+    // §8.1 item 9: instant, always. A focus ring that animates is a focus ring you lose.
     Rectangle {
-        width: 100%;
-        height: 100%;
-        border-width: Geometry.focus-ring-w;
-        border-color: Ink.accent;
+        x: Geometry.focus-inset - Geometry.focus-halo-w;
+        y: Geometry.focus-inset - Geometry.focus-halo-w;
+        width: parent.width - 2 * (Geometry.focus-inset - Geometry.focus-halo-w);
+        height: parent.height - 2 * (Geometry.focus-inset - Geometry.focus-halo-w);
+        border-width: Geometry.focus-ring-w + Geometry.focus-halo-w;
+        border-color: Ink.focus-halo;
+        border-radius: Geometry.focus-r + Geometry.focus-halo-w;
         visible: focus.has-focus || root.focus-inside;
     }
 
-    // §11.3: the first of two presses has been taken. Same weight as the focus ring, `danger`
-    // rather than `accent`, and it too is instant.
     Rectangle {
-        width: 100%;
-        height: 100%;
+        x: Geometry.focus-inset;
+        y: Geometry.focus-inset;
+        width: parent.width - 2 * Geometry.focus-inset;
+        height: parent.height - 2 * Geometry.focus-inset;
+        border-width: Geometry.focus-ring-w;
+        border-color: Ink.accent;
+        border-radius: Geometry.focus-r;
+        visible: focus.has-focus || root.focus-inside;
+    }
+
+    // §11.3: the first of two presses has been taken. Same construction as the focus ring, `danger`
+    // rather than `accent`, and it too is instant. **The same geometry deliberately** — arming and
+    // focusing are both annotations on a row rather than states of it, and drawing one as an inset
+    // ring and the other as an outline would say they are different kinds of thing.
+    Rectangle {
+        x: Geometry.focus-inset;
+        y: Geometry.focus-inset;
+        width: parent.width - 2 * Geometry.focus-inset;
+        height: parent.height - 2 * Geometry.focus-inset;
         border-width: Geometry.focus-ring-w;
         border-color: Ink.danger;
+        border-radius: Geometry.focus-r;
         visible: root.armed;
     }
 
@@ -835,6 +871,13 @@ export component Act inherits Rectangle {
     // this drew itself 2 px outside the control at first, which is both a geometry literal
     // (`no_geometry_literal_survives_in_the_markup` said so) and a second way of drawing one
     // thing. `Geometry.focus-ring-w` is the one width.
+    //
+    // **§23's offset is not applied here, and that is the rule rather than an exception.** `Act`
+    // is a 24 px disc whose own silhouette is a circle; a ring on it is concentric with the
+    // control and reads as a ring around a button, which is what a focus ring on a round control
+    // is supposed to look like. What §23 forbids is tracing a *full-bleed row's* rectangle, where
+    // the outline and the page's own edge are the same line. Insetting a 24 px disc by 3 would
+    // leave an 18 px ring inside a 24 px button, which is a smaller button.
     Rectangle {
         width: 100%;
         height: 100%;
@@ -906,7 +949,7 @@ export component Row inherits Pressable {
         font-weight: root.heading ? Metric.weight-title : Metric.weight-body;
         color: !root.enabled
             ? Ink.fg-disabled
-            : (root.selected ? #ffffff : Ink.fg);
+            : (root.selected ? Ink.on-material : Ink.fg);
         overflow: elide;
         vertical-alignment: center;
     }
@@ -1220,7 +1263,7 @@ export component Field inherits Rectangle {
                         font-weight: Metric.weight-body;
                         color: root.locked ? Ink.fg-disabled : Ink.fg;
                         selection-background-color: Ink.accent;
-                        selection-foreground-color: #ffffff;
+                        selection-foreground-color: Ink.on-material;
                         single-line: true;
                         wrap: no-wrap;
                         vertical-alignment: center;
@@ -1378,12 +1421,12 @@ export component Check inherits Pressable {
             height: Metric.s4;
             border-width: 1px;
             border-color: root.enabled ? Ink.line : Ink.fg-disabled;
-            border-radius: 1px;
+            border-radius: Geometry.control-r;
             background: root.on && root.enabled ? Ink.accent : Ink.bg;
 
             Icon {
                 kind: "check";
-                ink: #ffffff;
+                ink: Ink.on-material;
                 x: 0;
                 y: 0;
                 width: 100%;
@@ -1438,12 +1481,12 @@ export component ToggleRow inherits Pressable {
             height: Metric.s4;
             border-width: 1px;
             border-color: root.enabled ? Ink.line : Ink.fg-disabled;
-            border-radius: 1px;
+            border-radius: Geometry.control-r;
             background: root.checked && root.enabled ? Ink.accent : Ink.bg;
 
             Icon {
                 kind: "check";
-                ink: #ffffff;
+                ink: Ink.on-material;
                 x: 0;
                 y: 0;
                 width: 100%;
@@ -1472,10 +1515,13 @@ export component DrawerHeader inherits Rectangle {
     height: Geometry.drawer-header-h;
     background: @linear-gradient(180deg, Ink.bg-band-top 0%, Ink.bg-band-bottom 100%);
 
+    // §23: `Ink.separator` rather than `Ink.line` at half alpha. Two spellings of *a hair between
+    // two things* is how the drawer header's rule and the menu's band rules came to be drawn at
+    // different weights while claiming to be the same line.
     Rectangle {
         y: parent.height - 1px;
         height: 1px;
-        background: Ink.line.with-alpha(0.5);
+        background: Ink.separator;
     }
 
     // No `alignment` — see the note in `Pressable`.
@@ -1682,6 +1728,16 @@ export component Tile inherits Rectangle {
         // a white card somebody forgot to fill.
         background: Ink.bg-sunken;
         clip: true;
+        // **A corner and an edge, because somebody's artwork is not a rectangle of colour**
+        // (§23, 2026-09-07). `_out/gui/games.png` drew three covers as bare rectangles — a flat
+        // red one and a flat blue one hard against a white page, with nothing saying where the
+        // artwork stopped and the page started. The radius is `CONTROL_R`, small enough not to
+        // crop what is in the corners of a 320 x 216 picture; the hairline is `separator`, which is
+        // the one colour on this surface whose job is to say *this is an edge* without drawing a
+        // border round a picture.
+        border-radius: Geometry.control-r;
+        border-width: 1px;
+        border-color: Ink.separator;
 
         // **`visible`, not `if`** (§16.3): this holds a decoded bitmap, and rebuilding the subtree
         // on every re-push would re-upload it.
@@ -1749,6 +1805,13 @@ export component Tile inherits Rectangle {
 
     // The armed ring, around the picture rather than around the caption: what is selected is the
     // game, and the caption is a label on it.
+    //
+    // **It follows the cover's own corner now** (§23). A square ring over a rounded picture left
+    // four accent pips sticking out past the artwork at the corners — the ring and the thing it
+    // was ringing did not agree about their shape, which is the same defect §23 names on a row,
+    // reached from the other direction. Here the ring *should* trace the picture, because the
+    // picture is a discrete object with an edge of its own; what it must do is trace the edge that
+    // is actually drawn.
     Rectangle {
         x: 0;
         y: 0;
@@ -1756,6 +1819,7 @@ export component Tile inherits Rectangle {
         height: Geometry.cover-h;
         border-width: Geometry.focus-ring-w;
         border-color: Ink.accent;
+        border-radius: Geometry.control-r;
         visible: root.armed && root.enabled;
     }
 

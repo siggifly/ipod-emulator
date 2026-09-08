@@ -123,9 +123,12 @@ geometry! {
     GAP_2_MIN:        Px = 8.0;
     /// Everything in the column that is not the body, at minimum. Declared, then derived from the
     /// terms by `the_column_terms_sum_to_the_declared_chrome`.
-    CHROME_MIN:       Px = 128.0;
-    /// Everything in the column that is not the body, preferred.
-    CHROME_PREF:      Px = 164.0;
+    /// **128 → 130 with `LINE_TITLE` 26 → 28** (§6.2's type scale, 2026-09-07). The column gained
+    /// exactly the two pixels the heading's line box did, and `the_column_terms_sum_to_the_declared_
+    /// chrome` is what proves it is those two and not a typed number that happens to be close.
+    CHROME_MIN:       Px = 130.0;
+    /// Everything in the column that is not the body, preferred. 164 → 166, same two pixels.
+    CHROME_PREF:      Px = 166.0;
 
     // ── §9.6 the horizontal budget, logical px ──
 
@@ -211,6 +214,43 @@ geometry! {
     /// a border, and a focus ring has to be visible against the material as well as against the
     /// page.
     FOCUS_RING_W:     Px = 2.0;
+    /// **How far inside its own control the focus ring is drawn** — §23, 2026-09-07.
+    ///
+    /// A `Pressable` is a full-bleed row: it runs from the page's leading edge to its trailing one,
+    /// and a 2 px border on it traces the row's own rectangle exactly. That is the shape this
+    /// window drew, and it is the shape no Apple surface draws — a focus indicator that follows the
+    /// silhouette of the thing it is indicating reads as *a box*, and the reader has to work out
+    /// whether the box is chrome or content. The convention is a ring **offset from** the control's
+    /// edge, with its own corner radius, so it is legible as an annotation rather than as an
+    /// outline.
+    ///
+    /// Three pixels is the smallest offset that reads as one at this row height: at 2 the ring
+    /// still touches the row's ends under antialiasing, and at 4 the ring's own corners start to
+    /// crowd a 44 px cell.
+    FOCUS_INSET:      Px = 3.0;
+    /// The focus ring's corner radius. A rounded ring inside a square row is the whole tell that it
+    /// is not the row's border — see [`FOCUS_INSET`].
+    FOCUS_R:          Px = 8.0;
+    /// **The corner radius of a small drawn control** — a checkbox, a cover's well, a tile's
+    /// picture (§23, 2026-09-07).
+    ///
+    /// It was `1px` at four sites, which is a square with the aliasing taken off rather than a
+    /// rounded corner: `_out/gui/settings.png` drew two checkboxes as bare 16 px squares and
+    /// `_out/gui/games.png` drew three covers as bare rectangles butted against the page. Four is
+    /// the radius at which a 16 px control reads as rounded and a 180 px one still reads as a
+    /// rectangle, which is what both of these want — a cover is somebody's artwork and rounding it
+    /// hard would crop the corners of it.
+    ///
+    /// Not [`FOCUS_R`], which is 8 and belongs to a 44 px row. A radius is a fraction of the thing
+    /// it is on, and one constant for both would put an 8 px corner on a 16 px box.
+    CONTROL_R:        Px = 4.0;
+    /// **The soft half of the ring**, drawn one step outside the crisp one in `Ink.focus-halo`.
+    ///
+    /// One pixel, because it is a falloff and not a second stroke: two visible rings is what §6.4
+    /// already rejected on the cradle (*"a ring around a ring in one colour, which is not a focus
+    /// indicator"*), and the answer there was a different colour. The answer here is a different
+    /// **alpha**, which is the same argument answered without spending a second role.
+    FOCUS_HALO_W:     Px = 1.0;
     /// §10.1's ghost: the drawn iPod, in `Colour::Unspecified`, at 45 % — **an iPod that has not
     /// been decided yet**, which is what an empty bench has.
     ///
@@ -354,13 +394,19 @@ geometry! {
     /// is a container height and that is what this is. The other five roles get theirs when they
     /// get a use site.
     LINE_LABEL:       Px = 16.0;
-    /// §6.2's `title` line box — *20 / 26*. The caption above the device is its use site.
+    /// §6.2's `title` line box — *22 / 28*. The caption above the device is its use site.
     ///
     /// It lived in `ui/bench.slint` as `Metric.title-size + Metric.s3 / 2` while `src/geometry.rs`
     /// had a different owner; the stated retirement condition was *when `geometry.rs` declares it*,
     /// and this is that. Written as the number the design states, checked against the type scale by
-    /// `the_shelf_line_boxes_are_the_type_scales`.
-    LINE_TITLE:       Px = 26.0;
+    /// [`the_line_boxes_hold_the_faces_they_are_declared_for`].
+    ///
+    /// **26 → 28 with `title-size` 20 → 22** (§6.2, 2026-09-07). The ratio is the one the other two
+    /// line boxes already keep, and the test now enforces it rather than citing a check that was
+    /// never written: this doc comment named `the_shelf_line_boxes_are_the_type_scales` for weeks
+    /// and **no function of that name existed anywhere in the repository**, so the one number the
+    /// comment promised was checked was the one number nothing looked at.
+    LINE_TITLE:       Px = 28.0;
     /// §6.2's `body` line box — *14 / 20*. §11.4's identifications, on the caption's second line.
     LINE_BODY:        Px = 20.0;
     /// §9.5's pane: the measure its two sentences are set at, and the width of its primary Row.
@@ -528,7 +574,11 @@ geometry! {
     /// `k`, and §16.1 is why neither of them may read `hero` to try.
     PREF_WIDTH:       Px = MIN_WIDTH;
     /// The k = 1, sf = 1 case of body + [`CHROME_PREF`], rounded up. Not a round number.
-    PREF_HEIGHT:      Px = 820.0;
+    ///
+    /// 820 → 822, because [`CHROME_PREF`] took `LINE_TITLE`'s two pixels (§6.2, 2026-09-07). The
+    /// window opens two pixels taller and the device is the same size it was, which is the whole
+    /// arrangement working: the heading grew and the iPod did not pay for it.
+    PREF_HEIGHT:      Px = 822.0;
 
     // ── The two small drawings (§6.6) ──
     //
@@ -855,7 +905,7 @@ pub const ACT_MEASURE: f64 = REFUSAL_MEASURE - 2.0 * PAGE_MARGIN;
 ///
 /// **Written as the expression rather than as 48**, so a re-measured [`BODY_ADVANCE`] or a
 /// re-measured body moves every sentence that has to fit rather than leaving a stale number here.
-/// The label is `width: frame.width` (`ui/bench.slint:983`), and the frame is the body plus one
+/// The label is `width: frame.width` (`ui/bench.slint:1011`), and the frame is the body plus one
 /// [`CRADLE_BAND`] on each side:
 ///
 /// ```text
@@ -2040,9 +2090,19 @@ mod tests {
     const COSMETIC_OPACITIES: &[&str] = &[
         "0.0", // off — `ipod.slint`'s dark panel and unlit hold switch
         "1.0", // on, and the identity every ternary above returns to
-        "0.55", // §7.4's four held wheel marks (`ipod.slint:343-373`)
-        "0.82", // the held centre button (`ipod.slint:396`)
-        "0.86", // §5's `Pressable` press state (`primitives.slint:649`)
+        // **All three line numbers were stale and nothing could see it** (§23, 2026-09-07). They
+        // named 343-373, 396 and 649 — lines that now hold a `cancel` comment, a pointer handler
+        // and a note about the material — because `ipod.slint` and `primitives.slint` were both
+        // restructured and a comment does not move with the code it points at.
+        //
+        // `every_comment_that_names_a_line_still_describes_it` is green on them, and that is the
+        // finding rather than a complaint: its anchor is the **backticked token** nearest the
+        // citation, and each of these anchors its citation in *prose* — `§7.4's four held wheel
+        // marks`, `the held centre button`. With nothing backticked to look for, the sweep has
+        // nothing to check and skips rather than guesses. Re-measured by reading each line.
+        "0.55", // §7.4's four held wheel marks (`ipod.slint:587-617`)
+        "0.82", // the held centre button (`ipod.slint:649`)
+        "0.86", // §5's `Pressable` press state (`primitives.slint:654`)
     ];
 
     /// **T-20. The ghost's 45 % cannot be typed into the markup.**
@@ -2813,6 +2873,58 @@ mod tests {
             "only {verbs:?} parsed out of ui/rail.slint's verb list; the sweep is reading nothing"
         );
         verbs
+    }
+
+    /// **The line boxes hold the faces they are declared for, and the reason slot is its two
+    /// lines** — the check [`LINE_TITLE`] cited for weeks under a name that existed nowhere.
+    ///
+    /// `Text` has no `line-height` in Slint 1.17, so §6.2's `20 / 26` column is not a property: a
+    /// line box is a **container height** and the row that carries the type sets it. That makes the
+    /// pairing of a face with its box a thing two files agree about by hand, which is exactly the
+    /// shape that drifts — and [`LINE_TITLE`]'s doc comment promised
+    /// `the_shelf_line_boxes_are_the_type_scales` was watching it. **No function of that name
+    /// existed in this repository**, so nothing was.
+    ///
+    /// **What it asserts, and what it deliberately does not.** The bound is loose — a box holds its
+    /// face and adds no more than half of it again — because §6.2's own table uses leadings of 4, 5
+    /// and 6 px across five roles and there is no single ratio to hold them to. A loose bound
+    /// catches the failure that actually happens (a face grows, its box does not, and the descenders
+    /// clip) and does not pretend to catch a two-pixel re-tuning, which is a design decision rather
+    /// than a defect.
+    ///
+    /// **The clause with teeth is the second one.** [`FIELD_REASON`] is not an independent number:
+    /// §9.4's slot is a reason line and an escape-hatch line, so it is [`LINE_LABEL`] plus
+    /// [`LINE_MONO`] and nothing else. That equality is what stopped `mono-size` 13 → 12 from taking
+    /// [`LINE_MONO`] down with it in the 2026-09-07 type pass — shrinking the face inside a fixed
+    /// box is free, and shrinking the box would have moved every §9.4 budget in the program for
+    /// nothing. Set `LINE_MONO` to 16 and this goes red.
+    #[test]
+    fn the_line_boxes_hold_the_faces_they_are_declared_for() {
+        for (role, face, box_h) in [
+            ("title", markup_space("title-size"), LINE_TITLE),
+            ("body", markup_space("body-size"), LINE_BODY),
+            ("label", markup_space("label-size"), LINE_LABEL),
+            ("mono", markup_space("mono-size"), LINE_MONO),
+        ] {
+            assert!(
+                box_h > face,
+                "§6.2's `{role}` is {face} px in a {box_h} px line box, which cannot hold its own \
+                 descenders — a box is a container height here, not a `line-height`"
+            );
+            assert!(
+                box_h <= face * 1.5,
+                "§6.2's `{role}` is {face} px in a {box_h} px line box — more than half the face \
+                 again in leading, which is vertical budget §9.6 has none of"
+            );
+        }
+
+        assert_eq!(
+            LINE_LABEL + LINE_MONO,
+            FIELD_REASON,
+            "§9.4's reason slot is a reason line ({LINE_LABEL}) and an escape-hatch line \
+             ({LINE_MONO}), and it declares {FIELD_REASON} — so the slot is not the two lines it \
+             draws and one of them is clipped or floating"
+        );
     }
 
     /// **T-18. The Rail's verb column holds the longest verb this program can draw.**

@@ -7284,3 +7284,254 @@ device, its geometry, its wheel and its haptics. §14.3 survives with its openin
 rewritten: the menu is still not a sidebar, and the difference is now that it cannot be on screen
 beside the thing it is about.
 
+---
+
+## 23. The visual pass — restraint, and what an unrefused row shows
+
+**Status: BUILT, 2026-09-07.** The operator, after a day of using it: *"we stay on slint for now,
+and we keep the ipod form factor, but we need it to be better and look great, almost like apple
+designed it."*
+
+**The structure is not what changed.** §22's rule about refusals, the one switch, the two intents on
+the caption line, the covers grid, the menu covering the window, the drawn device and its wheel are
+all untouched. Four designs have already been thrown away by starting from a shape (see
+`docs/what-the-window-must-make-possible.md`); this is not a fifth. What changed is how it is drawn,
+and — in exactly one place, §23.5 — what a row that is not refused says.
+
+**And the reference is Apple's own iOS Simulator**, which §14.6 already cites: the device, and
+almost nothing else.
+
+### 23.1 The type scale is three sizes
+
+**20 / 14 / 13 / 12 is four sizes, three of them inside two pixels of each other.** At that spacing a
+size is not a hierarchy — `label` at 12 and `mono` at 13 differ by less than the hinting does — so
+what actually told a heading from a body line was **colour**, and the page came out flat and grey.
+
+| role | was | is | why |
+|---|---|---|---|
+| `title` | 20 / 26 | **22 / 28** | against a 14 px body, 20 reads as body-that-got-bigger. 22 is a ratio of 1.57 and reads as a heading |
+| `body` | 14 / 20 | 14 / 20 | pinned to `geometry::BODY_SIZE`, which two column budgets are derived from |
+| `label` | 12 / 16 | 12 / 16 | the reason slot's own face, and §9.4's fullest sentence already spends 99.5 % of its slot |
+| `mono` | 13 / 18 | **12 / 18** | a monospace face at the same nominal size as a proportional one reads a size larger; 12 beside 14 is the optical match 13 was reaching for |
+
+`mono` moving onto `label`'s step is what deletes a size rather than merely re-tuning one. The scale
+is **22 / 14 / 12**, and 12 is one step wearing two faces — which is what a scale with large jumps
+has to do when a surface needs both prose and a path.
+
+**`LINE_MONO` deliberately did not move with it.** It is 18, `LINE_LABEL` is 16, and the two sum to
+`FIELD_REASON` 34 exactly. Shrinking a face inside a fixed box is free; shrinking the box would have
+moved every §9.4 budget in the program to buy nothing.
+
+**`LINE_TITLE` 26 → 28 costs two pixels of the vertical column and the device pays none of it**:
+`CHROME_MIN` 128 → 130, `CHROME_PREF` 164 → 166, `PREF_HEIGHT` 820 → 822. The window opens two
+pixels taller and the iPod is the same size it was.
+
+> **A citation that was checking nothing.** `LINE_TITLE`'s doc comment said it was *"checked against
+> the type scale by `the_shelf_line_boxes_are_the_type_scales`"*, and **no function of that name
+> existed anywhere in this repository**. The one number the comment promised was watched was the one
+> number nothing looked at. `the_line_boxes_hold_the_faces_they_are_declared_for` is that test,
+> written now: every box holds its face and adds no more than half of it again, and — the clause
+> with teeth — `FIELD_REASON == LINE_LABEL + LINE_MONO`, which is what stopped `mono-size` taking
+> `LINE_MONO` down with it.
+
+### 23.2 Colour — one accent, and the leaks come home
+
+**Ten `#ffffff` literals were the palette's missing role.** Five in `primitives.slint` and one each
+in `bench.slint`, `rail.slint` and `devices.slint`, plus two in `composer.slint` — every one of them
+*the label drawn on §6.5's material*. A colour written at ten call sites is a colour nobody can
+find, and `Ink.on-material` is now the name for it. **It is not `bg`**, which is also `#ffffff`
+today and is a different fact: `bg` is the colour of a drawer page and a dark scheme moves it to
+`#121212`, while this one has to stay white or the label vanishes into its own fill.
+
+Two roles are added and both are for things that were being spelled out inline:
+
+- **`separator` `#dfe2ea`.** `line` `#848ea5` is the right weight for the edge of a *region* and far
+  too much for the hair between two rows of one list — **3.28 : 1** on `bg`, drawn full-bleed, which
+  is what made every list on this surface read as a table. `separator` is **1.30 : 1**, deliberately
+  below every legibility floor in this document, because it is not carrying information: the rows
+  are.
+- **`focus-halo`**, the accent at the alpha a soft ring is drawn at. See §23.3.
+
+**The colours in `ipod.slint` stay in `ipod.slint`, and that is a decision rather than an
+omission.** `Ink` is the *window's* palette, and a role in it is a promise that any surface may use
+it; a bevel highlight computed against `chassis` is not a palette entry — it is one drawing's
+material, and `chassis` is an input that changes with the device in front of you. Putting
+`#ffffff1a` into `Ink` would invite a drawer row to reach for it, and the drawer has no plastic on
+it. What was wrong was not where they lived but that they were **inline at seven use sites** —
+thirteen hex values inside element bodies, against the two already declared at the top of the
+component (`chassis`, `marks`) — and that two of the seven were the same decision written two ways:
+the nub's catch-light and the glass's were `#ffffff1a` and the wheel's rim was `#ffffff14`, four hex
+digits apart, a difference no eye finds and no test could see. They are five named properties now —
+`edge`, `lip`, `seat`, `pressed-mark`, `glass-lip` — and every colour literal in the file is now a
+declaration in one block at the top of the component.
+
+**One literal survives outside both files and is named here so it is not re-found:**
+`bench.slint`'s `chassis: #e4e4e2`, which is `Colour::Unspecified` — the fallback an `IPod` is drawn
+in when no Rust has pushed a colour, i.e. in `slint-viewer` and the live preview. It is the same
+class as the device's own materials, and it is a *default* rather than a use site.
+
+### 23.3 The focus ring is offset, and never traces the control
+
+**What shipped traced the row exactly**: `width: 100%`, `height: 100%`, a 2 px accent border — on a
+component that runs from the page's leading edge to its trailing one. A focus indicator drawn on the
+silhouette of the thing it indicates is not read as an indicator. It is read as *that row has a box
+round it*, and the reader has to work out whether the box is chrome or content.
+
+The ring is now inset by `FOCUS_INSET` 3 with a corner radius of its own (`FOCUS_R` 8) and a 1 px
+falloff outside it in `Ink.focus-halo`. **The radius is the tell**: a rounded ring inside a square
+full-bleed row cannot be mistaken for the row's border, because the row has no corners there.
+
+Three places deliberately do **not** take the offset, and the rule is the same one each time — *the
+offset exists for a control whose silhouette is the page's own edge*:
+
+- **`Act`** is a 24 px disc. A ring concentric with a round button is what a focus ring on a round
+  button looks like; insetting it by 3 would leave an 18 px ring inside a 24 px control, which is a
+  smaller control.
+- **`Tile`**'s armed ring traces the cover, because a cover is a discrete object with an edge of its
+  own. What it now traces is the edge that is actually **drawn** — the cover gained `CONTROL_R`
+  corners, and a square ring over a rounded picture was leaving four accent pips sticking out past
+  the artwork.
+- **The cradle** keeps §6.4's arithmetic exactly: `Ink.fg` at 13.3 : 1 on the well, 6 px outside the
+  state ring. What it gains is the halo, and that is the whole of why it stopped reading as a box
+  round the product. `Ink.fg` is `#000000`, the hardest ink this palette has, and a 2 px pure-black
+  outline with nothing outside it is a drawn rectangle; the same stroke with a one-pixel
+  accent-tinted band around it is an indicator sitting on a surface. **The contrast argument is
+  untouched** — `the_cradle_colours_clear_three_to_one_against_the_well` reads `ring-ink`, which did
+  not move — and so is the modality gate, because the halo carries the same `visible`.
+
+### 23.4 The device is lit
+
+§6.6 has the device's *geometry* to five figures and had never said anything about its **lighting**,
+which is why `_out/gui/bench.png` was a white rounded rectangle with a black rectangle on it.
+
+**The light face had almost no gloss, and the reason is arithmetic rather than taste.** `#e4e4e2` is
+already at 89 % lightness, so `.brighter(0.06)` had 11 % of headroom to work in and moved the top
+stop about three levels — invisible. A white iPod's face does not read as glossy because it is
+*brighter* at the top; it reads as glossy because it **falls away** at the bottom, which is where
+there is room to move. The light arm keeps its small highlight and triples its falloff
+(`.darker(0.05)` → `.darker(0.15)`); the dark arm, which has all its headroom upward, is untouched.
+
+**The wheel is a recess and was drawn as a very slightly different flat disc** — `.brighter(0.02)`
+to `.darker(0.03)` on a light body, five levels of separation across the whole disc, over a
+`#00000014` rim. Two changes, both about lighting rather than about turning the contrast up:
+
+1. **The gradient is inverted relative to the face.** The body is lit from above: bright at the top,
+   falling away at the bottom. A dish cut into that surface is lit the *opposite* way — its top wall
+   is in shadow and its bottom wall catches the light. Swapping the two stops is the whole of what
+   makes the wheel read as sunk into the face instead of sitting on it, and it costs no extra
+   contrast at all.
+2. **The rim is a groove, not a catch-light.** The seam where a moulded dish meets a moulded face is
+   the darkest line on the front of the device. It is `seat` — the value the hold switch's own well
+   already used — so the two seams on the face are one decision.
+
+**The centre button is lit like the face and not like the wheel**, because it is a boss inside a
+dish: it stands proud of the wheel's floor, so it runs light-to-dark while the wheel runs
+dark-to-light, and that opposition is the whole reason a person can see there is a button in the
+middle of the ring.
+
+**The bezel is a seam in the plastic, one pixel outside the glass.** §6.1's tell 3 is that 10.49
+physical px of `#08080a` surround the picture and *nothing of ours is ever drawn inside that
+rectangle*. It says nothing about the rectangle's **outside**, and outside is where a real device's
+bezel reads from: the glass is a separate part dropped into a moulded recess, and what the eye picks
+up is the dark seam in the plastic around it. The window had none. It is a **sibling** of the glass
+rather than a border on it, because a border draws inside its own rectangle and this has to be
+outside — §16.10's glass geometry must not move by a pixel to buy a drawing.
+
+**The printed marks were 1.85 : 1 on a white iPod.** `#a9a9a6` over a wheel that is itself
+near-white is a mark you can find only because you know an iPod has one. On the hardware they are
+grey ink on light plastic, legible across a room. `#8b8b88` is **2.68 : 1** against the same
+surround, and it is still ink rather than UI: it does not move, it does not respond to a press, and
+§6.5's rule that no UI state is painted on the object is untouched. Both figures are against
+`Colour::Unspecified` `#e4e4e2` — the chassis rather than the wheel, because the wheel's fill is a
+gradient derived from it and within a few per cent either side of the marks, and a hex pair is a
+number a reader can recompute.
+
+**Under 3 : 1 on purpose.** A mark printed on moulded plastic is not a control and has no contrast
+floor to clear; §6.4's bars are for the things this program draws *about* the device. 4.5 : 1 would
+be a black-on-white label, which no iPod has ever had.
+
+### 23.5 What an unrefused row shows
+
+**This is the one structural thing this pass changes, and it is the one §22.5 left open.**
+
+§22.5 says *a row that needs three lines of grey prose under it is a row that has not been designed*,
+and §14.1 fixes the case that must stay: a refusal names a fact nothing can change, and it has to be
+legible **before** you reach for the row. What was never decided is the other case — what a row that
+is *not* refused puts under itself — and the answer that had accumulated was *whatever its author
+wanted to say*.
+
+Measured off `_out/gui/menu.png` before this pass: of the ten rows on screen, three carried §14.1
+refusals and four carried sub-lines, and the four were three different kinds of thing.
+
+| row | sub-line | what it is |
+|---|---|---|
+| `Doom` | *downloads 24 MB, then boots Rockbox — Doom is in Shortcuts* | **a price** |
+| `Turn on` | *cold boot, from the reset vector* | **a price** |
+| `Games…` | *no titles yet — choose where yours are* | **a state**, in the one row whose value column was blank |
+| `This iPod` | *My 5.5G* | **the label again** — the third drawing of that name on one screen |
+
+and one row below the fold, `Reference`, carried *every key this program binds* under a row labelled
+`Reference` whose value column reads `Cmd-,`.
+
+Only the first kind has to be there, and §10.1 is why: *a person agrees to the whole plan before any
+of it runs*. A number somebody is about to spend cannot wait to be asked for. The other two kinds
+are the density, and neither is information this row was the right place for:
+
+- **A state belongs in the value column.** §5 gives every `Row` a value at 232 px, and `Games…` was
+  leaving it blank in exactly the two states it had something to say. `none yet` and `moved or gone`
+  say it in the slot built for it, and the row is 44 px instead of 60. What was in the sentences and
+  is not in the values is on the page the chevron opens, which is where §9.1 already requires it.
+- **A restatement goes.** `This iPod`'s sub was the device's name, which the bench's caption,
+  `About this iPod`'s first fact and the Devices page's shelf row all also draw. `Panel in its own
+  window`'s was *the screen on its own — fullscreen it on a second display*: the label rephrased,
+  plus advice about the reader's furniture.
+
+> **The rule: a sub-line is a price. If it is not a price, it is the label again, or it is the value
+> column's job.**
+
+**What it bought, counted off the two shots rather than claimed.** On the furnished library with the
+developer switch off, `_out/gui/menu.png` draws ten rows. Before: **seven of the ten carried a
+sentence** (four sub-lines and three refusals) and **three were 44 px**. After: **five carry one**
+(two prices and the same three refusals) and **five are 44 px**. The three refusals are untouched and
+must be — that is §14.1, and it is the half of this page that is doing its job.
+
+That is a small number, and it is the honest one: the page was never as dense as `Rockbox`'s and
+`Doom`'s sub-lines make it look, and most of what a reader was scanning past was **height** rather
+than words. Which is why the other half of this section is the rhythm, below.
+
+**And it does not reveal on hover or focus, which was the first answer and is wrong.** Showing the
+sentence when the row is pointed at is the house style, and `Pressable`'s own note is why it cannot
+be had here: *every term is static per control, so arming changes the wording and the colour and
+moves nothing.* A row that grows when you point at it is content moving under the cursor, which
+principle 2 bans. A row that reserves 34 px so it can grow without moving is this section's density,
+kept and made invisible. There is no third construction — so a sentence is either worth its height
+always, or it is not a sentence this row should carry.
+
+**The band breaks are air, not rules.** §21.3 draws a 1 px full-bleed `Ink.line` wherever
+`Verb::group()` changes, and on a page of fourteen rows of identical height that is three identical
+dividing lines: a table with horizontal rules, which is what a spreadsheet looks like. The break a
+reader actually feels is the **gap** — `Metric.s5` of it — and the hair is kept, inset to the page
+margin and drawn in `separator`, so the gap cannot be mistaken for the page having ended. `About
+this iPod` gets the same break for a stronger reason: what is below it is not another band of the
+list, it is a description in a two-column grammar the fourteen rows above do not use.
+
+### 23.6 What this pass did not do, and why
+
+- **Motion is not spring-based.** The brief asked for it; `tokens.slint` records that **Slint has no
+  spring easing**, and §8 retired the spring vocabulary outright rather than keeping it as a
+  fiction. `lively` is `ease-out-back`, which is the overshoot a spring gives, and §8.2 rule 2
+  confines it to one use site. Nothing here changed that, and calling the existing curves springs
+  would be the fiction §8 refused.
+- **`About this iPod`'s fact rows keep their type and their height.** A spec block would read better
+  with its values in `body` rather than `label`, but the row's height is pinned to
+  `Geometry.line-label` by `every_fact_this_page_draws_is_drawn_whole`'s control — *a one-line fact
+  has to measure one line, otherwise every row is tall enough for everything and the verdict is
+  vacuous* — and the line count is computed from a probe measured in the same face. Moving the face
+  means moving the probe, the control and the arithmetic together, which is a change to a measured
+  gate rather than a visual one. The block got **air** instead, which is most of what made it read
+  as a dump.
+- **The cradle still draws two rings.** §7.3 makes the cradle the sole carrier of the device's state
+  and §6.4 spends three colours and one shape on it; the focus ring is a fourth thing on the same
+  fixture, and the halo softens it rather than removing it. Removing it needs the state ring and the
+  focus ring to become one element, which is a change to what the cradle *is*.
+

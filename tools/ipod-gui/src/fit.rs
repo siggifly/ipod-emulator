@@ -185,8 +185,15 @@ pub fn required_client_logical(hero_logical: f64) -> f64 {
     hero_logical + geometry::CHROME_MIN
 }
 
-/// §9.6's one line a ruler can check: a display needs `655.751 + 154 × sf` **physical** pixels of
-/// window height for `k = 1`. 810 at 100 %, 848 at 125 %, 887 at 150 %, 964 at 200 %.
+/// §9.6's one line a ruler can check: a display needs `655.751 + CHROME_MIN × sf` **physical**
+/// pixels of window height for `k = 1` — **786 at 100 %, 818 at 125 %, 851 at 150 %, 916 at 200 %**
+/// with `CHROME_MIN` at 130.
+///
+/// **The `154` this sentence used to name had not been `CHROME_MIN` for two revisions**, and the
+/// four numbers beside it (810 / 848 / 887 / 964) were that stale constant's. They are the term now
+/// rather than a second copy of it, so §23's two-pixel `LINE_TITLE` move cannot leave the prose
+/// describing a window this program does not open. `the_general_rule_is_the_same_arithmetic_as_the_
+/// table` is what checks the four figures.
 pub fn required_client_physical(k: i32, sf: f64) -> f64 {
     geometry::hero_phys(k) + geometry::CHROME_MIN * sf
 }
@@ -203,7 +210,9 @@ mod tests {
     fn the_too_short_boolean_has_hysteresis() {
         let mut f = Fitter::new(1.0);
         let t = required_client_logical(geometry::hero_logical(1, 1.0));
-        assert!((t - 783.751).abs() < 0.01, "the threshold moved: {t:.3}");
+        // 785.751 = HERO_PHYS_1X 655.751 + CHROME_MIN 130. It was 783.751 against a 128 px
+        // column; §23's `title` 20 -> 22 took `LINE_TITLE` 26 -> 28 and the column with it.
+        assert!((t - 785.751).abs() < 0.01, "the threshold moved: {t:.3}");
 
         // **The four probes are placed relative to `t`, not typed.** They were four literals
         // straddling 807.751, and when §7.5's shelf came off the column the threshold moved to
@@ -343,12 +352,12 @@ mod tests {
         // rises by exactly that. Nothing about which displays are short changed; `1280x800` and
         // `1366x768` still are, by 49 and 95.
         let rows: &[(&str, f64, f64, i32, f64)] = &[
-            ("1280x800", 1.0, 735.0, 1, -49.0),
-            ("1366x768", 1.0, 689.0, 1, -95.0),
-            ("1440x900", 1.0, 835.0, 1, 51.0),
-            ("1470x956 (the operator's)", 2.0, 891.0, 2, 107.0),
-            ("1920x1080 @125%", 1.25, 801.0, 1, 148.0),
-            ("1920x1080 @150%", 1.5, 667.0, 1, 102.0),
+            ("1280x800", 1.0, 735.0, 1, -51.0),
+            ("1366x768", 1.0, 689.0, 1, -97.0),
+            ("1440x900", 1.0, 835.0, 1, 49.0),
+            ("1470x956 (the operator's)", 2.0, 891.0, 2, 105.0),
+            ("1920x1080 @125%", 1.25, 801.0, 1, 146.0),
+            ("1920x1080 @150%", 1.5, 667.0, 1, 100.0),
         ];
         for (name, sf, client, want_k, want_spare) in rows {
             let k = geometry::decide_k(*client, *sf);
@@ -379,7 +388,7 @@ mod tests {
         // and one line came back for §11.4's identifications. **The chrome came off in LOGICAL
         // px, so what each row loses is 24 × sf**: 24, 30, 36 and 48. Written as one number for
         // all four it is wrong at both ends, which is how this test caught the first draft.
-        for (sf, want) in [(1.0, 784.0), (1.25, 816.0), (1.5, 848.0), (2.0, 912.0)] {
+        for (sf, want) in [(1.0, 786.0), (1.25, 818.0), (1.5, 851.0), (2.0, 916.0)] {
             let got = required_client_physical(1, sf);
             assert!(
                 (got - want).abs() < 1.0,

@@ -192,7 +192,7 @@ component ShortPane inherits Rectangle {
                     text: root.press-label;
                     font-size: Metric.body-size;
                     font-weight: Metric.weight-strong;
-                    color: #ffffff;
+                    color: Ink.on-material;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                     overflow: elide;
@@ -647,6 +647,34 @@ export component Bench inherits Rectangle {
             // 13.3 : 1 on the well and collides with no state.
             //
             // Instant, never animated (§8.1 item 9).
+            //
+            // **The halo, and it is why the ring stopped reading as a box round the product**
+            // (§23, 2026-09-07). `Ink.fg` is `#000000` — the hardest ink this palette has — and a
+            // 2 px pure-black outline is what the operator was looking at when he said *"i dont
+            // like the border around the ipod"*. §6.4's arithmetic for choosing it is untouched and
+            // still right: the well is `bg-sunken`, the accent is already the state ring's, and
+            // `fg` at 13.3 : 1 is the one role that collides with nothing.
+            //
+            // What was missing was not contrast but **falloff**. A hard stroke with nothing outside
+            // it is a drawn rectangle; the same stroke with a one-pixel accent-tinted band around
+            // it is an indicator sitting on a surface. It is the construction `Pressable` now uses
+            // for every row in the drawer, so the window has one focus ring rather than two, and it
+            // costs the cradle no state and no colour it did not already have.
+            //
+            // Declared first so the crisp ring paints over its inner edge, and carrying the same
+            // `visible` — the modality gate is the ring's whole point (§16.7) and a halo that
+            // outlived it would be the permanent box again, one pixel out.
+            Rectangle {
+                x: 0 - Geometry.focus-halo-w;
+                y: 0 - Geometry.focus-halo-w;
+                width: parent.width + 2 * Geometry.focus-halo-w;
+                height: parent.height + 2 * Geometry.focus-halo-w;
+                border-width: Geometry.focus-ring-w + Geometry.focus-halo-w;
+                border-color: Ink.focus-halo;
+                border-radius: root.cradle-r + Geometry.focus-gap + Geometry.focus-halo-w;
+                visible: cradle-focus.has-focus && root.focus-visible;
+            }
+
             Rectangle {
                 x: 0;
                 y: 0;

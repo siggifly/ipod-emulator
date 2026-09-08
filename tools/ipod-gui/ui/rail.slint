@@ -141,7 +141,7 @@ component NextStep inherits Pressable {
         font-weight: Metric.weight-strong;
         color: !root.enabled
             ? Ink.fg-disabled
-            : (root.primary ? #ffffff : Ink.fg);
+            : (root.primary ? Ink.on-material : Ink.fg);
         overflow: elide;
         vertical-alignment: center;
     }
@@ -255,7 +255,7 @@ export component RailEntryView inherits VerticalLayout {
     // when the bytes arrived.
     Rectangle {
         height: Geometry.progress-h;
-        background: Ink.line.with-alpha(0.3);
+        background: Ink.separator;
         visible: root.e.kind == RailKind.working && root.e.fraction >= 0;
 
         accessible-role: AccessibleRole.progress-indicator;

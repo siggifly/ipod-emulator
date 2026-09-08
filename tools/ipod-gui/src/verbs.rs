@@ -340,9 +340,13 @@ pub fn view(s: &Settings, d: Option<&Device>, seen: &mut Presence, caps: Caps, n
             // that appeared only where it works would be discoverable exactly when it is no longer
             // needed. This one is the opposite case — the key is how most people will arrive — so
             // the row is where somebody finds out the key exists at all.
+            // **The sub-line went** — §22.5's rule as §23 states it. *every key this program
+            // binds* under a row labelled `Reference` whose value column reads `Cmd-,` is the
+            // label said a third time in grey; the two things a person needs off this row are its
+            // name and its key, and both are on it.
             Verb::Reference => Row {
                 value: "Cmd-,".into(),
-                ..Row::go(Verb::Reference, "every key this program binds")
+                ..Row::go(Verb::Reference, "")
             },
         };
         row.rule_above = out
@@ -600,12 +604,13 @@ fn doom_row(s: &Settings, d: Option<&Device>, caps: Caps, now: Now) -> Row {
 /// applied one band along: a key that appeared only in the state where it works would be
 /// discoverable exactly when it is no longer needed.
 fn panel_row(now: Now) -> Row {
+    // **No sub-line** — §23. *the screen on its own — fullscreen it on a second display* under a
+    // row labelled `Panel in its own window` is the label rephrased, and the half of it that was
+    // not the label (*fullscreen it on a second display*) is advice about the reader's furniture
+    // rather than a fact about the press.
     let row = Row {
         value: "Ctrl-Cmd-P".into(),
-        ..Row::go(
-            Verb::Panel,
-            "the screen on its own — fullscreen it on a second display",
-        )
+        ..Row::go(Verb::Panel, "")
     };
     if now.life.alive() {
         return row;
@@ -663,21 +668,29 @@ fn diagnostics_row(s: &Settings, d: Option<&Device>, seen: &mut Presence, now: N
 /// already gives about its own first row: *a page whose only control is disabled when the list is
 /// empty is a page you cannot get out of*. Choosing where the titles are is the way in, and it is
 /// on that page. The count and the shelf's state are on this row so the press is not a surprise.
+/// **The shelf's state is a value and not a sentence** — §23.
+///
+/// It was two sub-lines: *no titles yet — choose where yours are* and *the folder that held them
+/// is not there any more*, drawn in grey under a row whose value column was **empty** in both of
+/// those states and carried a count in the third. That is one fact told in two places depending on
+/// what the fact is, and the sentence half of it was doing the column's job at three times the
+/// height. The count, `none yet` and `moved or gone` are the same slot answering the same question
+/// — *what is on the shelf* — and the row is 44 px in all three.
+///
+/// **What was in the sentences and is not in the values is on the page the chevron opens**, which
+/// is where §9.1 already requires it: `games.slint`'s first row is *Titles are in …* and its
+/// `folder-gone` state words the failure in full. A menu row that explained the page it opens was
+/// answering a question the reader had not asked yet.
 fn games_row(now: Now) -> Row {
-    let sub = if now.games_gone {
-        "the folder that held them is not there any more"
-    } else if now.titles == 0 {
-        "no titles yet — choose where yours are"
-    } else {
-        ""
-    };
     Row {
-        value: if now.titles > 0 {
-            now.titles.to_string()
+        value: if now.games_gone {
+            "moved or gone".into()
+        } else if now.titles == 0 {
+            "none yet".into()
         } else {
-            String::new()
+            now.titles.to_string()
         },
-        ..Row::go(Verb::Games, sub)
+        ..Row::go(Verb::Games, "")
     }
 }
 
@@ -839,8 +852,13 @@ fn this_ipod_row(s: &Settings, d: Option<&Device>) -> Row {
         Some(_) => "dumped",
         None => "unresolved",
     };
+    // **The device's own name is not this row's sub-line** — §23. It is drawn three other places
+    // on this screen: the bench's caption above the device, `About this iPod`'s first fact at the
+    // bottom of this very page, and the Devices page's shelf row. A fact drawn four times on one
+    // screen is three facts too many, and the one this row exists to state — what kind of iPod it
+    // is — is in the value column beside it.
     Row {
         value: kind.into(),
-        ..Row::go(Verb::ThisIpod, &d.name)
+        ..Row::go(Verb::ThisIpod, "")
     }
 }
