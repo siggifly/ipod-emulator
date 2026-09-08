@@ -245,7 +245,7 @@ export component MainWindow inherits Window {
     // **The third probe, and the one that takes a string in.** The two above measure a literal
     // this file names; §9.4's refusals are worded in Rust and there are dozens of them, so what
     // this measures is whatever `reason-probe` is set to — at `Metric.label-size` and
-    // `Metric.weight-label`, which is `ReasonSlot`'s own `Text` (`primitives.slint:481-482`) and
+    // `Metric.weight-label`, which is `ReasonSlot`'s own `Text` (`primitives.slint:494-495`) and
     // not the body face the two above use.
     //
     // `every_reason_this_window_draws_fits_the_slot_it_is_drawn_in` sets it once per reason and
@@ -971,8 +971,8 @@ export component MainWindow inherits Window {
                 short-headline: root.short-headline;
                 short-body: root.short-body;
                 press-label: root.working-label != "" ? root.working-label : root.current.press-label;
-                // §6.4, and this is **three colours and one shape, not four colours**: `accent` when
-                // startable, `fg-dim` otherwise, `danger` only when a machine has **stopped**, and a
+                // §6.4 as §24 leaves it, and this is **two colours and one shape**: `fg-dim` at
+                // rest, `danger` only when a machine has **stopped**, and a
                 // **broken ring** when the device cannot start. The first cut painted a refusal
                 // `danger`, which spent the one colour that means *a machine died* on *a file moved*
                 // — and would have left nothing to distinguish them the day `Stopped` lands. §7.3's
@@ -985,8 +985,13 @@ export component MainWindow inherits Window {
                 // state this build cannot be in*, and that the binding would *gain the arm rather
                 // than borrowing it* the day `phase()` could answer `Stopped`. It can. So the ring
                 // is `machine::cradle`'s answer, pushed on the row: one call decides the colour and
-                // the sentence together, and a two-valued markup expression cannot draw a
-                // three-valued table.
+                // the sentence together.
+                //
+                // **`startable` still exists and still decides things — the ring is just not one of
+                // them** (§24). It gates `accessible-enabled` two elements down and it is what
+                // `refused` is computed from; what it stopped doing is choosing a hue, because the
+                // caption on the same fixture says *Press the centre button* or says why it cannot
+                // be pressed, in words, which is the accessible carrier a colour never was.
                 cradle-ring: root.current.cradle-ring;
                 // A cradle that cannot hold the device has gaps in it — the drawing saying the
                 // thing. **An empty bench is not broken, it is empty**, so this keeps `has-devices`:
@@ -1047,19 +1052,15 @@ export component MainWindow inherits Window {
                 why => {
                     root.explain(root.selected);
                 }
-                // §22.3's two intents, drawn on the cradle line while there is no iPod.
-                //
-                // **Both are acts this window already performs, invoked rather than repeated.**
-                // `Use an iPod` is `start-device(root.selected)` — the same callback the drawn
-                // centre button raises, so the first run, a half-made device and every refusal are
-                // told apart in the one place that knows how; and `Play a game` is
-                // `open-page(DrawerPage.games, 1)`, the same navigation the menu's own row does.
-                // A second start path or a second navigation here is how two of them come to
+                // §22.3's intents, on the cradle line while there is no iPod. **One control now,
+                // not two** (§24): *Use an iPod* is the centre button, the caption says so in
+                // words, and `pressed-centre` above is its one route — so the first run, a
+                // half-made device and every refusal go on being told apart in `on_start_device`,
+                // which is the only place that knows how. `Play a game` is
+                // `open-page(DrawerPage.games, 1)`, the same navigation the menu's own row does. A
+                // second start path or a second navigation here is how two of them come to
                 // disagree, which is the note `on_verb_act` already carries about its three rows.
                 intents: root.intents;
-                use-an-ipod => {
-                    root.start-device(root.selected);
-                }
                 play-a-game => {
                     root.open-page(DrawerPage.games, 1);
                 }

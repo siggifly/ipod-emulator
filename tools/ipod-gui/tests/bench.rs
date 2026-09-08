@@ -459,11 +459,23 @@ fn the_cradle_colours_clear_three_to_one_against_the_well() {
             roles.push(role);
         }
     }
+    // **Two, where this asserted three until §24.** `accent` was the third and it meant *this iPod
+    // can be started* — the affordance, drawn as a hue on an outline traced round the whole device.
+    // The cradle's caption says the same thing in words on every state that carried it, and a
+    // sentence can name the centre button where a colour cannot, so the colour went and the
+    // sentence stayed. What this number still guards is the thing it was written for: a cradle
+    // that starts spending colours it has not measured against the well.
     assert_eq!(
         roles.len(),
-        3,
-        "§6.4: the cradle uses three colours and one shape, not {}: {roles:?}",
+        2,
+        "§6.4 as §24 leaves it: the cradle uses two colours and one shape, not {}: {roles:?}",
         roles.len()
+    );
+    assert!(
+        !roles.iter().any(|r| r == "accent"),
+        "the cradle's ring is `accent` again: {roles:?}\n  §24 retired it because the caption on \
+         the same fixture already says `Press the centre button`, and §6.5 forbids the alternative \
+         of moving it onto the drawn device"
     );
 
     for role in &roles {
@@ -887,8 +899,12 @@ fn the_cradle_ring_means_what_the_table_says_it_means() {
          a composed device nobody has built a drive for are drawn the same:\n  {broken}"
     );
 
-    // The enum is closed at three, which is what stops a fourth colour arriving by accident. It
+    // The enum is closed at two, which is what stops a third colour arriving by accident. It
     // moved to `primitives.slint` with the field — see the note there.
+    //
+    // **It was closed at three until §24**, and the retired value is named here rather than merely
+    // counted out: a count alone passes a tree that deleted `danger` and re-added `accent`, which
+    // is the exact substitution this section argues against.
     //
     // Read as a **line** rather than through `statement`, which runs on to the next `;`: an enum
     // declaration ends in `}`, so from here that swallowed the whole of `DeviceRow` and counted its
@@ -900,8 +916,15 @@ fn the_cradle_ring_means_what_the_table_says_it_means() {
         .expect("`CradleRing` is declared in `ui/primitives.slint`, beside the row that carries it");
     assert_eq!(
         decl.matches(',').count(),
-        2,
-        "`CradleRing` is no longer three values: {decl}. §6.4: three colours and one shape."
+        1,
+        "`CradleRing` is no longer two values: {decl}. §6.4 as §24 leaves it: two colours and one \
+         shape."
+    );
+    assert!(
+        !decl.contains("accent"),
+        "`CradleRing.accent` is back: {decl}\n  §24 retired it — the cradle's caption carries \
+         `Press the centre button` on every state that used to be drawn in it, and §6.5 refuses \
+         the other place an affordance could go, which is the drawn centre button itself."
     );
 }
 

@@ -631,12 +631,17 @@ On `bg` / `bg-raised` the older numbers stand and are kept: `#2969d6` is **5.14 
 `#5292e7` is **5.91 : 1** on `#121212`, white on the accent fill is **5.14 : 1**, and `fg-dim` is
 **6.26 : 1** on white.
 
-**So the cradle uses three colours and one shape, not four colours** (§7.3): `accent` when startable,
-`fg-dim` otherwise, `danger` when stopped, and **a broken ring** — four arcs with gaps at the
-corners — when the device cannot start. A refusal that cannot be seen is a hidden option, and
-principle 4 forbids hidden options; but there is no fourth colour on this surface that clears 3 : 1
-and does not already mean something else, and `Path` has no dash array (§16.6). A gap is a shape,
-and a cradle that cannot hold the device having gaps in it is the drawing saying the thing.
+**So the cradle uses two colours and one shape, not three colours** (§7.3): `fg-dim` at rest,
+`danger` when stopped, and **a broken ring** — four arcs with gaps at the corners — when the device
+cannot start. A refusal that cannot be seen is a hidden option, and principle 4 forbids hidden
+options; but there is no further colour on this surface that clears 3 : 1 and does not already mean
+something else, and `Path` has no dash array (§16.6). A gap is a shape, and a cradle that cannot
+hold the device having gaps in it is the drawing saying the thing.
+
+> **It was three until §24**, the third being `accent` when startable. The arithmetic in the table
+> above is unchanged — `accent` still clears its bar on the well — and it was retired for a reason
+> that is not contrast: the caption on the same fixture says *Press the centre button* in every
+> state that carried it, which names the control a colour can only gesture at. See §24.3.
 
 **The cradle's focus ring is `fg`, and it is the one exception to "the focus ring is `accent`."**
 Everywhere else the focus ring sits on `bg` or `bg-raised` where the accent clears 5 : 1. On the
@@ -697,6 +702,13 @@ argument that a surface treatment on a moulded disc reads as the disc being lit 
 widget stuck to a photograph. That argument is good and it loses to principle 3: a glossy blue disc
 is UI state painted on the object, and a screenshot of it is no longer a picture of an iPod. **The
 cradle carries "press this" instead** — the accent annotates the fixture, never the object.
+
+**And since §24 the cradle carries it in words rather than in a colour.** This paragraph's refusal
+is unchanged and is the reason §24 could not put the affordance on the drawn device; what §24 found
+is that the fixture's own **caption** already says *Press the centre button* in every state the
+accent ring was drawn for, so the ring was that fact said twice — once in a hue nobody can read as
+*centre button*, once in a sentence that can. `CradleRing.accent` is retired and the accent no
+longer appears on the cradle at all. See §24.3.
 
 ### 6.6 The drawn iPod, and the fidelity arithmetic — twice corrected
 
@@ -1049,14 +1061,21 @@ A **2 px rounded outline** tracing the body's footprint offset outward by 10 px 
 `hero_logical = 655.75`, radius 42.8 px), plus two **3 × 28 px clamp marks** at the body's mid-height
 on either side. Its geometry is constant. Only its colour and its continuity change.
 
+> **Every `accent` in the ring column below became `fg-dim` in §24**, and the table is edited in
+> place rather than annotated per row. `CradleRing.accent` meant *this iPod can be started* — an
+> affordance drawn as a hue — and every row that carried it also carries a caption naming the press,
+> which is the same fact said in words that can name the **centre button**. The ring's remaining
+> jobs are `danger` for a machine that died and the **broken** shape for `cannot start`; the focus
+> ring is a separate element. See §24.3 for why nothing replaced it.
+
 | state | ring | label (24 px, `body` 14/20, centred) |
 |---|---|---|
-| startable, never booted | `accent` | `press ● to start · cold boot` — **and `was 19 min` after this device has completed one at this clock; see §12.3** |
-| startable, parked | `accent` | `press ● to resume · 149 MB to read` — the restore point's own size, not the `about 3 s` this row used to promise |
+| startable, never booted | `fg-dim` | `press ● to start · cold boot` — **and `was 19 min` after this device has completed one at this clock; see §12.3** |
+| startable, parked | `fg-dim` | `press ● to resume · 149 MB to read` — the restore point's own size, not the `about 3 s` this row used to promise |
 | **parked, pair broken** | `fg-dim` | `press ● to cold boot · the parked snapshot no longer matches this drive` |
-| a title | `accent` | `press ● to play · there is no boot` |
-| first run | `accent` | `press ● to make an iPod · 6.5 MB to download, about 28 MB on disk` |
-| **first run, partly done** | `accent` | `press ● to finish making My 5.5G` |
+| a title | `fg-dim` | `press ● to play · there is no boot` |
+| first run | `fg-dim` | `press ● to make an iPod · 6.5 MB to download, about 28 MB on disk` |
+| **first run, partly done** | `fg-dim` | `press ● to finish making My 5.5G` |
 | **booting** | `fg-dim` | `booting · 62 %` — or `booting · 412 M instructions` with no denominator — **and always** ` · press ● to stop` |
 | running | `fg-dim` | `the wheel and buttons are the iPod's now` — was `running`, until §12.2's shelf slot became that same word; see §7.4 |
 | working | `fg-dim` | `building · 41 % · fetching Rockbox 4.0` |
@@ -7016,6 +7035,12 @@ A person arriving wants one of two things, and the window should ask that and no
 already needs no ROM dump and no IPSW anybody has to find. What can be *added* to it lives one level
 in: Rockbox, Rockbox's assets, the disk image, ipodloader2, iPodLinux.
 
+> **§24 keeps this intent and deletes its chevron.** *Use an iPod* is the centre button, and the two
+> controls above displaced the one sentence that said so — issue #42. The caption is that intent now,
+> worded so it teaches the device it is drawn on: *Press the centre button to make an iPod*. Only
+> `Play a game ›` keeps a control of its own, because it is the intent the centre button does not
+> perform. The sketch above is what the line *means*, not what it draws.
+
 **Play a game** needs no iPod at all — `play` never calls `map_hardware`, so there is no ROM, no
 IPSW, no drive and no boot on that branch. It should not touch the device apparatus even once.
 
@@ -7499,6 +7524,11 @@ That is a small number, and it is the honest one: the page was never as dense as
 `Doom`'s sub-lines make it look, and most of what a reader was scanning past was **height** rather
 than words. Which is why the other half of this section is the rhythm, below.
 
+> **The count is eleven since §24**, which un-gated `Reference` — it was in the developer band, so
+> the page listing every binding was reachable only by knowing one. The two figures above are of the
+> ten rows this pass measured and are left as measured; the row §24 adds carries no sentence, so
+> *five carry one* is unchanged by it.
+
 **And it does not reveal on hover or focus, which was the first answer and is wrong.** Showing the
 sentence when the row is pointed at is the house style, and `Pressable`'s own note is why it cannot
 be had here: *every term is static per control, so arming changes the wording and the colour and
@@ -7535,3 +7565,156 @@ list, it is a description in a two-column grammar the fourteen rows above do not
   fixture, and the halo softens it rather than removing it. Removing it needs the state ring and the
   focus ring to become one element, which is a change to what the cradle *is*.
 
+  > **Half-retired by §24.** The state ring is `fg-dim` at rest on every row but `stopped` now, so
+  > what the two rings are is a quiet fixture and one indicator rather than two competing outlines.
+  > The other half stands: on a stopped machine there are still two, and §6.4 spends **two** colours
+  > and one shape rather than three.
+
+
+## 24. The caption teaches the wheel, and the ring stops shouting
+
+**Status: BUILT, 2026-09-08.** Two things that looked separate and are one change. Issue #42: *the
+line that taught the wheel is no longer drawn.* And the operator, three times, about the blue
+outline traced round the iPod — *"i dont like the border around the ipod."*
+
+### 24.1 They are the same defect seen from two sides
+
+§22.3 gave the cradle's caption line to two chevrons — `Use an iPod ›  Play a game ›` — on the one
+screen where the library is empty. What that displaced was **the only sentence in the program that
+told a person the centre of a click wheel is a button**: *Press the centre button to make an iPod*.
+It survived as an `accessible-description` and was drawn nowhere.
+
+The operator's very first question about this window was *"how am i supposed to interact with the
+wheel?"*, and `what-the-window-must-make-possible.md` opens its cast with a first-timer who has *"no
+idea that a click wheel's centre is a button."* §14.2 is the reason it matters more than a caption:
+this program made the drawn iPod a **control surface** where accuracy emulators declined to, so it
+has to say that it is pressable.
+
+**Which is what the blue ring was doing.** `CradleRing.accent` is not a focus ring — the focus ring
+is a different element, black, offset, and §23.3 already made it focus-visible. `accent` meant *this
+iPod can be started*: the affordance, drawn as a hue, on an outline around the whole device.
+
+So the ring was carrying the affordance **because the caption had stopped**. Put the sentence back
+and the ring has nothing left to say — a hue that means *pressable* is redundant beside a line that
+says **what to press**.
+
+**And the caption already says it in every other state.** This is the part that settles the design
+rather than merely arguing it. §7.3's table gives every startable row a caption naming the press —
+`Press the centre button — cold boot`, `— resume, 149 MB to read`, `to stop — 26 min left`. The one
+screen that had stopped saying it was the one screen a person who has never seen this program is
+looking at. Nothing had to be invented; one `if` had to go.
+
+### 24.2 What the caption says, and where the intents went
+
+**Nothing in the model changed.** Every caption is the string `machine::cradle` and
+`main::empty_cradle_label` already computed. What changed is that the empty bench draws its own.
+
+| state | caption |
+|---|---|
+| first run / later-empty, `curl` present | `Press the centre button to make an iPod` |
+| first run / later-empty, no `curl` | `No curl, so nothing can be downloaded` |
+| startable, never booted | `Press the centre button — cold boot`, and `, was 19 min` once measured |
+| startable, parked | `Press the centre button — resume, 149 MB to read` |
+| parked, pair broken | `Press the centre button — no resume, was 19 min` |
+| booting | `Press the centre button to stop — 26 min left` |
+| running · working · parking · stopped · every refusal | unchanged (§7.3) |
+
+**`Use an iPod ›` is deleted as a control, and its intent is promoted rather than dropped.**
+`bench.slint` already said why, in the note beside the code that kept the wrong half: *"`Use an
+iPod` is that same act, named — so drawing both would be one route stated twice on one line in
+420 px."* True — and of the two, the chevron names the act and hides the control while the sentence
+names both. **The caption is the first intent.** §22.3 asked the window to offer *use an iPod* on
+this screen and it does; it now offers it in the words that also teach the device.
+
+**`Play a game ›` stays, and takes the trailing slot §7.6 built for `why ›`.** It is the intent the
+centre button does *not* perform — `play` never calls `map_hardware`, so a title needs no ROM, no
+IPSW, no drive and no boot, and somebody who came for a game must not be told to build an iPod
+first. That was §22.3's load-bearing half and it is untouched. The two controls can never collide:
+`refused` is `has-devices && !startable` and `intents` is `!has-devices`.
+
+It is drawn at `label` 12 rather than `body` 14 — the face `why ›` uses, because it is the same kind
+of thing: a secondary route beside a primary sentence, not a peer of it.
+
+**Is the sentence the caption proper, or a sub-line?** §23.5's rule is *a sub-line is a price; if it
+is not a price it is the label again, or it is the value column's job* — and it governs `Row`
+sub-lines on a drawer page. This is not one. §7.3 defines the cradle caption as **the one line that
+says what pressing will cost, before you press**; it is the fixture's primary text. The *price* is
+already on the line below it — `6.5 MB to download, about 28 MB on disk.` — so the two lines under
+the device are exactly §23.5's grammar: what the press does, then what it costs.
+
+### 24.3 What replaced `CradleRing.accent`: nothing, and that is the answer
+
+Three candidates were on the table.
+
+- **Something on the centre button.** Refused, and not by taste: §6.5 already refused it, in the
+  paragraph that ends *"a glossy blue disc is UI state painted on the object, and a screenshot of it
+  is no longer a picture of an iPod. **The cradle carries 'press this' instead** — the accent
+  annotates the fixture, never the object."* That sentence is still true; what changed is that the
+  cradle now carries it **in words**, which is the fixture doing the same job with the one
+  instrument a colour does not have.
+- **A soft glow behind the device.** Not forbidden — behind is not on, so §6.5 permits it. Refused
+  anyway. It is a second unmeasured invention doing a job a measured sentence already does, it
+  contradicts §23.4's stated lighting (a body lit from above, falling away below), and it is still
+  *the device is highlighted*, which is the thing the operator has asked three times to be rid of.
+  A glow is the blue ring with its edges blurred.
+- **Nothing.** Taken.
+
+`CradleRing` is `{ dim, danger }`. §6.4 is **two colours and one shape**.
+
+**What is not lost with it**, because a colour was never the only carrier:
+
+- the **caption** says *press this* or says why it cannot be pressed, in words — which is also the
+  accessible carrier the colour never was, and colour alone as the sole tell is an accessibility
+  failure §6.4's own arithmetic was written against;
+- the **broken ring** still marks §7.3's `cannot start` rows — that is the *shape*, and it is
+  untouched;
+- **`danger`** still marks a machine that died, and it reads harder now than it did: it is the only
+  colour left on the fixture, where before it competed with a blue ring on every other screen;
+- **focus** is a separate element and untouched (§23.3);
+- **`startable`** still gates `accessible-enabled`, so an assistive technology is told exactly what
+  it was told before.
+
+### 24.4 How a person learns the wheel, without already knowing `⌘,`
+
+**First, on the bench, in the caption** — pointer and keyboard alike, on the first screen, before
+anything is pressed. The same string is the cradle Button's `accessible-description`, and
+`window.slint`'s `init` hands the cradle focus, so it is also what a screen reader announces at the
+first stop.
+
+**Then the Reference page, for the gestures a sentence cannot hold** — drag, scroll, and the
+MacBook trackpad as an absolute wheel, which §22.6 built as `The pointer` and this section does not
+duplicate.
+
+**And it was unreachable, which is a defect this section fixes.** `Verb::Reference` sat in band 3,
+and band 3 is `developer_only` — so with the developer switch off the row was not drawn, and the
+page listing every binding could be reached only by already knowing one of its bindings (`⌘,` or
+`?`). The row's own note in `verbs.rs` states the purpose the gating denied: the value column
+carries `Cmd-,` because *"the row is where somebody finds out the key exists at all."*
+
+**Reference is not an instrument.** Parts, the Readout and Work inspect a machine; this is a help
+page about the window, which is band 2's subject — `This iPod`, `Settings`, and now the keys and the
+pointer. `what-the-window-must-make-possible.md` agrees on both counts: *every keyboard binding,
+from inside the window* is listed under **Knowing what is happening**, beside *why something cannot
+be done* — not under **The instruments**, whose rule is *reachable, never in the way*. So
+`Reference` moves to band 2, and the menu is **eleven** rows with the switch off rather than §23.5's
+ten. That is one row spent to close a circle, and it is the only row this section adds.
+
+### 24.5 What this pass did not do, and one thing it found
+
+- **`focus-visible` still starts `true`,** so the window opens with the black focus ring around the
+  device even for somebody who will only ever use a mouse. That is §23.3's deliberate choice — *a
+  window nobody has touched yet has had no pointer input to hide it for* — and it is left alone.
+  But it is worth saying plainly, because it is the residue of *"i dont like the border around the
+  ipod"*: with `accent` gone the device is clean of **state**, and the first frame still has a
+  **focus** ring on it. Whether that ring should wait for the first `Tab` is a separate decision
+  about §23.3, not about this section.
+- **§23.6's *the cradle still draws two rings* is now half-retired.** It said removing the focus
+  ring *"needs the state ring and the focus ring to become one element."* On every state but
+  `stopped` the state ring is `fg-dim` at rest, so there is one ring worth the name and a quiet
+  fixture under it. The other half stands: on a stopped machine there are still two.
+- **`BenchControl` had no intrinsic width, and nothing had ever drawn it in a stretching layout.**
+  It inherits `Rectangle`, which reports no preferred width, so the first shot of `Play a game ›`
+  beside the caption came out as label, a 90 px gap, and a chevron against the far edge. §22.3's two
+  intents never showed it because they sat in their own `alignment: center` row; **`why ›` has had
+  the same defect since §7.6, beside a stretching `Text`, and no shot this program takes draws it.**
+  Fixed on the component (`horizontal-stretch: 0`), which is both use sites at once.

@@ -559,7 +559,7 @@ mod tests {
 
     // ── §9.4, the invariant the page was breaking ───────────────────────────────────────────────
 
-    /// **No disabled row carries an empty reason** — `primitives.slint:531`'s own words,
+    /// **No disabled row carries an empty reason** — `primitives.slint:539`'s own words,
     /// *non-empty whenever `!enabled`*.
     ///
     /// This is the state the page shipped in and the worst-looking thing in the window: two rows
