@@ -47,10 +47,31 @@ jobs:
           rustc --version
 
       # **Four crates, not five, and the reason is not laziness.** `ipod-gui`
-      # depends on eframe with `glow`, `x11` and `wayland`, which need system GL
-      # and display headers. The GitHub workflow installs them with `apt-get`;
-      # this runner is a host executor with no root, so it cannot. Building the
-      # window here fails for a reason that says nothing about the code.
+      # pulls `backend-winit` + `renderer-skia`, which need system GL and display
+      # headers. The GitHub workflow installs them with `apt-get`; this runner is
+      # a host executor with no root, so it cannot. Building the window here
+      # fails for a reason that says nothing about the code.
+      #
+      # ⚠️ **This paragraph said `eframe` until 2026-09-08**, long after the
+      # window became Slint — a gate explaining itself with a dependency the
+      # crate no longer has. The *shape* of the blocker survived the rewrite and
+      # the *reason given* did not, which is how a stale justification outlives
+      # three agents noticing it in passing.
+      #
+      # **What it would take**, recorded so the next person does not re-derive
+      # it: only `tests/startup_fit.rs` needs a real window. Everything else runs
+      # on `i-slint-backend-testing`, which is headless — the whole page-shot
+      # suite already does. So this is system packages on the runner, not a
+      # property of the tests. Changing the runner's `hostPackages` restarts it
+      # and kills in-flight CI, so it is a deliberate operation rather than a
+      # commit.
+      #
+      # **And the hole has a second half nobody had written down.** Both
+      # workflows run `--release`, and this crate has assertions gated
+      # `#[cfg_attr(not(debug_assertions), ignore)]`. On 2026-09-08 two of them
+      # were red on `dev` for a whole evening while every verification reported
+      # zero failures, because every verification was a release run. A gate
+      # switched off in the profile it runs in is not a gate.
       #
       # What is covered is where the emulator actually lives: the ARMv4T core,
       # the machine and its peripherals and boot path, the static inspector, and
