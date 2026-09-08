@@ -1889,6 +1889,17 @@ fn main() {
             "  pp dma: {} transfers, {} bytes",
             m.mem.pp_dma_transfers, m.mem.pp_dma_bytes
         );
+        // The I2S gate, stated as a measurement rather than as a flag: how many transfers were
+        // paced by the sample clock and how much simulated time that withheld. Zero transfers on a
+        // run that moved audio would mean the gate is not firing.
+        if m.mem.i2s_paced_transfers > 0 {
+            println!(
+                "    i2s paced: {} transfers held for {} us of simulated time ({:.1} s)",
+                m.mem.i2s_paced_transfers,
+                m.mem.i2s_paced_usec,
+                m.mem.i2s_paced_usec as f64 / 1e6
+            );
+        }
         for (base, src, dst, len) in m.mem.pp_dma_log.iter() {
             println!("    ch {base:#010x}  {src:#010x} -> {dst:#010x}  {len} bytes");
         }

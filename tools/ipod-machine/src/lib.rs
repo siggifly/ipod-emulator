@@ -832,6 +832,14 @@ pub struct Memory {
     /// candidate masks. `--pp-dma-irq=N` is how the candidates get tested against the machine
     /// instead of against an argument.
     pub pp_dma_irq: Option<u32>,
+    /// Per-channel "the FIFO has not drained yet" deadline, in simulated microseconds, for a
+    /// transfer whose destination is a peripheral that consumes at its own clock rather than at
+    /// the bus's. Keyed by channel base. See `run_pp_dma`.
+    pub pp_dma_due: BTreeMap<u32, u32>,
+    /// How much simulated time the I2S pacing has withheld, and over how many transfers — the
+    /// measurement that says whether the gate is doing anything.
+    pub i2s_paced_transfers: u64,
+    pub i2s_paced_usec: u64,
     pub page_counts: BTreeMap<u32, (u64, u64)>,
     /// Whether to attribute each access to a region. Off by default: it costs a scan of the region
     /// list on **every byte access**, on top of the scan `locate` already does. Enabled by
@@ -4599,6 +4607,9 @@ impl Machine {
             pp_dma_bytes: 0,
             pp_dma_log: Capped::new(64),
             pp_dma_irq: None,
+            pp_dma_due: BTreeMap::new(),
+            i2s_paced_transfers: 0,
+            i2s_paced_usec: 0,
             page_counts: BTreeMap::new(),
             accounting: false,
             fast: vec![FastPage::EMPTY; FAST_SLOTS].into_boxed_slice(),
@@ -7050,6 +7061,16 @@ pub fn install_game_stubs(&mut self, exe_stem: &str, o: GameStubs) -> bool {
                 if self.mem.read32(base + DMA_CMD) & DMA_CMD_START != 0 {
                     self.run_pp_dma(base);
                 }
+                // A transfer into a peripheral that consumes at its own clock is not finished when
+                // the bytes have left RAM; it is finished when the peripheral has taken them. The
+                // deadline is set in `run_pp_dma`; here is where it comes due.
+                if let Some(&due) = self.mem.pp_dma_due.get(&base) {
+                    if self.mem.usec >= due {
+                        self.mem.pp_dma_due.remove(&base);
+                        let st = self.mem.read32(base + DMA_STATUS);
+                        self.mem.write32(base + DMA_STATUS, st | DMA_STATUS_INTR);
+                    }
+                }
                 let cmd = self.mem.read32(base + DMA_CMD);
                 let status = self.mem.read32(base + DMA_STATUS);
                 if status & DMA_STATUS_INTR == 0 {
@@ -7110,10 +7131,26 @@ pub fn install_game_stubs(&mut self, exe_stem: &str, o: GameStubs) -> bool {
         // back out of CMD to work out how much of the buffer was consumed.
         self.mem.write32(base + DMA_CMD, cmd & !DMA_CMD_START);
         // "DMA0_STATUS will have been reloaded automatically with size in DMA0_CMD" — Rockbox
-        // `pcm-pp.c`. BUSY is never observable here: the copy is instantaneous, so the channel is
-        // already idle by the time any instruction can look.
-        self.mem
-            .write32(base + DMA_STATUS, DMA_STATUS_INTR | (cmd & DMA_SIZE_MASK));
+        // `pcm-pp.c`.
+        //
+        // **The completion is paced by the destination, not by the copy.** The bytes move at bus
+        // speed and that part is instantaneous, as it was; what is not instantaneous is the
+        // peripheral eating them. For the I2S FIFO at `IISFIFO_WR` that rate is the audio sample
+        // clock, and posting the completion immediately tells the firmware a 52 ms buffer was
+        // consumed in zero time — which is why RetailOS's PCM silence-fill ran 625x over rate and
+        // took a quarter of the machine. Everything else keeps the old behaviour.
+        let done = DMA_STATUS_INTR | (cmd & DMA_SIZE_MASK);
+        if to_per && (per & !0xf) == IIS_FIFO_WR {
+            let usec = ((len as u64 / I2S_BYTES_PER_FRAME) * 1_000_000 / I2S_FRAMES_PER_SEC) as u32;
+            self.mem
+                .pp_dma_due
+                .insert(base, self.mem.usec.saturating_add(usec));
+            self.mem.i2s_paced_transfers += 1;
+            self.mem.i2s_paced_usec += usec as u64;
+            self.mem.write32(base + DMA_STATUS, cmd & DMA_SIZE_MASK);
+        } else {
+            self.mem.write32(base + DMA_STATUS, done);
+        }
     }
 
     fn service_interrupts_inner(&mut self) {
@@ -10234,6 +10271,17 @@ pub const DMA_STATUS_INTR: u32 = 1 << 30;
 /// `DMA0_CMD = CONFIG | (size - 4) | DMA_CMD_START`, and RetailOS's own submit does the same
 /// arithmetic in registers — `sub r2, r3, #0x4` at `0x0028dff8`, where r3 is the chunk length.
 pub const DMA_SIZE_MASK: u32 = 0xfffc;
+
+/// `IISFIFO_WR`, the I2S transmit FIFO — Rockbox `pp5020.h`, and `research/15`'s register table
+/// already names its two neighbours `IISCONFIG` (`0x70002800`) and `IISFIFO_CFG` (`0x7000280c`).
+/// This is the one DMA destination on the part that consumes at a clock of its own.
+pub const IIS_FIFO_WR: u32 = 0x7000_2840;
+/// One 32-bit FIFO word is one stereo frame: two 16-bit samples, left then right.
+pub const I2S_BYTES_PER_FRAME: u64 = 4;
+/// 44.1 kHz. Not read off the part — the codec model is a recorder and the I2S clock dividers are
+/// unmodelled — so this is the iPod's own default rate standing in for a register we do not have.
+/// Being wrong by an octave here costs a factor of two; having no rate at all cost a factor of 625.
+pub const I2S_FRAMES_PER_SEC: u64 = 44_100;
 
 // Unused, deliberately kept: these four are the drive's status register, and a set with a hole in
 // it invites someone to re-derive the missing bit from a datasheet nobody has.
