@@ -45,8 +45,11 @@ const NO_IPOD_YET: &str = "There is no iPod yet.";
 /// fifth spelling is how a switch comes to say `Turn Off` in one phase and `Turn off` in another.
 /// `Esc` is not among them: it is on the row in both live phases and is written where it is read,
 /// beside the sentence that says which of `Park` and `PowerOff` it will be.
-const TURN_OFF: &str = "Turn off";
-const TURN_ON: &str = "Turn on";
+///
+/// **They live in `machine.rs` now**, because §25 gave the same act a second surface: the bench's
+/// primary control is this switch drawn as a button, and a label declared in the file that draws
+/// one of the two readers is the fifth spelling this note is about, one level up.
+use crate::machine::{TURN_OFF, TURN_ON};
 /// §7.3 makes the drawn centre button the start affordance, so the on position names it rather
 /// than a keystroke — this row is a second way to reach that press, not a different act.
 ///

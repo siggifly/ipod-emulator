@@ -1003,6 +1003,19 @@ pub struct Stand<'a> {
     pub cfg: Option<&'a Config>,
     /// §12.4's ~1.6 GB write is under way. `Link::saving`.
     pub parking: bool,
+    /// **A run that will finish this iPod is in flight** — §25, and it is the second press.
+    ///
+    /// `work::Queue::making` answers it: a `Run::First` with a live worker, named by the device it
+    /// will hand back. It is a field of the stand rather than a question `cradle` could ask,
+    /// exactly as `parking` is, because this module knows nothing about the queue and must not
+    /// start.
+    ///
+    /// **What it exists to stop is one sentence.** A first-run press mints the device and files it
+    /// with no drive, so from the press until the handoff the iPod on the bench answers
+    /// [`Blocked::Unfinished`] — and [`off_cradle`] captions that *Press the centre button to
+    /// finish making it*, which is an invitation to press again, drawn on top of the run that press
+    /// started. §7.3's table has always had a `working` row for this; nothing ever routed one.
+    pub making: bool,
     /// **The clock a press would start this machine at** — `emu::Config::clock`, or the window's
     /// default where no machine has been resolved.
     ///
@@ -1073,6 +1086,14 @@ pub fn cradle(press: crate::Press, st: &Stand) -> Cradle {
     // rather than appearing to hang.
     if st.parking {
         return Cradle { ring: Ring::Dim, broken: false, label: PARKING.into() };
+    }
+    // **§7.3's `working` row, ranked here for the reason `parking` is ranked above it** — this is
+    // a state of the *program* rather than of the machine, and the machine underneath is `Off`,
+    // which is the one phase whose caption is about a press. Below `parking` because a park is a
+    // machine that is being stopped and a make is one that does not exist yet, and the two cannot
+    // both be true.
+    if st.making {
+        return Cradle { ring: Ring::Dim, broken: false, label: MAKING.into() };
     }
     match st.life {
         Life::Booting { progress, pace, .. } => Cradle {
@@ -1152,6 +1173,20 @@ pub fn cradle(press: crate::Press, st: &Stand) -> Cradle {
 /// invented from the snapshot's nominal size would be a bar that moves at a rate nobody measured,
 /// which is the one thing §12.3 is written about.
 const PARKING: &str = "parking";
+
+/// §7.3's `working` row, and §25.
+///
+/// **It says the state and not the measure, and that is the same finding the `Running` arm records
+/// one screen up.** §7.3 writes this row as `building · 41 % · fetching Rockbox 4.0`; on the bench
+/// as built, the fraction is already the 3 px rule drawn on the well's bottom edge and the step is
+/// already the Rail's own line drawn directly under this caption with real bytes — so a caption
+/// carrying either would be one fact printed twice, fifty pixels apart, which is exactly what took
+/// the speed off [`WHEEL_IS_LIVE`]'s row. What is left is the half neither of those can say: that
+/// the press has been taken and there is nothing to press.
+///
+/// Lower case and bare, like [`PARKING`], because both are the same kind of row — a thing the
+/// program is doing, named, while you wait for it.
+const MAKING: &str = "making an iPod";
 
 /// §12.3's boot caption, as **one fact rather than three**, because the row holds one.
 ///
@@ -1262,6 +1297,95 @@ pub enum Act {
     ToMachine,
     /// §14.1: drawn, refused, and says why.
     Refuse(Blocked),
+}
+
+// ── §25: the bench's one primary control ─────────────────────────────────────────────────────────
+
+/// §22.4's two labels, and the one word §21.4's press needs that a switch has no position for.
+///
+/// **Named here rather than in `verbs.rs`, which is where they used to live.** That file's own note
+/// is the argument: *"a fifth spelling is how a switch comes to say `Turn Off` in one phase and
+/// `Turn off` in another"* — and §25 gives the same act a second surface, so the two labels now
+/// have two readers and belong with the model both of them ask. `verbs::power_row` imports them.
+pub const TURN_OFF: &str = "Turn off";
+pub const TURN_ON: &str = "Turn on";
+/// §21.4's press, as a control names it. **`Turn on` cannot serve it**: there is nothing to turn on
+/// — the press makes the iPod — and a switch offering to power up a device that does not exist is
+/// the same claim §7.2's `Start` was making about a device with no drive.
+pub const MAKE_AN_IPOD: &str = "Make an iPod";
+/// §10.3's half-made first run. `devices::start_row` already says exactly this about the same
+/// device, one surface over, which is why it is this wording and not a sixth.
+pub const FINISH_MAKING: &str = "Finish making it";
+/// [`MAKE_AN_IPOD`] in the tense the run is in. The control stays drawn and stops being pressable,
+/// which is §14.1's construction: what cannot be done is disabled rather than hidden, and here what
+/// cannot be done is *ask again for the thing already happening*.
+pub const MAKING_LABEL: &str = "Making an iPod…";
+
+/// What §25's primary control on the bench says right now.
+///
+/// **The same states [`centre`] answers in, named for a control rather than for a press**, and
+/// derived from the same two questions — is anything alive, and is there a device — so the button
+/// and the drawn centre button cannot come to disagree about one iPod. `main::on_primary` routes
+/// both to the callbacks §22.4's switch already uses.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Primary {
+    /// A run is finishing this iPod. Drawn, refused, and the caption says what is happening.
+    Making,
+    /// There is no iPod at all. §21.4's first run.
+    Make,
+    /// §10.3's half-made device, with no run in flight: the press resumes the build.
+    Finish,
+    /// §22.4's switch, off. The centre button's own act.
+    On,
+    /// §22.4's switch, on. `main::power_off` — park from `Running`, drop from `Booting`.
+    Off,
+}
+
+impl Primary {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Primary::Making => MAKING_LABEL,
+            Primary::Make => MAKE_AN_IPOD,
+            Primary::Finish => FINISH_MAKING,
+            Primary::On => TURN_ON,
+            Primary::Off => TURN_OFF,
+        }
+    }
+
+    /// Whether pressing it does anything **that the device's own state does not already forbid**.
+    ///
+    /// `startable` is the caller's — `main::startable`, the one predicate §7.2 records three
+    /// surfaces having answered separately — so this adds only the two states that are about the
+    /// program rather than about the device.
+    pub const fn enabled(self, startable: bool) -> bool {
+        match self {
+            // Nothing to ask for: it is already happening.
+            Primary::Making => false,
+            // A machine that is alive can always be turned off; §12.5's refusals are physical and
+            // this is not one of them.
+            Primary::Off => true,
+            Primary::Make | Primary::Finish | Primary::On => startable,
+        }
+    }
+}
+
+/// [`Primary`] for this stand.
+///
+/// **`half_made` is `main::finishes_the_first_run`'s answer, passed in rather than re-derived**, for
+/// the reason [`Stand::mismatch`] gives about its own sentence: it is `work::minted`'s identity test
+/// and this module does not know what a queue is.
+pub fn primary(st: &Stand, half_made: bool) -> Primary {
+    if st.making {
+        return Primary::Making;
+    }
+    if st.life.alive() {
+        return Primary::Off;
+    }
+    match st.device {
+        None => Primary::Make,
+        Some(_) if half_made => Primary::Finish,
+        Some(_) => Primary::On,
+    }
 }
 
 /// [`Act`] for this stand.
@@ -1424,6 +1548,7 @@ mod tests {
             life,
             cfg,
             parking: false,
+            making: false,
             clock: ipod_machine::CLOCK as u32,
             mismatch: None,
         }
@@ -1885,6 +2010,7 @@ mod tests {
                     life: &off,
                     cfg: None,
                     parking: false,
+                    making: false,
                     clock,
                     mismatch: None,
                 },

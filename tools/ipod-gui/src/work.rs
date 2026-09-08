@@ -1958,6 +1958,25 @@ impl Queue {
         self.ids.contains(&id)
     }
 
+    /// **The iPod a first run in flight is going to hand back** — §25, and it is the second press.
+    ///
+    /// `Queue::press` mints the device and files it with **no drive** before it spawns anything, so
+    /// from that instant until §12.2's handoff the bench is drawing an iPod that `machine::Blocked`
+    /// classifies `Unfinished` — and §10.3's caption for that is *Press the centre button to finish
+    /// making it*, which is an invitation to press again, drawn on top of the run the press
+    /// started. The operator pressed twice because the window asked him to. The second press lands
+    /// here, in [`Queue::press`], sees `busy()` and files *a run is already going*.
+    ///
+    /// **`Run::First` only, deliberately.** §22.2's stop-install-start and §21.3's `Doom` also hand
+    /// a device back, and their captions are wrong in the same shape for the same seconds — but
+    /// *making an iPod* is not what an install is doing, and a caption is a sentence rather than a
+    /// flag. Widening this wants a word per run, which is a design decision and not this one.
+    pub fn making(&self) -> Option<&str> {
+        (self.run == Run::First && self.busy())
+            .then_some(self.device.as_deref())
+            .flatten()
+    }
+
     /// What the window needs to know about this queue to draw a heading.
     ///
     /// **Two facts, taken together**, because either one alone gets a heading wrong: a plan with

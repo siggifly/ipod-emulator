@@ -478,6 +478,10 @@ export component MainWindow inherits Window {
     in property <string> composer-runs-disabled;
 
     callback start-device(int);
+    // §25's primary control on the bench. **Not `start-device`**: this is §22.4's switch with a
+    // second surface, so it turns a live machine off as well as starting a dead one, and
+    // `main::on_primary` is the one place that decides which.
+    callback primary-pressed();
     // ── §7.4, and every one of these is the machine's ───────────────────────────────────────────
     //
     // The pointer's offset from the wheel's centre, in units of the wheel's outer radius; the
@@ -1039,6 +1043,21 @@ export component MainWindow inherits Window {
                 // either starts it or files the refusal in the Rail (§20 item 12).
                 pressed-centre => {
                     root.start-device(root.selected);
+                }
+                // ── §25's primary control, and it is the SAME act ───────────────────────────
+                //
+                // **One callback for two surfaces**, which is `on_verb_act`'s own note about
+                // §22.4's switch: the switch and the drawn centre button are one press with two
+                // routes, and Rust decides what it means. This is a third route to that same
+                // decision — not a third answer — so what it raises is the callback the menu's
+                // switch already raises rather than `start-device` directly, because over a live
+                // machine `machine::centre` answers `Act::ToMachine` and gives the press to the
+                // wheel. A button labelled `Turn off` that pressed Select would be exactly the
+                // disagreement §7.2 records three surfaces having had once.
+                primary-label: root.current.primary-label;
+                primary-enabled: root.current.primary-enabled;
+                primary => {
+                    root.primary-pressed();
                 }
                 open-drawer => {
                     root.drawer-toggled();
