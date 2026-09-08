@@ -186,13 +186,13 @@ export component DevicesPage inherits Rectangle {
     // §7.2's `Start`, for the **one open device**, from `devices::start_row`.
     //
     // **Not `d.startable` and `d.cradle-label`.** Those two are the bench's cradle as well —
-    // `window.slint:966` reads `root.current.cradle-label` and `:999` `root.current.startable`,
+    // `window.slint:966` reads `root.current.cradle-label` and `:1004` `root.current.startable`,
     // for the drawn iPod — so §7.2's refusal, *a machine
     // exists, stop it first*, would be printed under the machine telling the operator to stop it.
     // One field, two surfaces, and only one of them is asking this page's question.
     //
     // One row is enough for a page of nine devices because a closed `Expand` has
-    // `visible: root.shown > 0px` (`primitives.slint:1372`), so the control exists on screen for
+    // `visible: root.shown > 0px` (`primitives.slint:1380`), so the control exists on screen for
     // the open row and no other.
     //
     // **`start-row`, not `start`** — the same trap `start-device` was named around, four lines

@@ -79,9 +79,13 @@ fn first_run_cost() -> String {
 /// One row of the page. **Closed, and ordered as the page draws it**, so `main.rs` can turn a
 /// press back into a verb by ordinal and nothing has to keep a second list in step.
 ///
-/// The four at the end are the developer switch's, which is why they are last: §21.3's page is the
-/// eight rows above them plus §21.6's five, and `Settings::developer` reveals a fifth group rather
-/// than re-ordering the first four.
+/// The three at the end are the developer switch's, which is why they are last: §21.3's page is the
+/// rows above them plus §21.6's five, and `Settings::developer` reveals a further group rather
+/// than re-ordering what is above it.
+///
+/// **It was four until §24**, when `Reference` left this band for band 2. It is a help page about
+/// the window rather than an instrument pointed at a machine, and behind the switch it was a list
+/// of every binding reachable only by knowing one — see `group()`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Verb {
     // ── §21.3: what to run ──
@@ -92,16 +96,16 @@ pub enum Verb {
     Games,
     // ── §22.4: the machine, as one switch ──
     Power,
-    // ── §21.3: the rest of the list ──
+    // ── §21.3: the rest of the list, plus §24's `Reference` ──
     Files,
     Panel,
     ThisIpod,
     Settings,
-    // ── the developer switch's four ──
+    Reference,
+    // ── the developer switch's three ──
     Parts,
     Readout,
     Work,
-    Reference,
 }
 
 impl Verb {
@@ -118,10 +122,16 @@ impl Verb {
         Verb::Panel,
         Verb::ThisIpod,
         Verb::Settings,
+        // **Moved up with its band (§24).** It sat last, after the three instruments, because it
+        // was in band 3 with them. `rule_above` is computed from a change of `group()` between
+        // adjacent drawn rows, so a band-2 row left at the end of the list would draw a rule above
+        // itself and stand alone below the instruments whenever the developer switch is on — one
+        // band written twice. The order in this array and the bands in `group()` are one statement
+        // and have to move together.
+        Verb::Reference,
         Verb::Parts,
         Verb::Readout,
         Verb::Work,
-        Verb::Reference,
     ];
 
     /// The ordinal the markup sends back. Derived from [`Verb::ALL`] rather than typed, so adding a
@@ -171,8 +181,21 @@ impl Verb {
         match self {
             Verb::Apple | Verb::Rockbox | Verb::Doom | Verb::Diagnostics | Verb::Games => 0,
             Verb::Power => 1,
-            Verb::Files | Verb::Panel | Verb::ThisIpod | Verb::Settings => 2,
-            Verb::Parts | Verb::Readout | Verb::Work | Verb::Reference => 3,
+            // **`Reference` moved here from band 3 (§24), and the row's own note is the argument.**
+            // It says the value column carries `Cmd-,` because *"the row is where somebody finds
+            // out the key exists at all"* — and band 3 is `developer_only`, so with the switch off
+            // nobody found out anything: the page that lists every binding was reachable only by
+            // already knowing one of its bindings. Issue #42 names that circle, and
+            // `what-the-window-must-make-possible.md` puts *every keyboard binding, from inside
+            // the window* under **Knowing what is happening**, beside *why something cannot be
+            // done* — not under **The instruments**, whose own rule is that they are reachable
+            // but never in the way.
+            //
+            // **Reference is not an instrument.** Parts, the Readout and Work inspect a machine;
+            // this is a help page about the window, which is band 2's subject — `This iPod`,
+            // `Settings`, and now the keys and the pointer.
+            Verb::Files | Verb::Panel | Verb::ThisIpod | Verb::Settings | Verb::Reference => 2,
+            Verb::Parts | Verb::Readout | Verb::Work => 3,
         }
     }
 

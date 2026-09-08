@@ -6087,13 +6087,19 @@ fn empty_device(first: bool, caps: rail::Caps, cost: compose::Cost) -> DeviceRow
         // the one line that carried one. The wording, and why the refusal arm is keyed on
         // `caps.download`, is [`empty_cradle_label`]'s.
         cradle_label: empty_cradle_label(Press::Centre, caps).into(),
-        // **§9.1, §10.1: an empty bench is `accent` when there is one thing to press and `fg-dim`
-        // when there is not, and it is never broken.** The same `startable` above decides it, which
-        // is what stops §10.1's one press being drawn in the colour this design uses for *there is
-        // nothing to do here*. `machine::cradle` is not asked: it answers about a **device**, and
-        // the whole state of this row is that there is not one — `Blocked::Nothing` gives it a
-        // `fg-dim` unbroken ring and `nothing is mounted`, which is neither of §9.1's two rows.
-        cradle_ring: if caps.download { CradleRing::Accent } else { CradleRing::Dim },
+        // **§9.1, §10.1: an empty bench draws the resting ring, and it is never broken.** This
+        // read `if caps.download { Accent } else { Dim }` until §24 — one press to make an iPod
+        // was drawn in the affordance colour, and a bench with no `curl` in the dim one. The
+        // distinction is not lost, it moved to the line that can state it: [`empty_cradle_label`]
+        // is keyed on the same `caps.download` and says either *Press the centre button to make an
+        // iPod* or *No curl, so nothing can be downloaded*, which is the difference in words on
+        // the one line a person reads before pressing. `startable` below still carries it to
+        // `accessible-enabled`.
+        //
+        // `machine::cradle` is not asked: it answers about a **device**, and the whole state of
+        // this row is that there is not one — `Blocked::Nothing` gives it `nothing is mounted`,
+        // which is neither of §9.1's two rows.
+        cradle_ring: CradleRing::Dim,
         cradle_broken: false,
         // §9.5's pane, which draws no centre button to point at. Same function, same tail.
         press_label: empty_cradle_label(Press::Here, caps).into(),
@@ -7402,11 +7408,10 @@ fn boot_rule(life: &machine::Life) -> (bool, f32) {
     }
 }
 
-/// §7.3's ring, across the boundary. Three values on each side and no fourth on either, which is
+/// §7.3's ring, across the boundary. Two values on each side and no third on either, which is
 /// what `tests/bench.rs` asserts of the markup enum and `machine.rs` states of the Rust one.
 fn ring(r: machine::Ring) -> CradleRing {
     match r {
-        machine::Ring::Accent => CradleRing::Accent,
         machine::Ring::Dim => CradleRing::Dim,
         machine::Ring::Danger => CradleRing::Danger,
     }
@@ -10118,33 +10123,48 @@ pub(crate) mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// **§9.1 and §10.1: the empty bench's ring follows the one thing there is to press.**
+    /// **§9.1, §10.1 and §24: the empty bench says what to press, and does not colour it.**
     ///
-    /// It was a markup expression over `startable` and `tests/bench.rs` asserted it there; the ring
-    /// moved into the row when §12.2's `Stopped` became reachable, so this is where it is now
-    /// checked. The failure it guards against is the one §10.1 names: the single press on the
-    /// welcome screen drawn `fg-dim`, which is the colour this design uses for *there is nothing to
-    /// do here*.
+    /// This test used to be `the_empty_benchs_ring_follows_the_one_thing_there_is_to_press` and
+    /// asserted the opposite of its second claim — `Accent` with `curl`, `Dim` without. §24 retired
+    /// `CradleRing::Accent`, and what makes that safe rather than a loss is the thing this now
+    /// asserts: **the distinction did not disappear, it moved to the caption**, which can name the
+    /// control where a hue cannot. Both halves are checked here, because a change that deletes the
+    /// colour and forgets the sentence passes either half alone.
     ///
     /// And an empty bench is **empty, not broken** — there is no device for the fixture to have
     /// failed to hold, so the ring is never drawn with gaps in it.
     #[test]
-    fn the_empty_benchs_ring_follows_the_one_thing_there_is_to_press() {
+    fn the_empty_bench_says_what_to_press_rather_than_colouring_it() {
         let with_curl = empty_device(true, caps(), a_cost());
-        assert_eq!(
-            with_curl.cradle_ring,
-            CradleRing::Accent,
-            "§10.1's one press is drawn in the colour that means there is nothing to do here"
-        );
         let without = empty_device(true, rail::Caps { download: false, ..caps() }, a_cost());
-        assert_eq!(
-            without.cradle_ring,
-            CradleRing::Dim,
-            "the cradle promises a press on a machine with no `curl`, which is what it refuses"
+
+        // **The caption is the carrier.** Issue #42: this sentence is the only place the program
+        // tells a first-timer that the centre of a click wheel is a button, and §22.3 had it drawn
+        // nowhere at all while two chevrons stood on its line.
+        assert!(
+            with_curl.cradle_label.contains("centre button"),
+            "the one press on the welcome screen does not name the control: {:?}",
+            with_curl.cradle_label
         );
-        for row in [&with_curl, &without] {
+        assert!(
+            !without.cradle_label.contains("centre button"),
+            "a bench that cannot download promises a press anyway: {:?}",
+            without.cradle_label
+        );
+
+        // **And the ring is not.** Neither state gets a colour of its own — the sentences above are
+        // what tell them apart, and `startable` below is what an assistive technology is told.
+        for (what, row) in [("with curl", &with_curl), ("without curl", &without)] {
+            assert_eq!(
+                row.cradle_ring,
+                CradleRing::Dim,
+                "{what}: §24 leaves the resting ring on every empty bench"
+            );
             assert!(!row.cradle_broken, "an empty bench is empty, not broken (§9.1, §7.3)");
         }
+        assert!(with_curl.startable, "§10.1's one press is announced as available");
+        assert!(!without.startable, "a bench with no `curl` is announced as unavailable");
     }
 
     /// **A startable device reaches a machine phase, and the bench draws it** — the whole of what
@@ -12724,7 +12744,10 @@ pub(crate) mod tests {
         pump_machine(&w, &live, &devices, &s);
         let row = devices.row_data(0).expect("the row");
         assert!(row.cradle_label.contains("cold boot"), "{:?}", row.cradle_label);
-        assert_eq!(row.cradle_ring, CradleRing::Accent);
+        // §24: the ring stops being the tell here — the caption asserted one line up is. What this
+        // still catches is the `Danger` the row carried a moment ago not being cleared by the
+        // power-off, which is the actual defect this step of the walk is for.
+        assert_eq!(row.cradle_ring, CradleRing::Dim);
         assert!(!w.get_running());
         assert_eq!(
             w.get_panel_description().to_string(),
@@ -17085,15 +17108,20 @@ pub(crate) mod tests {
         // The bench as every other test in this file meets it: a window tall enough for the iPod.
         draw(&w, &at, &f);
         let tall = text_on_screen(&w);
-        // **The landmark is §22.3's intent, not the cradle label.** It was
-        // `get_empty_device().cradle_label` — "Press the centre button to make an iPod" — until
-        // §22.3 replaced the drawn line with the two intents and left that string reachable only
-        // as an `accessible-description`. The model still carries it, so the old assertion went
-        // red against a window that draws something else. What this test needs is any landmark
-        // proving it is looking at the bench; what it must NOT do is assert a caption's wording,
-        // which is a design decision and not this test's subject. Issue #42 carries the open
-        // question of whether the sentence that taught the wheel should come back.
-        let cradle = "Use an iPod".to_string();
+        // **The landmark is the cradle label again, and it is read off the model rather than
+        // typed.** The history is worth keeping because this test is how the defect was found:
+        // it was `get_empty_device().cradle_label` until §22.3 gave the caption line to two
+        // intents, went red against the window that resulted, and was re-anchored on the literal
+        // `"Use an iPod"` — which is the moment the landmark stopped being able to notice. Issue
+        // #42 is that red, read properly: **the model still carried the sentence and the markup
+        // had stopped drawing it.**
+        //
+        // §24 draws it again, so the anchor goes back to the model's own string. That is the
+        // arrangement worth having whatever the caption ends up saying: this test asserts that
+        // what the model computes for the cradle is what the window puts on screen, never a
+        // wording of its own — so a re-worded caption moves both, and a caption drawn nowhere
+        // fails here rather than passing on a literal that happens to be present.
+        let cradle = w.get_empty_device().cradle_label.to_string();
         assert!(
             tall.contains(&cradle),
             "{cradle:?} is not on a window tall enough to draw the device, so this test is \
@@ -21233,7 +21261,7 @@ pub(crate) mod tests {
     ///
     /// It also pins the four bindings that were reading the **bench's** two fields: `enabled` and
     /// `reason` came from `DeviceRow.startable` and `.cradle-label`, which the drawn iPod reads as
-    /// `root.current.startable` (`window.slint:999`) and `root.current.cradle-label`
+    /// `root.current.startable` (`window.slint:1004`) and `root.current.cradle-label`
     /// (`window.slint:966`); `machine-rule` was a literal `true`. **Each number is written beside
     /// the binding it names**, because the pair used to be two fields followed by two line numbers
     /// in the opposite order, and one of the two numbers was a blank line.
@@ -21384,17 +21412,32 @@ pub(crate) mod tests {
         w.invoke_open_page(DrawerPage::None, 0);
 
         let rows: Vec<VerbRow> = w.get_verbs().iter().collect();
-        // **Ten, and it was thirteen.** §22.4 collapses §21.6's five machine controls into one
-        // switch, which is three rows of the four §22.1 counts as *one control wearing five hats*.
+        // **Eleven, and it was thirteen, then ten.** §22.4 collapses §21.6's five machine controls
+        // into one switch, which is three rows of the four §22.1 counts as *one control wearing
+        // five hats*. §24 spends one of them back on `Reference`, which was in the developer band
+        // and is not an instrument: its own row note says the value column carries `Cmd-,` because
+        // *"the row is where somebody finds out the key exists at all"*, and behind the switch
+        // nobody did — the page listing every binding was reachable only by knowing one of them.
+        // That is the circle issue #42 names, and `what-the-window-must-make-possible.md` puts
+        // *every keyboard binding, from inside the window* among the things that must be possible.
+        //
         // Written as an equality rather than a floor, because a floor is what let this stand at
         // *at least thirteen* while the page grew past it unnoticed — and the number this section
         // is about is the number of rows, so it is the thing to assert.
         assert_eq!(
             rows.len(),
-            10,
-            "§21.3's list plus §22.4's one switch is ten rows before the developer switch, and the \
-             page pushed {}",
+            11,
+            "§21.3's list, §22.4's one switch and §24's un-gated `Reference` are eleven rows \
+             before the developer switch, and the page pushed {}",
             rows.len()
+        );
+        // **And it is the un-gated one specifically**, not merely eleven of something. A count
+        // alone passes a build that re-gated `Reference` and let some other row in.
+        assert!(
+            rows.iter().any(|r| r.label == "Reference"),
+            "`Reference` is not on the page with the developer switch off, so the only route to \
+             the list of bindings is a binding: {:?}",
+            rows.iter().map(|r| r.label.to_string()).collect::<Vec<_>>()
         );
 
         // (1) The first row is a verb, and it is the one the operator named first.
@@ -23091,7 +23134,7 @@ pub(crate) mod tests {
     /// `Action::unwired` is asked of all six verbs whether or not a group offers them.
     ///
     /// **`consequence` is in it now, and it is the half that was missing.**
-    /// `primitives.slint:708` is `text: root.enabled ? root.consequence : root.reason` — one slot,
+    /// `primitives.slint:716` is `text: root.enabled ? root.consequence : root.reason` — one slot,
     /// two producers — and only one of them was ever measured. So `removal_consequence` shipped at
     /// **880 px** in a 324 px slot and `devices.png` drew *The entry goes. Its iPod A446, seed
     /// 6182160 and its drive …*, cut off before the clause that says nothing is deleted, which is

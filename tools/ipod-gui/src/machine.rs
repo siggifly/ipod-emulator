@@ -576,13 +576,14 @@ impl Life {
 
     /// §7.3's ring colour **for the machine's own rows**.
     ///
-    /// `Off` is `accent` here because §12.2's table says so — *"`accent`, or a broken ring"* — and
-    /// the broken half is a fact about the device's parts, not about the phase. [`cradle`] is where
-    /// the two meet, and it is the only place that may answer [`Ring::Dim`] for an `Off` machine.
+    /// **Only `Stopped` has a colour of its own now** (§24). §12.2's table gave `Off` an `accent`
+    /// ring meaning *this can be started*, and that variant is gone: the caption on the same
+    /// fixture names the press, which is the thing a colour could not do. The broken half is a
+    /// fact about the device's parts rather than about the phase, and [`cradle`] is where the two
+    /// meet.
     pub fn ring(&self) -> Ring {
         match self {
-            Life::Off => Ring::Accent,
-            Life::Booting { .. } | Life::Running { .. } => Ring::Dim,
+            Life::Off | Life::Booting { .. } | Life::Running { .. } => Ring::Dim,
             Life::Stopped { .. } => Ring::Danger,
         }
     }
@@ -865,15 +866,23 @@ impl Launch {
 
 // ── §7.3: the cradle, as a function of state ─────────────────────────────────────────────────────
 
-/// §7.3's ring. **Three colours and one shape** — `tests/bench.rs` asserts `CradleRing` is exactly
-/// three values, and this is the Rust half of that same closed set.
+/// §7.3's ring. **Two colours and one shape** — `tests/bench.rs` asserts `CradleRing` is exactly
+/// two values, and this is the Rust half of that same closed set.
 ///
-/// The broken ring is **not** a fourth colour: §7.3 draws it `fg-dim` with gaps, so continuity is a
-/// separate boolean on [`Cradle`] and the markup binds the two independently. A fourth variant here
+/// The broken ring is **not** a third colour: §7.3 draws it `fg-dim` with gaps, so continuity is a
+/// separate boolean on [`Cradle`] and the markup binds the two independently. A third variant here
 /// would be this file disagreeing with `bench.slint` about what a ring is.
+///
+/// **`Accent` was that third variant and §24 deleted it.** It meant *this device can be started*,
+/// which is the affordance rather than chrome — and the reason it could go is that the affordance
+/// is now said in words on the same fixture. Every row of §7.3's table that carried `accent` also
+/// carries a caption naming the press: `Press the centre button — cold boot`, `— resume, 149 MB to
+/// read`, `to make an iPod`. A hue cannot say *centre button* and that caption can, so the colour
+/// was the weaker half of one fact drawn twice. What is NOT lost with it: [`Blocked`] still breaks
+/// the ring, `Danger` still marks a machine that died, `DeviceRow::startable` still gates
+/// `accessible-enabled`, and the caption still says why a press is refused.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Ring {
-    Accent,
     Dim,
     Danger,
 }
@@ -1196,7 +1205,12 @@ fn off_cradle(press: crate::Press, st: &Stand) -> Cradle {
         Restore::Broken => cold_tail("no resume", st),
         Restore::Never => cold_tail("cold boot", st),
     };
-    Cradle { ring: Ring::Accent, broken: false, label: format!("{}{tail}", press.verb()) }
+    // **`Ring::Dim` where this returned `Ring::Accent`, and the caption is what replaced it**
+    // (§24). This is the one arm of the whole table that means *press this and something happens*,
+    // and it was the only producer of `accent` the drawing ever saw. What it returns now is the
+    // same ring every other row draws — because `press.verb()` on the next expression is the
+    // affordance, said in the words a person needs rather than in a hue they have to learn.
+    Cradle { ring: Ring::Dim, broken: false, label: format!("{}{tail}", press.verb()) }
 }
 
 /// §7.3's cold-boot tail, with **this device's own last cold boot** on the end of it where there is
@@ -1479,7 +1493,9 @@ mod tests {
         assert_eq!(Glass::of(&stopped, None, false), Glass::Held);
         assert_eq!(Glass::of(&off, None, false), Glass::Dark);
         assert_eq!(stopped.ring(), Ring::Danger);
-        assert_eq!(off.ring(), Ring::Accent);
+        // §24: `Off` was `Ring::Accent` and is the resting ring now. The two phases are still told
+        // apart — by `Glass` two lines up, and by the caption — but not by the ring's colour.
+        assert_eq!(off.ring(), Ring::Dim);
     }
 
     /// **A stopped machine that said nothing still says something.**
@@ -1649,7 +1665,9 @@ mod tests {
                 ipod_machine::si(bytes)
             )
         );
-        assert_eq!(whole.ring, Ring::Accent);
+        // §24: a startable device draws the resting ring. **The caption above is what carries the
+        // affordance now** — it is asserted one statement up, in full, and it names the control.
+        assert_eq!(whole.ring, Ring::Dim);
 
         // Something else wrote to the drive — `ipod-boot put-files`, iTunes, a second window.
         std::thread::sleep(std::time::Duration::from_millis(20));
@@ -1927,12 +1945,25 @@ mod tests {
             "booting — nothing on the panel yet",
             "the phase belongs on the row above the device, where the percentage used to be"
         );
-        assert_eq!(by("running").ring, Ring::Dim);
+        // **`danger` belongs to `stopped` and to nothing else**, swept over the whole table rather
+        // than asserted row by row — the same shape the `broken` sweep below has, and for the same
+        // reason: a row-by-row list is silent about the rows nobody thought to list.
+        //
+        // **Written as a sweep because §24 made it worth writing.** Until then this said
+        // `running` is `Dim` and `cold` is `Accent`, which is two of seven rows; with `Accent`
+        // retired the interesting claim is that exactly one row in the table has a colour of its
+        // own, and a re-introduced third colour on any of the other six fails here.
+        let coloured: Vec<&str> =
+            rows.iter().filter(|(_, c)| c.ring != Ring::Dim).map(|(n, _)| *n).collect();
+        assert_eq!(coloured, ["stopped"], "a row drew a ring colour that is not the resting one");
         assert_eq!(by("stopped").ring, Ring::Danger);
         // **No duration**, because this fixture's device has never completed a cold boot. §12.3's
         // *no fraction and no bar* applied to the promise as well as to the picture.
+        //
+        // **And this is where the affordance went** (§24): the row that used to be the table's one
+        // `Accent` is the row whose caption names the control, so the assertion that used to read
+        // the colour reads the sentence instead.
         assert_eq!(by("cold").label, "Press the centre button — cold boot");
-        assert_eq!(by("cold").ring, Ring::Accent);
         assert_eq!(by("nothing").label, NOTHING_MOUNTED);
 
         // **The broken ring belongs to the three `cannot start` rows and to nothing else.**

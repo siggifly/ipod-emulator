@@ -218,6 +218,19 @@ component BenchControl inherits Rectangle {
     in property <string> a11y-description;
     callback activated();
 
+    // **Intrinsically sized, because a `Rectangle` in a `HorizontalLayout` is not.** This inherits
+    // `Rectangle`, which reports no preferred width, so the layout handed it a share of the
+    // leftover space and the `Chevron` — laid out at the trailing edge of whatever it was given —
+    // ended up an inch from the word it points at. Read it off `_out/gui/bench-empty.png` when
+    // §24 first drew `Play a game ›` beside the caption: label, a 90 px gap, chevron.
+    //
+    // **It never showed before because it was never in a stretching layout.** §22.3's two intents
+    // sat inside their own `alignment: center` row, which sizes children to their preferred width;
+    // `why ›` has stood beside a stretching `Text` since §7.6 and has the same defect, undrawn in
+    // any shot this program takes. One property on the component fixes both use sites, which is
+    // the right place for it: a control on a caption line is as wide as its own contents, always.
+    horizontal-stretch: 0;
+
     // §8.1 item 9: the focus ring is **instant, always**. A focus ring that animates is a focus
     // ring you lose.
     Rectangle {
@@ -328,16 +341,18 @@ export component Bench inherits Rectangle {
     /// `has-devices` would be a second answer to it. It is false the moment there is an iPod,
     /// which is §22.3's *asked once* — the question is not re-asked once it has an answer.
     in property <bool> intents: false;
-    /// The first of the two. **The same act the centre button performs** — `on_start_device`, which
-    /// is where the first run, a half-made device, a composed one and every refusal are told apart.
-    /// A second start path here is how two of them come to disagree about whether a press may start
-    /// anything, which is the note `on_verb_act` already carries about its own three rows.
-    callback use-an-ipod();
-    /// The second. It opens the shelf and **must not touch the device apparatus once**: `play`
-    /// never calls `map_hardware`, so a person who came for a game waits for no ROM, no IPSW, no
-    /// drive and no boot.
+    /// §22.3's second intent, and since §24 the only one with a control of its own. It opens the
+    /// shelf and **must not touch the device apparatus once**: `play` never calls `map_hardware`,
+    /// so a person who came for a game waits for no ROM, no IPSW, no drive and no boot.
+    ///
+    /// **The first intent has no callback because it has no control.** *Use an iPod* is the centre
+    /// button, and since §24 the caption says so in words — `pressed-centre` is the one route, so
+    /// the first run, a half-made device, a composed one and every refusal are told apart in
+    /// `on_start_device` alone. The deleted `use-an-ipod` was a second call site for that same
+    /// callback, which is how two of them come to disagree about whether a press may start
+    /// anything.
     callback play-a-game();
-    in property <CradleRing> cradle-ring: CradleRing.accent;
+    in property <CradleRing> cradle-ring: CradleRing.dim;
     // §6.4, §16.6: `Path` has no dash array, so a refusal is a **broken** ring — four segments
     // with gaps at the corners. A gap is a shape and a shape is buildable, and a cradle that
     // cannot hold the device having gaps in it is the drawing saying the thing.
@@ -497,10 +512,10 @@ export component Bench inherits Rectangle {
     // inactive ring as `line` at 30 %, which is **1.23 : 1** on `bg-sunken` — the only surface a
     // cradle is ever drawn on — across five of its twelve states, i.e. invisible.
     // `the_cradle_colours_clear_three_to_one_against_the_well` reads this very statement, pulls
-    // the roles out of it, and recomputes all three against the well.
-    property <color> ring-ink: root.cradle-ring == CradleRing.danger ? Ink.danger
-        : root.cradle-ring == CradleRing.accent ? Ink.accent
-        : Ink.fg-dim;
+    // the roles out of it, and recomputes both against the well. **Both, where it used to be all
+    // three**: §24 retired `accent`, so `Ink.accent` no longer appears in this expression and the
+    // test's own list is two long. The contrast argument for the two that stayed is untouched.
+    property <color> ring-ink: root.cradle-ring == CradleRing.danger ? Ink.danger : Ink.fg-dim;
 
     // §7.4: pressing an inert drawn control puts its sentence on the **cradle label**, held while
     // the pointer is down and released on pointer-up. Not a four-second message under the device:
@@ -1015,88 +1030,27 @@ export component Bench inherits Rectangle {
             // binding would chase an already-moving target and the label would trail the device it
             // belongs to. One animated property on this surface, and this reads it.
 
-            // ── §22.3's two intents, on the one screen where the question is live ────────────
+            // ── The sentence, on every screen including the first one (§24) ──────────────────
             //
-            // **A person arriving wants one of two things**, and until now this line offered only
-            // one of them: *Press the centre button to make an iPod*. Somebody who came to play a
-            // game was told to build an iPod first — and `play` never calls `map_hardware`, so
-            // that is not merely a longer route, it is a route to somewhere they did not need to
-            // go. No ROM, no IPSW, no drive, no boot: a title is bare RAM, the image, and the
-            // sixty stubs its imports trap into.
+            // **Unconditional, where it used to be `if !root.intents`.** §22.3 gave this line to
+            // two chevrons on the empty bench, and the sentence they displaced —
+            // *Press the centre button to make an iPod* — was the only place in the program that
+            // told a person the centre of a click wheel is a button. Issue #42, and it is the
+            // operator's own first question about this window: *"how am i supposed to interact
+            // with the wheel?"*. Every other state on this bench already names the press —
+            // `Press the centre button — cold boot`, `Press the centre button to stop — 26 min
+            // left` — so the one screen that stopped saying it was the one screen a person who
+            // has never seen this program is looking at.
             //
-            // **On the drawn iPod rather than in front of it, and that is §22.7's own line.**
-            // §22.3 sketches this as a chooser standing where the device is; §22.7's list of what
-            // §22 does *not* overturn opens with §21.2's *the window is the iPod*. Those two cannot
-            // both be had, and the picture settles it — `_out/gui/bench-empty.png` is the one page
-            // in this program that looks like the thing the program is, and putting two rectangles
-            // in front of it would answer *complicated and ugly* with a form. So the choice is
-            // offered **on** the device, on the line a person is already reading, in the slot §7.6
-            // built for exactly this shape of control.
+            // **And it is what retired `CradleRing.accent`.** §6.5: *the cradle carries "press
+            // this" — the accent annotates the fixture, never the object.* A blue outline traced
+            // round the iPod was that annotation drawn as a colour, and a colour cannot say
+            // *centre button*. This line can, so the ring has nothing left to express and the
+            // device is drawn clean. See §24.
             //
-            // **`if`, not `visible`**, for the identical reason `why ›` gives one element down: the
-            // label is `horizontal-stretch: 1` and takes whatever is left, so nothing below moves
-            // when these appear or go.
-            //
-            // **Both are drawn only where `intents` is true**, which `main.rs` pushes as *there is
-            // no iPod and the drawer is shut* — §22.3's *asked once*. With an iPod on the bench the
-            // question is answered and the line goes back to saying what a press costs.
-            // **The two, in one stretched cell, so they centre together.** A pair of controls at
-            // either end of a hidden spring is two choices at opposite edges of the device; the
-            // question is one question and reads as one only if the answers are adjacent.
-            if root.intents: HorizontalLayout {
-                horizontal-stretch: 1;
-                alignment: center;
-                spacing: Metric.s5;
-
-                BenchControl {
-                    a11y-label: "Use an iPod";
-                    // The bill and the route, which is what the line said before these two arrived
-                    // — *Press the centre button to make an iPod*. It is the same act, so it is the
-                    // same sentence, fetched rather than reworded.
-                    a11y-description: root.cradle-label;
-                    activated => { root.use-an-ipod(); }
-
-                    Text {
-                        text: "Use an iPod";
-                        font-size: Metric.body-size;
-                        font-weight: Metric.weight-strong;
-                        color: Ink.accent;
-                        vertical-alignment: center;
-                    }
-                    Chevron { ink: Ink.accent; }
-                }
-
-                BenchControl {
-                    a11y-label: "Play a game";
-                    a11y-description: "opens the shelf of titles. A game needs no iPod at all";
-                    activated => { root.play-a-game(); }
-
-                    Text {
-                        text: "Play a game";
-                        font-size: Metric.body-size;
-                        font-weight: Metric.weight-strong;
-                        color: Ink.accent;
-                        vertical-alignment: center;
-                    }
-                    Chevron { ink: Ink.accent; }
-                }
-            }
-
-            // **`if`, not `visible`, and this is the one place on this line where that is the
-            // right way round.** §16.3's rule reserves a cell wherever something below would
-            // otherwise shuffle; here the row's height is pinned at `Geometry.cradle-label` and
-            // these two are alternatives filling one line, so nothing can move either way. What
-            // `visible: false` *does* cost is the cell itself: a hidden `Text` still reports its
-            // preferred width, and this sentence is long — so with it in the layout the two
-            // controls above were shoved to the leading edge instead of centring. Read it off
-            // `_out/gui/bench-empty.png` before this change: `Use an iPod › Play a game ›` hard
-            // against the left of the device.
-            //
-            // `press-label` still says *Press the centre button to make an iPod* and the centre
-            // button still does it — `Use an iPod` is that same act, named — so drawing both would
-            // be one route stated twice on one line in 420 px. The sentence is not lost: it is the
-            // control's own `accessible-description`.
-            if !root.intents: Text {
+            // `held-sentence` still wins, which is §7.4: pressing an inert drawn control puts its
+            // own sentence here for as long as the pointer is down.
+            Text {
                 text: root.held-sentence != "" ? root.held-sentence : root.cradle-label;
                 font-size: Metric.body-size;
                 font-weight: Metric.weight-body;
@@ -1105,6 +1059,38 @@ export component Bench inherits Rectangle {
                 vertical-alignment: center;
                 overflow: elide;
                 horizontal-stretch: 1;
+            }
+
+            // ── §22.3's second intent, in the trailing slot §7.6 built ───────────────────────
+            //
+            // **One intent, not two, and the deleted one is not lost.** §22.3 asks the window to
+            // offer *Use an iPod* and *Play a game* on the one screen where the question is live.
+            // `Use an iPod` is the centre button — this component's own note used to say so, in
+            // as many words: *`Use an iPod` is that same act, named — so drawing both would be one
+            // route stated twice on one line in 420 px.* That was right, and the half it kept was
+            // the wrong half: the chevron names the act and hides the control, the sentence names
+            // both. So the sentence IS the first intent now, and what stays here is the intent the
+            // centre button does **not** perform — `play` never calls `map_hardware`, so a title
+            // needs no ROM, no IPSW, no drive and no boot, and somebody who came for a game must
+            // not be told to build an iPod first.
+            //
+            // **The slot is `why ›`'s and the two can never collide**: `refused` is
+            // `has-devices && !startable` and `intents` is `!has-devices`, so at most one of them
+            // is drawn. `if`, not `visible`, for the reason `why ›` gives — the sentence is
+            // `horizontal-stretch: 1` and absorbs the width either way, so nothing moves.
+            if root.intents: BenchControl {
+                a11y-label: "Play a game";
+                a11y-description: "opens the shelf of titles. A game needs no iPod at all";
+                activated => { root.play-a-game(); }
+
+                Text {
+                    text: "Play a game";
+                    font-size: Metric.label-size;
+                    font-weight: Metric.weight-label;
+                    color: Ink.accent;
+                    vertical-alignment: center;
+                }
+                Chevron { ink: Ink.accent; }
             }
 
             if root.refused: BenchControl {
