@@ -1393,3 +1393,96 @@ fn the_popped_out_panel_is_a_view_of_the_one_panel_and_not_a_second_front_end() 
          scale is decided, and §12.6 is why there is exactly one"
     );
 }
+
+/// The lines of one `export component`, from its declaration to the `}` that closes it at column 0.
+///
+/// Brace depth rather than indentation, because a focus ring is three levels in and the block this
+/// is used on contains a `VerticalLayout`, two `Rectangle`s and a `FocusScope` between the opening
+/// line and the ring. Comments are stripped first, so a `{` inside prose cannot unbalance it.
+fn component_block(text: &str, decl: &str) -> Vec<String> {
+    let lines = code(text);
+    let start = lines
+        .iter()
+        .position(|l| l.starts_with(decl))
+        .unwrap_or_else(|| panic!("ui/primitives.slint no longer declares `{decl}`"));
+    let mut depth = 0i32;
+    let mut out = Vec::new();
+    for line in &lines[start..] {
+        out.push(line.clone());
+        depth += i32::try_from(line.matches('{').count()).expect("a line of markup");
+        depth -= i32::try_from(line.matches('}').count()).expect("a line of markup");
+        if depth == 0 && out.len() > 1 {
+            break;
+        }
+    }
+    out
+}
+
+/// **§23: a full-bleed row's focus ring does not trace the row.**
+///
+/// `Pressable` runs from the drawer page's leading edge to its trailing one, so a ring at
+/// `width: 100%; height: 100%` is drawn *on the page's own edge* — which reads as a box around the
+/// row rather than as an indicator on it, and is the construction §23.3 replaced. The ring is inset
+/// by `Geometry.focus-inset` with a `border-radius` of its own, and the radius is the tell: a
+/// rounded ring inside a square full-bleed row cannot be read as that row's border.
+///
+/// **Scoped to `Pressable`, because the same two lines are correct elsewhere.** `Act` is a 24 px
+/// disc and its ring is concentric with it by design (§23.3 names all three carve-outs); a sweep
+/// over the whole file would have to allow that case and would then allow the case it exists to
+/// catch. So the block is extracted and the assertion is about the rows.
+///
+/// **How to make it go red:** put `width: 100%; height: 100%;` back on either of `Pressable`'s two
+/// rings — the focus one or §11.3's armed one — which is exactly what this markup said before
+/// §23.3, and is what a later edit reaching for "the simple version" would write.
+#[test]
+fn no_ring_inside_pressable_traces_the_rows_own_bounds() {
+    let block = component_block(&ui("primitives.slint"), "export component Pressable inherits");
+    assert!(
+        block.len() > 40,
+        "only {} lines of `Pressable` were read — the block scan is not finding the component, so \
+         every assertion below it is about an empty list",
+        block.len()
+    );
+
+    // A ring is an element that binds one of the two ring colours. Both are swept: §11.3's armed
+    // ring is `Ink.danger` and is the same annotation-on-a-row, drawn the same way on purpose.
+    let mut full_bleed: Vec<usize> = Vec::new();
+    let mut rings = 0usize;
+    for (i, line) in block.iter().enumerate() {
+        if line != "border-color: Ink.accent;" && line != "border-color: Ink.danger;" {
+            continue;
+        }
+        rings += 1;
+        // The element's own bindings: back to the `{` that opened it, forward to its `}`.
+        let open = block[..i].iter().rposition(|l| l.ends_with('{')).unwrap_or(0);
+        let close = block[i..]
+            .iter()
+            .position(|l| l.starts_with('}'))
+            .map_or(block.len(), |n| i + n);
+        let element = &block[open..close];
+        let binds = |p: &str| element.iter().any(|l| l.as_str() == p);
+        if binds("width: 100%;") && binds("height: 100%;") {
+            full_bleed.push(i);
+        }
+        assert!(
+            element.iter().any(|l| l.starts_with("border-radius:")),
+            "a ring in `Pressable` at line {i} of the component has no `border-radius`. §23.3: the \
+             radius is what stops an inset ring being read as the row's own border, because a \
+             full-bleed row has no corners of its own"
+        );
+    }
+
+    assert_eq!(
+        rings, 2,
+        "`Pressable` draws {rings} accent-or-danger rings and §23.3 designs two — the focus ring \
+         and §11.3's armed one. A third is a new annotation nobody has decided the geometry of; \
+         none at all means this sweep is looking at the wrong component"
+    );
+    assert!(
+        full_bleed.is_empty(),
+        "{} of `Pressable`'s rings are drawn at `width: 100%; height: 100%` — they trace the row, \
+         and a `Pressable` is as wide as the page, so that is a box drawn on the page's own edge \
+         (§23.3). Inset them by `Geometry.focus-inset`",
+        full_bleed.len()
+    );
+}

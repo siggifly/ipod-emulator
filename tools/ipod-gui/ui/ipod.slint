@@ -206,7 +206,59 @@ export component IPod inherits Rectangle {
     callback hold-released();
 
     property <length> h: body-height;
-    property <color> marks: dark-chassis ? #76767a : #a9a9a6;
+    // **The printed marks, and they were 1.85 : 1 on a white iPod** (§6.6, 2026-09-07). `#a9a9a6`
+    // over a wheel that is itself near-white is a mark you have to already know is there — read
+    // `_out/gui/bench.png` before this change, where `MENU` and the three transport glyphs are
+    // barely present. On the hardware they are grey ink on light plastic and are legible across a
+    // room. `#8b8b88` is **2.68 : 1** against the same surround, and it is still ink rather than
+    // UI: it does not move, it does not respond to a press, and §6.5's rule that no UI state is
+    // painted on the object is untouched.
+    //
+    // Both figures are against `Colour::Unspecified` `#e4e4e2` — the chassis, not the wheel, because
+    // the wheel's own fill is a gradient derived from the chassis and within a few per cent of it
+    // either side of the marks. It is the number a reader can recompute from two hex values in this
+    // file rather than from a `.darker()` whose formula lives in the toolkit.
+    //
+    // **It is deliberately under 3 : 1 and that is not an oversight.** A printed mark on moulded
+    // plastic is not a UI control and has no contrast floor to clear; §6.4's bars are for things
+    // this program draws *about* the device. Pushing it to 4.5 : 1 would be a black-on-white label,
+    // which no iPod has ever had.
+    property <color> marks: dark-chassis ? #8f8f94 : #8b8b88;
+
+    // ── The device's own materials, named once (§6.4, 2026-09-07) ───────────────────────────────
+    //
+    // **These are not `Ink` and they deliberately do not move there.** `Ink` is the *window's*
+    // palette, and a role in it is a promise that any surface may use it; a bevel highlight
+    // computed against `chassis` is not a palette entry, it is one drawing's material, and
+    // `chassis` is an input that changes with the device in front of you. Putting `#ffffff1a` in
+    // `Ink` would invite a drawer row to reach for it, and the drawer has no plastic on it.
+    //
+    // What was wrong was not where they lived but that they were **inline at seven use sites** —
+    // thirteen hex values inside element bodies, against the two that were already declared up here
+    // (`chassis` and `marks`). Two of the seven were the same decision written two ways: the nub's
+    // catch-light and the glass's were `#ffffff1a : #00000014` while the wheel's rim was
+    // `#ffffff14 : #00000014` — the same highlight at two alphas, four hex digits apart, which is a
+    // difference no eye finds and no test could see. Re-tuning the face meant finding all seven and
+    // then working out which of the near-identical pairs were deliberate. They are one name each
+    // now, and the wheel's rim is no longer one of them because §6.6 gives it a job of its own
+    // (see `wheel`, below).
+    //
+    // The pairs are all `dark ? … : …` because a highlight on black plastic is white at low alpha
+    // and a highlight on white plastic is *the absence of shadow* — the same physical fact needing
+    // opposite ink.
+    property <color> edge: dark-chassis ? #00000060 : #0000001f;
+    /// The 1 px catch-light on a moulded lip — the wheel's rim, the nub, the glass.
+    property <color> lip: dark-chassis ? #ffffff1a : #00000014;
+    /// A deeper seat: the hold switch's own well, which sits below the face rather than on it.
+    property <color> seat: dark-chassis ? #00000080 : #00000024;
+    /// The four wheel marks' fill when a control is pressed — §8.1 item 7's depressed state.
+    property <color> pressed-mark: dark-chassis ? #ffffff26 : #0000001c;
+    /// **The glass's own inner catch-light, and it does not take a `dark-chassis` arm.** Every
+    /// other material here is plastic and changes with the device; the glass is `Ink.glass`
+    /// `#08080a` on a white iPod and on a black one alike, so the highlight where it meets its
+    /// bezel is a light hairline in both. Giving it the `lip` pair would have drawn 8 % black on
+    /// near-black for every light chassis in the library, which is nothing at all.
+    property <color> glass-lip: #ffffff14;
     // §7.2, §8.1 item 4: changing the device on the bench cross-dissolves `chassis` and the
     // wheel-markings colour over `tight` and **moves nothing** — `hero` is a pushed constant and is
     // never animated (§8.2 rule 1). Only reachable with no machine, because while there is one the
@@ -259,10 +311,21 @@ export component IPod inherits Rectangle {
 
         // Glossy polycarbonate, not a flat fill. Two stops read as the real moulded face at every
         // size; a third starts to look like a button.
+        //
+        // **The light face had almost no gloss on it, and the reason is arithmetic rather than
+        // taste** (§6.6, 2026-09-07). `#e4e4e2` is already at 89 % lightness, so
+        // `.brighter(0.06)` has 11 % of headroom to work in and moves the top stop by about three
+        // levels — invisible. A white iPod's face does not read as glossy because it is *brighter*
+        // at the top; it reads as glossy because it **falls away** at the bottom, which is where
+        // there is room to move. So the light arm keeps its small highlight and triples its
+        // falloff, and the dark arm — which has all its headroom upward — is untouched.
+        //
+        // Read `_out/gui/bench.png` before this: a white rounded rectangle with a black rectangle
+        // on it. The object has volume now, and it cost one number on one arm.
         background: @linear-gradient(180deg,
-            chassis.brighter(dark-chassis ? 0.22 : 0.06) 0%,
-            chassis 42%,
-            chassis.darker(dark-chassis ? 0.10 : 0.05) 100%);
+            chassis.brighter(dark-chassis ? 0.22 : 0.05) 0%,
+            chassis 38%,
+            chassis.darker(dark-chassis ? 0.10 : 0.15) 100%);
 
         // §8.1 item 4, amended: the device cross-dissolve is now THREE properties — `chassis`,
         // `marks` and this — and all three take `tight`. **Not `lively`**: §8.2 rule 2 confines
@@ -279,7 +342,7 @@ export component IPod inherits Rectangle {
         // A hairline, not a drop shadow: nothing in this program floats (§2.4), and a shadow is the
         // visual grammar of floating.
         border-width: 1px;
-        border-color: dark-chassis ? #00000060 : #0000001f;
+        border-color: root.edge;
 
         // ── The hold switch (§7.4) ──
         //
@@ -294,7 +357,7 @@ export component IPod inherits Rectangle {
             border-radius: self.height / 2;
             background: chassis.darker(dark-chassis ? 0.35 : 0.12);
             border-width: 1px;
-            border-color: dark-chassis ? #00000080 : #00000024;
+            border-color: root.seat;
 
             // The marker the switch uncovers. On the hardware it is orange; here it is `warn`,
             // which is the same colour this program already uses for *you are about to be able to
@@ -321,7 +384,7 @@ export component IPod inherits Rectangle {
                     chassis.brighter(dark-chassis ? 0.26 : 0.08) 0%,
                     chassis 100%);
                 border-width: 1px;
-                border-color: dark-chassis ? #ffffff1a : #00000014;
+                border-color: root.lip;
                 animate x { duration: Motion.tight; easing: ease-out-quad; }
             }
 
@@ -367,6 +430,27 @@ export component IPod inherits Rectangle {
         }
 
         // ── The click wheel ──
+        //
+        // **It is a recess, and it was drawn as a very slightly different flat disc** (§6.6,
+        // 2026-09-07). The gradient ran `chassis.brighter(0.02)` to `chassis.darker(0.03)` on a
+        // light body — five levels of separation across the whole disc — over a `#00000014` rim.
+        // On `_out/gui/bench.png` the result is a wheel you can find only because you know an iPod
+        // has one, and the operator's *pale and low-contrast* is mostly this element.
+        //
+        // Two changes, and both are about **lighting** rather than about turning the contrast up:
+        //
+        //   1. **The gradient is inverted relative to the face.** The body is lit from above:
+        //      bright at the top, falling away at the bottom. A dish cut into that surface is lit
+        //      the *opposite* way — its top wall is in shadow and its bottom wall catches the
+        //      light. Swapping the two stops is the whole of what makes this read as sunk into the
+        //      face instead of sitting on it, and it costs no extra contrast at all.
+        //   2. **The rim is a groove, not a catch-light.** `#00000014` is 8 % black; the seam
+        //      where a moulded dish meets a moulded face is the darkest line on the front of the
+        //      device. `root.seat` is the value the hold switch's own well already uses for
+        //      exactly this, so the two seams on the face are now one decision.
+        //
+        // The lip below is the other half of the same physical fact and is drawn after the ring's
+        // own `TouchArea`, so it cannot eat a press.
         wheel := Rectangle {
             x: (parent.width - self.width) / 2;
             y: Geometry.wheel-top * h;
@@ -374,10 +458,10 @@ export component IPod inherits Rectangle {
             height: Geometry.wheel-d * h;
             border-radius: self.width / 2;
             background: @linear-gradient(180deg,
-                chassis.brighter(dark-chassis ? 0.10 : 0.02) 0%,
-                chassis.darker(dark-chassis ? 0.04 : 0.03) 100%);
+                chassis.darker(dark-chassis ? 0.09 : 0.07) 0%,
+                chassis.brighter(dark-chassis ? 0.06 : 0.02) 100%);
             border-width: 1px;
-            border-color: dark-chassis ? #ffffff14 : #00000014;
+            border-color: root.seat;
 
             // The ring's own pointer stream. It reports **where**, never **what** — `wheel.rs`
             // owns the radii and the 96 detents, and a second hit test here is the disagreement
@@ -487,7 +571,7 @@ export component IPod inherits Rectangle {
                 // The wheel's own material, one step brighter or darker than it is. `dark-chassis`
                 // rather than a fixed direction, for the reason every other highlight in this file
                 // takes it: `brighter` on a white iPod is invisible.
-                fill: dark-chassis ? #ffffff26 : #0000001c;
+                fill: root.pressed-mark;
             }
 
             // MENU is a word on the real device, so it is a word here. The other three are marks.
@@ -540,6 +624,15 @@ export component IPod inherits Rectangle {
             // the object, and a screenshot of it is no longer a picture of an iPod. The cradle
             // carries *press this* instead. What moves here is the moulding's own highlight, on
             // hover and on press, which is what a real disc does under a finger.
+            //
+            // **It is a boss inside a dish, so it is lit like the face and not like the wheel**
+            // (§6.6, 2026-09-07). The wheel above now runs dark-to-light because it is sunk; this
+            // sits proud of the wheel's floor, so it runs light-to-dark like the body does — and
+            // that opposition is the whole reason a person can see there is a button in the middle
+            // of the ring. The light arm's falloff is the change: `chassis` at the bottom against
+            // a wheel floor that is now `chassis.brighter(0.02)` left the button's lower half
+            // *lighter than its surround*, which reads as a hole. It ends `.darker(0.06)` instead,
+            // and the seam gets `root.seat` for the same reason the wheel's did.
             centre := Rectangle {
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
@@ -549,10 +642,10 @@ export component IPod inherits Rectangle {
                 background: @linear-gradient(180deg,
                     chassis.brighter(dark-chassis
                         ? (centre-touch.has-hover && pressable ? 0.30 : 0.14)
-                        : 0.03) 0%,
-                    chassis 100%);
+                        : (centre-touch.has-hover && pressable ? 0.10 : 0.04)) 0%,
+                    chassis.darker(dark-chassis ? 0.02 : 0.06) 100%);
                 border-width: 1px;
-                border-color: dark-chassis ? #ffffff1a : #00000014;
+                border-color: root.seat;
                 opacity: (centre-touch.pressed || root.held-select) ? 0.82 : 1.0;
                 animate background, opacity { duration: Motion.tight; easing: ease-out-quad; }
             }
@@ -615,6 +708,39 @@ export component IPod inherits Rectangle {
     // some other one. Since §6.6 took the screen's *size* off the drawing, the left inset is now an
     // output — (0.5917 − 0.48799) / 2 = 0.05186 — and differs from the top by 0.00065 of body
     // height, which is 0.43 px at hero and inside the test's 0.002 tolerance.
+    // **The seam the glass sits in, one pixel outside it** (§6.6, 2026-09-07).
+    //
+    // §6.1's tell 3 is that 10.49 physical px of `#08080a` surround the picture on all four sides
+    // and *nothing of ours is ever drawn inside that rectangle*. It says nothing about the
+    // rectangle's outside, and outside is where a real device's bezel actually reads from: the
+    // glass is a separate part, dropped into a moulded recess, and what your eye picks up is the
+    // dark seam in the plastic around it. The window had none — a black rectangle sat directly on
+    // a white face with an 8 %-white hairline that is invisible against `#08080a` — which is why
+    // §6.6's own note about the first version, *"it read as a sticker rather than a display"*, was
+    // still half true. `_out/gui/bench.png` is the sticker.
+    //
+    // **It is a sibling of the glass and not a border on it**, because a border draws inside its
+    // own rectangle and this has to be outside: the glass's geometry is §16.10's invariant and
+    // must not move by a pixel to buy a drawing. Declared before the glass, so the glass paints
+    // over its interior and only the 1 px ring survives. It is outside `shell` for the same reason
+    // the glass is — §10.1's ghost must not dim the screen's surround and then leave the screen
+    // itself at full strength, which would draw a halo round a device that is not there.
+    // **`2 * 1px` rather than `2px`, and it is the sweep talking rather than a style.**
+    // `no_length_literal_but_a_hairline_survives_in_the_bench` allows exactly one length in this
+    // file — the device-pixel hairline — because every other size here has to be a fraction of
+    // body height. A seam one hairline out on each side is two hairlines wide, and writing it as
+    // the hairline twice is what says so; `2px` would be a new number and the sweep is right to
+    // refuse it.
+    Rectangle {
+        x: glass.x - 1px;
+        y: glass.y - 1px;
+        width: glass.width + 2 * 1px;
+        height: glass.height + 2 * 1px;
+        border-radius: Geometry.glass-corner-r * h + 1px;
+        border-width: 1px;
+        border-color: root.seat;
+    }
+
     glass := Rectangle {
         x: (parent.width - self.width) / 2;
         y: Geometry.screen-top * h - Geometry.bezel-ratio * h;
@@ -623,7 +749,7 @@ export component IPod inherits Rectangle {
         background: Ink.glass;
         border-radius: Geometry.glass-corner-r * h;
         border-width: 1px;
-        border-color: #ffffff14;
+        border-color: root.glass-lip;
 
         // §7.3, §16.7: the panel is a picture and says only what is on it. The role is a literal —
         // a role behind a ternary is a role an assistive technology cannot rely on.

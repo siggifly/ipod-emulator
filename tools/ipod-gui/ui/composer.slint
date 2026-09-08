@@ -224,7 +224,7 @@ component RefusalView inherits VerticalLayout {
             text: root.r.fix.label;
             font-size: Metric.body-size;
             font-weight: Metric.weight-strong;
-            color: root.r.fix.enabled ? #ffffff : Ink.fg-disabled;
+            color: root.r.fix.enabled ? Ink.on-material : Ink.fg-disabled;
             overflow: elide;
             vertical-alignment: center;
         }
@@ -542,7 +542,7 @@ export component ComposerRoot inherits Rectangle {
             Rectangle {
                 y: 0;
                 height: 1px;
-                background: Ink.line.with-alpha(0.3);
+                background: Ink.separator;
             }
 
             create := Pressable {
@@ -572,7 +572,7 @@ export component ComposerRoot inherits Rectangle {
                     text: root.create.label;
                     font-size: Metric.body-size;
                     font-weight: Metric.weight-strong;
-                    color: root.create.enabled ? #ffffff : Ink.fg-disabled;
+                    color: root.create.enabled ? Ink.on-material : Ink.fg-disabled;
                     horizontal-alignment: center;
                     overflow: elide;
                     vertical-alignment: center;

@@ -22,7 +22,7 @@
 // **One `@geometry` read and no literal beside it** — the fact table's own inset, because
 // `MadeOfLine` carries no padding of its own while every `Row` on this page does.
 // `no_geometry_literal_survives_in_the_markup` is what stops that becoming a typed 24.
-import { Ink } from "tokens.slint";
+import { Ink, Metric } from "tokens.slint";
 import { Geometry } from "@geometry";
 import { DetailRow, DrawerHeader, Row, Scroll, SwitchRow, VerbRow } from "primitives.slint";
 import { MadeOfLine } from "devices.slint";
@@ -76,13 +76,67 @@ export component VerbsPage inherits Rectangle {
                 for r[i] in root.rows: VerticalLayout {
                     spacing: 0px;
 
-                    // §21.3's one horizontal rule, drawn wherever the band changes. `if` rather
-                    // than `visible`, because this element holds no state to throw away — §16.3's
-                    // rule is about subtrees with focus, hover or a scroll offset in them, and a
-                    // 1 px line has none.
+                    // §21.3's band break, drawn wherever the group changes. `if` rather than
+                    // `visible`, because this element holds no state to throw away — §16.3's rule
+                    // is about subtrees with focus, hover or a scroll offset in them, and a rule
+                    // and its air have none.
+                    //
+                    // **Air first, then an inset hair** (§23, 2026-09-07). It was a full-bleed
+                    // 1 px `Ink.line` and nothing else, and on the page that is four groups drawn
+                    // as three identical dividing lines between fourteen rows of identical height —
+                    // a table with horizontal rules, which is what a spreadsheet looks like and not
+                    // what a list looks like. The break a reader actually feels is the **gap**; the
+                    // hair is there so the gap cannot be mistaken for the page having ended, which
+                    // is the failure a gap alone has at the bottom of a scroll.
+                    //
+                    // The hair starts at the page margin rather than at the window's edge, so it
+                    // runs under the labels it is separating instead of across the whole surface.
+                    // That is the one construction that reads as *these rows are one group and
+                    // those are another* rather than as *here is a line*.
                     if r.rule-above: Rectangle {
+                        height: Metric.s5;
+                        background: Ink.bg;
+
+                        Rectangle {
+                            x: Geometry.page-margin;
+                            y: (parent.height - self.height) / 2;
+                            width: parent.width - 2 * Geometry.page-margin;
+                            height: 1px;
+                            background: Ink.separator;
+                        }
+                    }
+
+                    // ── The hair between two rows of one group ───────────────────────────────
+                    //
+                    // **Without it this page is not a list, it is a column of text** (§23). Rows
+                    // here are 44, 60 or 78 px depending on whether they carry a price or a
+                    // refusal, so the labels do not fall on a regular pitch and there was nothing
+                    // else saying where one row ended and the next began — `_out/gui/menu.png`
+                    // reads as loose paragraphs with a switch in the middle of them.
+                    //
+                    // It is the **same hair** the band break draws, at the same inset, and that is
+                    // the point rather than a saving: a group break is then *this hair plus air*
+                    // and a row break is *this hair*, so the two are one vocabulary and the air is
+                    // what distinguishes them. Two different lines would be two claims about how
+                    // much of a break each one is.
+                    //
+                    // Drawn above each row rather than below it, and never above the first — the
+                    // row that opens a group already has the band break's hair over it, and a
+                    // second one there would be two lines with 24 px between them.
+                    // The outer `Rectangle` is a layout cell one pixel tall and the inner one is the
+                    // hair inside it — the same two-element shape the band break uses, because a
+                    // child of a `VerticalLayout` is positioned by the layout and cannot inset
+                    // itself.
+                    if i > 0 && !r.rule-above: Rectangle {
                         height: 1px;
-                        background: Ink.line;
+                        background: Ink.bg;
+
+                        Rectangle {
+                            x: Geometry.page-margin;
+                            width: parent.width - 2 * Geometry.page-margin;
+                            height: 1px;
+                            background: Ink.separator;
+                        }
                     }
 
                     // **Two arms, one row, and the branch is a role rather than a drawing.**
@@ -139,9 +193,22 @@ export component VerbsPage inherits Rectangle {
                 // Drawn only where there is a device to describe. §9.1 forbids a bare *nothing
                 // here*, and an empty library already has its sentence on the row above — the
                 // heading and six blank facts under it would be that sentence contradicted.
+                // **The same break the bands get, and for a stronger reason** (§23). What is
+                // below is not another band of the list — it is a description of a device, in a
+                // two-column grammar the fourteen rows above do not use. A 1 px full-bleed rule
+                // said *next section*; the air says *different kind of thing*, which is what this
+                // is.
                 if root.about-heading != "": Rectangle {
-                    height: 1px;
-                    background: Ink.line;
+                    height: Metric.s5;
+                    background: Ink.bg;
+
+                    Rectangle {
+                        x: Geometry.page-margin;
+                        y: (parent.height - self.height) / 2;
+                        width: parent.width - 2 * Geometry.page-margin;
+                        height: 1px;
+                        background: Ink.separator;
+                    }
                 }
 
                 if root.about-heading != "": Row {
@@ -149,6 +216,17 @@ export component VerbsPage inherits Rectangle {
                     count: root.rows.length + 1;
                     label: root.about-heading;
                     heading: true;
+                }
+
+                // **The heading's own leading, and the block's trailing air.** §6.3's `s2` between
+                // a heading and what it heads, and `s5` under the last fact so the list does not
+                // end flush against the bottom of the scroll — which read as the page having been
+                // cut off rather than having finished. Both are spacers rather than padding on
+                // `MadeOfLine`, because that component's row height is pinned to
+                // `Geometry.line-label` by `every_fact_this_page_draws_is_drawn_whole`'s control
+                // and leading inside it would make every one-line fact measure tall.
+                if root.about-heading != "": Rectangle {
+                    height: Metric.s2;
                 }
 
                 // **Inset by the page margin, because `MadeOfLine` has none of its own.** Every
@@ -170,6 +248,11 @@ export component VerbsPage inherits Rectangle {
                     reveal(y, h) => {
                         scroll.ensure-visible(y, h);
                     }
+                }
+
+                // The block's trailing air — see the heading's leading, above.
+                if root.about-heading != "": Rectangle {
+                    height: Metric.s5;
                 }
             }
         }

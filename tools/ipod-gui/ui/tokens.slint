@@ -19,8 +19,38 @@ export global Ink {
     out property <color> fg-disabled: #9aa0a8;
     out property <color> line: #848ea5;
 
+    // **A separator is not a border, and drawing both with one colour is why every list on this
+    // surface reads as a table** (§6.4, 2026-09-07). `line` #848ea5 is 2.08 : 1 on the well and
+    // 3.28 : 1 on `bg` — the right weight for the edge of a *region*, and far too much for the hair
+    // between two rows of one list, which a reader is supposed to feel rather than see. This is
+    // that hair: the same hue, lightened until it separates and stops dividing. **1.30 : 1 on
+    // `bg`**, which is deliberately below every legibility floor in this document because it is not
+    // carrying information — the rows are.
+    //
+    // It is a measured value rather than `line.with-alpha(…)` so `palette()` can read it: the
+    // contrast tests parse six hex digits out of this file, and an alpha expression is invisible
+    // to them.
+    out property <color> separator: #dfe2ea;
+
     // RetailOS's selection blue. 5.14:1 on white — clears AA for white text on the fill.
     out property <color> accent: #2969d6;
+
+    // **The label on the material, and it was written `#ffffff` at ten call sites** (§6.5,
+    // 2026-09-07). Five of them are in `primitives.slint`, and the other five are one page each —
+    // which is exactly how a palette comes to have a colour nobody can find. It is white, it is
+    // white for a stated reason (5.14 : 1 on the accent fill, §6.4), and a call site that wants to
+    // know what a label on the material is should be able to ask rather than know.
+    //
+    // **Not `bg`**, which is also #ffffff today and is a different fact: `bg` is the colour of a
+    // drawer page, and a dark scheme moves it to #121212 while this one has to stay white or the
+    // label vanishes into its own fill.
+    out property <color> on-material: #ffffff;
+
+    // **The focus ring's outer half** — §6.4's accent at the alpha a halo is drawn at, so the ring
+    // is a soft edge rather than a second hard stroke (§23, 2026-09-07). Declared here rather
+    // than written as `Ink.accent.with-alpha(…)` at the two call sites, for `material-opacity`'s
+    // reason one section down: a number spelled twice is a number that comes apart.
+    out property <color> focus-halo: #2969d63d;
 
     // The material (§7): a 1px darker top rule, a bright band under it, a fall to the bottom edge.
     // Dark edge, highlight beneath, falloff — the whole of the era's vocabulary.
@@ -92,14 +122,37 @@ export global Metric {
     out property <length> s6: 32px;
     out property <length> s7: 48px;
 
-    // Six type roles and no seventh. **`display` is retired** (§6.2): a 30 px device name floating
-    // over a 656 px rendering of that same device is redundant, and its line box was eating 36 px
-    // of a vertical budget with none to spare. The shelf's name row is `title`.
-    out property <length> title-size: 20px;
+    // **Three sizes, not five, and the jumps are large enough to see** (§6.2, revised 2026-09-07).
+    //
+    // What shipped was 20 / 14 / 13 / 12 — four sizes, three of them inside two pixels of each
+    // other. At that spacing a size is not a hierarchy: `label` at 12 and `mono` at 13 differ by
+    // less than the hinting does, so what actually told a heading from a body line was **colour**,
+    // and the page came out flat and grey. The scale is now **22 / 14 / 12**, and the two changes
+    // that got it there are stated rather than left as new numbers:
+    //
+    //   * **`title` 20 → 22.** Against a 14 px body, 20 reads as body-that-got-bigger; 22 is a
+    //     ratio of 1.57 and reads as a heading. Its line box moves with it — `LINE_TITLE` 26 → 28
+    //     — and so do the two column sums that hold it, which is what
+    //     `the_column_terms_sum_to_the_declared_chrome` is for.
+    //   * **`mono` 13 → 12, onto `label`'s step.** A monospace face set at the same nominal size as
+    //     a proportional one reads a size larger, because its em is wider and its x-height sits
+    //     high; 12 mono beside 14 body is the optical match 13 was reaching for. It also deletes a
+    //     size: `label` and `mono` are now one step wearing two faces, which is what a scale with
+    //     large jumps has to do when a surface needs both.
+    //
+    // `display` stayed retired: a 30 px device name floating over a 656 px rendering of that same
+    // device is redundant, and its line box was eating 36 px of a vertical budget with none to
+    // spare. The shelf's name row is `title`.
+    //
+    // **`LINE_MONO` deliberately did not move with `mono-size`.** It is 18, `LINE_LABEL` is 16, and
+    // the two sum to `FIELD_REASON` 34 exactly — the escape-hatch line and the reason line inside
+    // one reserved slot. Shrinking the face inside a fixed box buys legibility for free; shrinking
+    // the box would move §9.4's whole budget family for nothing.
+    out property <length> title-size: 22px;
     out property <length> body-size: 14px;
     out property <length> label-size: 12px;
     // §6.2's `mono` — paths, hashes, serials, addresses, byte counts.
-    out property <length> mono-size: 13px;
+    out property <length> mono-size: 12px;
 
     // **One `font-family` string, no fallback list** (§16.6). Slint takes exactly one per element
     // and appends only `SansSerif` then `SystemUi`

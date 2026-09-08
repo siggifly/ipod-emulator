@@ -192,7 +192,7 @@ export component DevicesPage inherits Rectangle {
     // One field, two surfaces, and only one of them is asking this page's question.
     //
     // One row is enough for a page of nine devices because a closed `Expand` has
-    // `visible: root.shown > 0px` (`primitives.slint:1329`), so the control exists on screen for
+    // `visible: root.shown > 0px` (`primitives.slint:1372`), so the control exists on screen for
     // the open row and no other.
     //
     // **`start-row`, not `start`** — the same trap `start-device` was named around, four lines
@@ -414,7 +414,7 @@ export component DevicesPage inherits Rectangle {
             Rectangle {
                 y: 0;
                 height: 1px;
-                background: Ink.line.with-alpha(0.3);
+                background: Ink.separator;
             }
 
             make := Pressable {
@@ -438,7 +438,7 @@ export component DevicesPage inherits Rectangle {
                     text: root.make-one.label;
                     font-size: Metric.body-size;
                     font-weight: Metric.weight-strong;
-                    color: root.make-one.enabled ? #ffffff : Ink.fg-disabled;
+                    color: root.make-one.enabled ? Ink.on-material : Ink.fg-disabled;
                     horizontal-alignment: center;
                     overflow: elide;
                     vertical-alignment: center;
