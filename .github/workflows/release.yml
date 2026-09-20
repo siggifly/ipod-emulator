@@ -8,9 +8,22 @@
 # a certificate to make a reverse-engineering tool look official is the wrong trade for this
 # project, and the source is right there to build.
 #
-# **This workflow has never run, and its macOS legs could not have succeeded if it had.**
-# `gh api repos/siggifly/ipod-emulator/actions/runs` answered `total_count: 0` on 2026-08-23, and
-# every release from v0.1.0 to v0.4.0 was cut by hand — `RELEASING.md` describes doing exactly that.
+# **This workflow has never run ON GITHUB, and it has now run four times on the forge.**
+# `gh api repos/siggifly/ipod-emulator/actions/runs` still answers `total_count: 0` — re-checked
+# 2026-09-20 — because Actions is disabled at the account level, which no repository can fix.
+# Every release from v0.1.0 to v0.4.0 was cut by hand; `RELEASING.md` describes doing exactly that.
+#
+# ⚠️ **But Forgejo executes `.github/workflows/` as well as `.forgejo/workflows/`.** When the four
+# tags were pushed to `code.veldi.io` on 2026-09-20 this file fired on each of them and its
+# `linux-x86_64` leg failed all four times. Nothing in `.forgejo/` is tag-triggered, so this is
+# the only release mechanism the forge has — which is why this file must not be deleted as
+# "GitHub-only dead weight". It is neither.
+#
+# **Why the forge leg fails**, so the next person does not re-derive it: the matrix asks for
+# `macos-arm64` / `macos-x86_64` / `windows-x86_64` runners the forge does not have, and the Linux
+# leg `apt-get`s display and GL headers onto a host executor with no root — the same constraint
+# `.forgejo/workflows/ci.yml` documents at length. A forge-native release workflow would be Linux
+# only, take the toolchain from the host, and publish to GitHub Releases over the API.
 # The `--make-app` line below had been `sh ipod-emulator …` since eaf0e82, which is `exit 127` under
 # `set -eu` from a directory with no such file; it is measured and replaced in this commit.
 #

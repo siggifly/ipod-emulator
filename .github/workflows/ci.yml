@@ -20,7 +20,11 @@ name: ci
 
 on:
   push:
-    branches: [master]
+    # `dev` is the default branch and always has been the one work lands on.
+    # This said `[master]` alone until 2026-09-20, which made it a DEAD TRIGGER:
+    # even on the day GitHub Actions is re-enabled it would not have fired on
+    # normal work. `.forgejo/workflows/ci.yml` has always been `[dev, master]`.
+    branches: [dev, master]
   pull_request:
   workflow_dispatch:
 
