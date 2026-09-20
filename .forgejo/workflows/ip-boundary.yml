@@ -1,0 +1,111 @@
+name: ip-boundary
+
+# This repository is PUBLIC. `~/dev/standards/` and the `veldi-io/` + `atilo-io/`
+# trees are not. A copy across that line is an IP leak that `git push` makes
+# permanent and irreversible.
+#
+# WHY A MECHANISM AND NOT A RULE. `AGENTS.md` §1 already forbids this, and it has
+# held. But agent context walks UP the directory tree: a session started in this
+# repository also loads the umbrella's 46 KB proprietary contract, because the
+# repository sits inside `~/dev/`. The proprietary text is therefore always in
+# the room. Instruction is what stops it being typed; this is what stops it being
+# pushed. Git is the boundary that actually matters.
+#
+# ⚠️ THE GATE SELF-TESTS BEFORE IT SCANS. A scanner passes on a clean tree and
+# passes just as quietly when its own pattern has been broken — the two look
+# identical from outside, which is how a gate becomes theatre. Step 1 feeds the
+# pattern a string it MUST catch. If that string gets through, the job fails
+# before it ever looks at the repository.
+#
+# ON `code.veldi.io`: that is the forge this repository's origin lives on, and it
+# is legitimate here. The pattern does not match it — the brand is `Veldi` with a
+# capital V, the org is `veldi-io` with a hyphen, and the hostname is `veldi.io`
+# with a dot. Verified by the self-test's negative case, not by assertion.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+# No `paths:` filter, deliberately. This measures the WHOLE tree, so anything
+# narrower is both a coverage hole and — once this is a required check — an
+# unmergeable-PR trap, because a check that never ran does not score as
+# successful and leaves nothing red to point at.
+
+concurrency:
+  group: ip-boundary-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  boundary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prove the pattern can fail
+        shell: bash
+        run: |
+          set -euo pipefail
+          source ./.forgejo/ip-boundary-pattern.sh
+
+          # MUST be caught.
+          must_catch='see ADR-114 §2
+          the Veldi platform shell
+          veldi-io/platform
+          atilo-io/ops
+          mcp__arfi-veldi__fetch_token
+          Arfi-Co/dev-environment
+          standards/adr/ADR-038-x.md'
+
+          # MUST NOT be caught — legitimate strings that live in this repo.
+          must_pass='origin  https://code.veldi.io/siggifly/ipod-emulator.git
+          cloned from code.veldi.io
+          the iPod 5.5G has 64 MB of RAM
+          ADR is not a word that appears here alone'
+
+          fails=0
+          while IFS= read -r line; do
+            [ -z "${line// }" ] && continue
+            if ! printf '%s\n' "$line" | grep -qE "$IP_PATTERN"; then
+              echo "SELF-TEST FAILED — pattern did NOT catch: $line"; fails=1
+            fi
+          done <<< "$must_catch"
+
+          while IFS= read -r line; do
+            [ -z "${line// }" ] && continue
+            if printf '%s\n' "$line" | grep -qE "$IP_PATTERN"; then
+              echo "SELF-TEST FAILED — pattern wrongly caught: $line"; fails=1
+            fi
+          done <<< "$must_pass"
+
+          if [ "$fails" -ne 0 ]; then
+            echo
+            echo "The scanner's pattern is broken. A clean scan below would have meant nothing."
+            exit 1
+          fi
+          echo "self-test ok — 7 positives caught, 4 negatives passed"
+
+      - name: Scan tracked files
+        shell: bash
+        run: |
+          set -euo pipefail
+          source ./.forgejo/ip-boundary-pattern.sh
+
+          # `git grep -I` skips binaries and only ever reads TRACKED files, which
+          # is the right scope: an untracked scratch file is not a leak, and a
+          # leak is by definition something that got committed.
+          if git grep -I -n -E "$IP_PATTERN" -- . \
+               ':!.forgejo/workflows/ip-boundary.yml' \
+               ':!.forgejo/ip-boundary-pattern.sh' > /tmp/hits.txt; then
+            echo "PROPRIETARY MARKERS IN TRACKED FILES:"
+            echo
+            sed 's/^/  /' /tmp/hits.txt
+            echo
+            echo "This repository is public. Restate the idea in this project's own words,"
+            echo "for its own reasons — see AGENTS.md §1. Do not cite an ADR number in a"
+            echo "public file: a reader cannot follow it, and it discloses that the"
+            echo "document exists."
+            exit 1
+          fi
+          echo "clean — $(git ls-files | wc -l | tr -d ' ') tracked files scanned"
