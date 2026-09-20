@@ -424,8 +424,45 @@ mod tests {
         // enough to be polite. Written, not `set_len`, so a sparse filesystem still charges for it.
         const BLOCK: u64 = 64 * 1024 * 1024;
         let big = d.join("ballast");
-        std::fs::write(&big, vec![0u8; BLOCK as usize]).expect("64 MiB of ballast");
-        let after = space(&d).expect("the same volume, a moment later");
+
+        // ⚠️ **NOT zeros.** This wrote `vec![0u8; BLOCK]` until 2026-09-20, which is the worst
+        // possible ballast on a filesystem that compresses: ZFS and btrfs charge for what they
+        // store, and a megabyte of zeros stores as almost nothing. The bytes below are cheap to
+        // generate and do not compress, so the volume is charged for the size we asked for.
+        let mut ballast = vec![0u8; BLOCK as usize];
+        let mut x: u64 = 0x2545_F491_4F6C_DD1D;
+        for chunk in ballast.chunks_mut(8) {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            for (i, b) in chunk.iter_mut().enumerate() {
+                *b = (x >> (8 * i)) as u8;
+            }
+        }
+        {
+            use std::io::Write;
+            let mut f = std::fs::File::create(&big).expect("64 MiB of ballast");
+            f.write_all(&ballast).expect("the ballast is written");
+            // Durable before we look. Without this the bytes may still be in page cache and no
+            // filesystem has been asked to charge for them yet.
+            f.sync_all().expect("the ballast is on the volume");
+        }
+
+        // ⚠️ **ZFS does not account for a write until its transaction group commits**, which is
+        // seconds away, not microseconds. Measured on the CI host 2026-09-20: a 64 MiB write moved
+        // `df` by 0 KiB immediately and by ~49 MiB after `sync` and six seconds. A single reading
+        // taken straight after the write therefore fails on ZFS every time — which is exactly how
+        // `build-check` came to be red on every run from 2026-08-31 onward.
+        //
+        // So poll. What is being waited for is the accounting, not the write: if the figure never
+        // moves within the window the assertion below still fires, and the unit/column bug this
+        // test exists to catch is still caught.
+        let mut after = space(&d).expect("the same volume, a moment later");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while before.free.saturating_sub(after.free) < BLOCK / 2 && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            after = space(&d).expect("the same volume, a moment later");
+        }
         assert_eq!(after.mount, before.mount, "the reading moved to another volume");
 
         let dropped = before.free.saturating_sub(after.free);
