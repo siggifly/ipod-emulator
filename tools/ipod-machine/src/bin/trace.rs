@@ -2833,6 +2833,7 @@ fn main() {
         // this call --break, --watch and --dump are accepted, do fire, and print nothing — which
         // reads as "breakpoints do not work on the boot path" and cost a long detour to diagnose.
         report_break_watch(&mut m);
+        report_lab_measure(&m, None);
         report_ppm(&args, &m);
         return;
     }
@@ -2906,6 +2907,7 @@ fn main() {
             println!("    {addr:08x}  {}", disasm::arm(w, *addr, None));
         }
         report_unmapped(&mut m);
+        report_lab_measure(&m, Some(&stop));
         report_ppm(&args, &m);
         return;
     }
@@ -3096,6 +3098,9 @@ fn main() {
         "frames presented: {}  clears: {}  quads drawn: {}",
         m.frames_presented, m.clears, m.quads_drawn
     );
+
+    report_lab_measure(&m, Some(&stop));
+
     report_ppm(&args, &m);
     if !m.output.is_empty() {
         println!(
@@ -3720,6 +3725,41 @@ fn report_unmapped(m: &mut ipod_machine::Machine) {
             println!("       {}", c.join("  "));
         }
     }
+}
+
+/// The run's summary a second time, one fact per line, for a harness rather than a reader.
+///
+/// `lab` scrapes `LAB-MEASURE key=value` and turns each line into a claim in the shared store, so
+/// a run of this binary becomes evidence someone can query instead of a log someone has to read.
+/// An explicit marker rather than parsing the prose reports: a scraper that guesses at the numbers
+/// starts reporting the wrong ones the day a report is reformatted, and nothing about the run
+/// looks different when it does.
+///
+/// **Called from all three exit paths, and that is the whole difficulty.** `main` returns in three
+/// places — the `--boot-osos` path, the `--run-loader` path, and the bottom — and the boot path is
+/// the canonical recipe every number in `research/` is measured through. Emitting this only at the
+/// bottom, which is where it was written first, would have produced a measurement channel that is
+/// silent on exactly the run that matters, while looking perfectly healthy on a bare invocation.
+/// `--break`/`--watch`/`--dump` were broken on the boot path for the same reason; the comment
+/// above that `return` records the detour it cost.
+///
+/// `stop` is `None` on the boot path, which has no single stop reason to report: it does not call
+/// one entry point and wait for it to come back.
+fn report_lab_measure(m: &Machine, stop: Option<&Stop>) {
+    if let Some(s) = stop {
+        println!("LAB-MEASURE stopped={s:?}");
+    }
+    println!("LAB-MEASURE instructions_executed={}", m.executed);
+    println!("LAB-MEASURE calls_made={}", m.trace.len());
+    println!("LAB-MEASURE heap_used_bytes={}", m.heap_used());
+    println!("LAB-MEASURE input_polls={}", m.polls);
+    println!("LAB-MEASURE frames_presented={}", m.frames_presented);
+    println!("LAB-MEASURE clears={}", m.clears);
+    println!("LAB-MEASURE quads_drawn={}", m.quads_drawn);
+    // The line a harness waits for before it stops the process. Its own statement rather than
+    // "whichever measurement is printed last", which would quietly become the wrong line the
+    // day a measurement is added above it.
+    println!("LAB-RUN-COMPLETE");
 }
 
 /// Write the panel to a PPM if `--ppm=` asked for one.
