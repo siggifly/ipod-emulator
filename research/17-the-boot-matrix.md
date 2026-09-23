@@ -1223,3 +1223,10 @@ the way through on *"Medium Error — Unrecovered read error"*. A rescue-style i
 everything except **three 2048-byte sectors (6 KB of 30 GB)**, which stayed unreadable after every
 retry; the device otherwise works normally. A plain whole-disk read is worth not assuming on a
 drive this age — an imager that maps unreadable areas costs nothing when there are none.
+
+**Settled 2026-09-23: the retail 5.5G's `HwVr` is `0x000B0011`.** Read off that same device's NOR
+with stock Rockbox's *Dump ROM contents* (the 1 MiB at `0x20000000`). Not `0x000B0010`, the
+published-but-uncited value this section kept. Outside the SysCfg identity page (`0x4000–0x4FFF`,
+18 bytes differ) the 5.5G's NOR is byte-identical to the retail 5G dump this project boots — the
+flash bootloader is the same, which agrees with the addendum above that the 5.5G boot problem is
+the firmware, not the ROM.
