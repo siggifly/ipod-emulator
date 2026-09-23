@@ -1218,7 +1218,8 @@ reproducing the recorded checksum rather than assumed. `aupd`'s applied flag (`+
 something that can dump it. That is the remaining half of this section's open question, and this
 device is now the obvious way to answer it.
 
-**And a caution for anyone imaging one of these:** this unit's drive returned *"Medium Error —
-Unrecovered read error"* two thirds of the way through a plain `dd`. A 2006–2007 1.8″ drive is
-old enough that a plain read of the whole disk should not be assumed to succeed; a rescue-style
-imager that maps unreadable areas is the safer default.
+**And a note for anyone imaging one of these:** a plain `dd` of this unit stopped two thirds of
+the way through on *"Medium Error — Unrecovered read error"*. A rescue-style imager then read
+everything except **three 2048-byte sectors (6 KB of 30 GB)**, which stayed unreadable after every
+retry; the device otherwise works normally. A plain whole-disk read is worth not assuming on a
+drive this age — an imager that maps unreadable areas costs nothing when there are none.
