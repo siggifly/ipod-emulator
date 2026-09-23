@@ -1106,3 +1106,11 @@ ZeroSlackr overrides and is not what it is failing on.
 `vmlinux` dated 2008, and a kernel built for a different generation would also load and then poll a
 register that generation has. The polled address being absent from the 5G's map is consistent with
 either.
+
+## The part is a PP5022C — read off the chip-id register on hardware (2026-09-23)
+
+The open question above — does the real part report `'6'` (Apple's ROM), `'2'` (ipodloader2) or
+`'1'` (a PP5021C) — is answered. On a retail 5.5G, a Rockbox debug read of the `0x70000000` id
+register returns the string **`C2205PP`**, i.e. **PP5022C**. Not the PP5021C the community
+documentation names. So `ipod_is_pp5022()`'s `'2'` is the true answer for this part, and the `'6'`
+the emulator's seeded ROM carries is a workaround, exactly as this file suspected.

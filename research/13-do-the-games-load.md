@@ -936,3 +936,22 @@ halves of this section's reading, on one machine.
 **What it does not show:** that the title's *code* runs to completion on hardware. The emulated
 launch screen proves the manifest was accepted and the launch began. Whether a homebrew title then
 behaves correctly on a real 5G or 5.5G is a hardware question, and is not answered here.
+
+### On real hardware, the six-site patch does NOT load an unsigned title (2026-09-23)
+
+The launch above was filmed in the emulator and its window ended on the title's launch screen. On a
+**real 5.5G** running 1.3 with the same six-site patch, an unsigned, unencrypted title was selected:
+its `LaunchingArtwork` drew (the launch screen is Apple's, shown on selection, before the
+executable runs), and then Apple's **"This game cannot be played"** appeared a split second later.
+The title's own code never ran.
+
+So the emulator frame labelled "the unsigned title's own launch screen" was the **launch artwork**,
+drawn during load, not proof the executable executed — the film window ended before the outcome. The
+honest result, from hardware: **the six-site patch defeats the validator function but is not
+sufficient to load unsigned homebrew on 1.3.** A gate beyond it refuses the title. This is the
+section's own caution — *"the DRM check may not be the only gate"* — confirmed rather than cleared.
+
+The circulating community patch is on **1.2.1**, where it is reported to load plaintext cracked
+games; ours reproduces it on **1.3**. The unsettled question is whether 1.3 carries a gate 1.2.1
+lacks, or the test title was malformed. The minimal next step is to load a known-good plaintext
+title from the 1.2.1-proven set on a 1.3-patched device and see which way it falls.

@@ -8,7 +8,7 @@ that. What it adds is a way to tell a live answer from a dead one **without read
 whole file** — because a document that grows by addendum puts its current answer at the
 bottom, and nothing on the page says so.
 
-931 headings across 18 documents — 53 dated, 19 settled, 15 retracted, 6 corrected.
+933 headings across 18 documents — 55 dated, 19 settled, 15 retracted, 6 corrected.
 
 ## Where each document stands today
 
@@ -29,10 +29,10 @@ above it in the same document may have been superseded.
 | [`10-the-resource-image.md`](10-the-resource-image.md) | 8b. The audit this fix owed, run 2026-08-13 | `2026-08-13` |  |
 | [`11-the-videocore-runtime.md`](11-the-videocore-runtime.md) | *nothing in it is dated* | — | |
 | [`12-how-retailos-draws.md`](12-how-retailos-draws.md) | RESOLVED — RetailOS navigates; every run that said otherwise was starved,… | `2026-09-05` | settled |
-| [`13-do-the-games-load.md`](13-do-the-games-load.md) | The title launch — an unsigned eApp reaches its launch screen (2026-09-23) | `2026-09-23` |  |
+| [`13-do-the-games-load.md`](13-do-the-games-load.md) | On real hardware, the six-site patch does NOT load an unsigned title (202… | `2026-09-23` |  |
 | [`14-the-apple-logo.md`](14-the-apple-logo.md) | 9. Extracting it — 2026-08-19 | `2026-08-19` |  |
 | [`15-the-register-agreement-table.md`](15-the-register-agreement-table.md) | *nothing in it is dated* | — | |
-| [`16-the-third-bootloader.md`](16-the-third-bootloader.md) | It is not a missing `root=`, and the kernel never asks the drive who it i… | `2026-08-19` |  |
+| [`16-the-third-bootloader.md`](16-the-third-bootloader.md) | The part is a PP5022C — read off the chip-id register on hardware (2026-0… | `2026-09-23` |  |
 | [`17-the-boot-matrix.md`](17-the-boot-matrix.md) | Addendum — a retail 5.5G, measured over USB (2026-09-23) | `2026-09-23` |  |
 | [`18-brick-is-playable.md`](18-brick-is-playable.md) | 4.  The proof of play — a frame that comes back, and the arm where it doe… | `2026-09-07` | settled |
 
@@ -64,7 +64,7 @@ and nothing dated replaced it.
 | `12-how-retailos-draws.md` | RETRACTED — everything above about the wheel is a m… | 1053 | RESOLVED — RetailOS navigates; every run that… `2026-09-05` |
 | `13-do-the-games-load.md` | 9.  Reproducing every screen in this file — the com… | 423 | 2026-08-18: the built-ins are not eApps, and… `2026-08-18` |
 | `16-the-third-bootloader.md` | Confirmed by forcing it, one variable — RETRACTED 2… | 50 | The experiment the retraction said was blocke… `2026-08-19` |
-| `16-the-third-bootloader.md` | RETRACTED, and then re-established with the right c… | 1028 | — |
+| `16-the-third-bootloader.md` | RETRACTED, and then re-established with the right c… | 1028 | The part is a PP5022C — read off the chip-id… `2026-09-23` |
 
 ## Every document, in order
 
@@ -211,7 +211,7 @@ and nothing dated replaced it.
 
 ### [`13-do-the-games-load.md`](13-do-the-games-load.md)
 
-34 headings, 4 of them marked or dated:
+35 headings, 5 of them marked or dated:
 
 | line | when | state | heading |
 |---|---|---|---|
@@ -219,6 +219,7 @@ and nothing dated replaced it.
 | 706 | 2026-08-18 |  | 2026-08-18: the built-ins are not eApps, and the framework surface is enumerable |
 | 779 | 2026-09-06 |  | The community patch, characterised — and what it actually defeats (2026-09-06) |
 | 916 | 2026-09-23 |  | The title launch — an unsigned eApp reaches its launch screen (2026-09-23) |
+| 940 | 2026-09-23 |  | On real hardware, the six-site patch does NOT load an unsigned title (2026-09-23) |
 
 ### [`14-the-apple-logo.md`](14-the-apple-logo.md)
 
@@ -234,7 +235,7 @@ and nothing dated replaced it.
 
 ### [`16-the-third-bootloader.md`](16-the-third-bootloader.md)
 
-37 headings, 6 of them marked or dated:
+38 headings, 7 of them marked or dated:
 
 | line | when | state | heading |
 |---|---|---|---|
@@ -244,6 +245,7 @@ and nothing dated replaced it.
 | 759 | 2026-08-19 |  | `0x64004000` is the interrupt controller, and the kernel's own code says so — 2026-08… |
 | 797 | 2026-08-19 |  | It is not a missing `root=`, and the kernel never asks the drive who it is — 2026-08-… |
 | 1028 | — | RETRACTED | RETRACTED, and then re-established with the right cause: the six-byte shift |
+| 1110 | 2026-09-23 |  | The part is a PP5022C — read off the chip-id register on hardware (2026-09-23) |
 
 ### [`17-the-boot-matrix.md`](17-the-boot-matrix.md)
 
