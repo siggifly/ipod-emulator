@@ -955,3 +955,26 @@ The circulating community patch is on **1.2.1**, where it is reported to load pl
 games; ours reproduces it on **1.3**. The unsettled question is whether 1.3 carries a gate 1.2.1
 lacks, or the test title was malformed. The minimal next step is to load a known-good plaintext
 title from the 1.2.1-proven set on a 1.3-patched device and see which way it falls.
+
+### Hardware, settled: the patch runs the community set as-is, not new titles (2026-09-23)
+
+On a real 5.5G with the community 1.2.1-cracked firmware, four placements in `Games_RO` were tried
+(technical placement only, no key work):
+
+- the community's own plaintext **Ms. Pac-Man (14004)** — **runs**;
+- our hand-built unsigned eApp (`DRM=false`, no `.sinf`/`.p7b`) — refused;
+- our eApp dropped into the community's **exact 14004 wrapper** (its `.sinf`/`.p7b`/`DRM=true` kept)
+  — refused;
+- the community's **working** eApp with only the id/name/artwork changed (14006) — refused.
+
+So a title runs only as the exact set the community produced: its own executable, at its own id,
+with its own `.sinf`. Changing the executable *or* the id causes "This game cannot be played". The
+six-site patch enables the community's as-is set; it does **not** load a changed executable or a
+newly-identified title.
+
+**This corrects the two entries above.** The earlier emulator films ended on the manifest's launch
+artwork, reported here as the title loading. On hardware the outcome is refusal for anything that is
+not the community's exact set — the launch artwork draws from the manifest before the executable is
+accepted, so "the launch screen appeared" was never evidence the title loaded. What binds an
+executable to its id is not examined here; that is the protected path and is out of scope for this
+project.

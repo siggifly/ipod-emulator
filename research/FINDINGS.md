@@ -8,7 +8,7 @@ that. What it adds is a way to tell a live answer from a dead one **without read
 whole file** — because a document that grows by addendum puts its current answer at the
 bottom, and nothing on the page says so.
 
-933 headings across 18 documents — 55 dated, 19 settled, 15 retracted, 6 corrected.
+934 headings across 18 documents — 56 dated, 19 settled, 15 retracted, 6 corrected.
 
 ## Where each document stands today
 
@@ -29,7 +29,7 @@ above it in the same document may have been superseded.
 | [`10-the-resource-image.md`](10-the-resource-image.md) | 8b. The audit this fix owed, run 2026-08-13 | `2026-08-13` |  |
 | [`11-the-videocore-runtime.md`](11-the-videocore-runtime.md) | *nothing in it is dated* | — | |
 | [`12-how-retailos-draws.md`](12-how-retailos-draws.md) | RESOLVED — RetailOS navigates; every run that said otherwise was starved,… | `2026-09-05` | settled |
-| [`13-do-the-games-load.md`](13-do-the-games-load.md) | On real hardware, the six-site patch does NOT load an unsigned title (202… | `2026-09-23` |  |
+| [`13-do-the-games-load.md`](13-do-the-games-load.md) | Hardware, settled: the patch runs the community set as-is, not new titles… | `2026-09-23` |  |
 | [`14-the-apple-logo.md`](14-the-apple-logo.md) | 9. Extracting it — 2026-08-19 | `2026-08-19` |  |
 | [`15-the-register-agreement-table.md`](15-the-register-agreement-table.md) | *nothing in it is dated* | — | |
 | [`16-the-third-bootloader.md`](16-the-third-bootloader.md) | The part is a PP5022C — read off the chip-id register on hardware (2026-0… | `2026-09-23` |  |
@@ -211,7 +211,7 @@ and nothing dated replaced it.
 
 ### [`13-do-the-games-load.md`](13-do-the-games-load.md)
 
-35 headings, 5 of them marked or dated:
+36 headings, 6 of them marked or dated:
 
 | line | when | state | heading |
 |---|---|---|---|
@@ -220,6 +220,7 @@ and nothing dated replaced it.
 | 779 | 2026-09-06 |  | The community patch, characterised — and what it actually defeats (2026-09-06) |
 | 916 | 2026-09-23 |  | The title launch — an unsigned eApp reaches its launch screen (2026-09-23) |
 | 940 | 2026-09-23 |  | On real hardware, the six-site patch does NOT load an unsigned title (2026-09-23) |
+| 959 | 2026-09-23 |  | Hardware, settled: the patch runs the community set as-is, not new titles (2026-09-23) |
 
 ### [`14-the-apple-logo.md`](14-the-apple-logo.md)
 
