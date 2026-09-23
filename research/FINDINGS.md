@@ -8,7 +8,7 @@ that. What it adds is a way to tell a live answer from a dead one **without read
 whole file** — because a document that grows by addendum puts its current answer at the
 bottom, and nothing on the page says so.
 
-929 headings across 18 documents — 51 dated, 19 settled, 15 retracted, 6 corrected.
+931 headings across 18 documents — 53 dated, 19 settled, 15 retracted, 6 corrected.
 
 ## Where each document stands today
 
@@ -29,11 +29,11 @@ above it in the same document may have been superseded.
 | [`10-the-resource-image.md`](10-the-resource-image.md) | 8b. The audit this fix owed, run 2026-08-13 | `2026-08-13` |  |
 | [`11-the-videocore-runtime.md`](11-the-videocore-runtime.md) | *nothing in it is dated* | — | |
 | [`12-how-retailos-draws.md`](12-how-retailos-draws.md) | RESOLVED — RetailOS navigates; every run that said otherwise was starved,… | `2026-09-05` | settled |
-| [`13-do-the-games-load.md`](13-do-the-games-load.md) | The community patch, characterised — and what it actually defeats (2026-0… | `2026-09-06` |  |
+| [`13-do-the-games-load.md`](13-do-the-games-load.md) | The title launch — an unsigned eApp reaches its launch screen (2026-09-23) | `2026-09-23` |  |
 | [`14-the-apple-logo.md`](14-the-apple-logo.md) | 9. Extracting it — 2026-08-19 | `2026-08-19` |  |
 | [`15-the-register-agreement-table.md`](15-the-register-agreement-table.md) | *nothing in it is dated* | — | |
 | [`16-the-third-bootloader.md`](16-the-third-bootloader.md) | It is not a missing `root=`, and the kernel never asks the drive who it i… | `2026-08-19` |  |
-| [`17-the-boot-matrix.md`](17-the-boot-matrix.md) | Addendum — what the 25.1.3 stall looks like from the window (2026-08-30) | `2026-08-30` |  |
+| [`17-the-boot-matrix.md`](17-the-boot-matrix.md) | Addendum — a retail 5.5G, measured over USB (2026-09-23) | `2026-09-23` |  |
 | [`18-brick-is-playable.md`](18-brick-is-playable.md) | 4.  The proof of play — a frame that comes back, and the arm where it doe… | `2026-09-07` | settled |
 
 ## Retracted, and what came after it
@@ -211,13 +211,14 @@ and nothing dated replaced it.
 
 ### [`13-do-the-games-load.md`](13-do-the-games-load.md)
 
-33 headings, 3 of them marked or dated:
+34 headings, 4 of them marked or dated:
 
 | line | when | state | heading |
 |---|---|---|---|
 | 423 | 2026-08-19 | corrected | 9.  Reproducing every screen in this file — the commands below do not run, 2026-08-19 |
 | 706 | 2026-08-18 |  | 2026-08-18: the built-ins are not eApps, and the framework surface is enumerable |
 | 779 | 2026-09-06 |  | The community patch, characterised — and what it actually defeats (2026-09-06) |
+| 916 | 2026-09-23 |  | The title launch — an unsigned eApp reaches its launch screen (2026-09-23) |
 
 ### [`14-the-apple-logo.md`](14-the-apple-logo.md)
 
@@ -246,7 +247,7 @@ and nothing dated replaced it.
 
 ### [`17-the-boot-matrix.md`](17-the-boot-matrix.md)
 
-44 headings, 5 of them marked or dated:
+45 headings, 6 of them marked or dated:
 
 | line | when | state | heading |
 |---|---|---|---|
@@ -255,6 +256,7 @@ and nothing dated replaced it.
 | 320 | 2026-08-19 |  | Superseded: the whole matrix, measured 2026-08-19 |
 | 537 | 2026-08-26 |  | Addendum — the 5.5G does not boot, and it is the FIRMWARE, not the ROM (2026-08-26) |
 | 1149 | 2026-08-30 |  | Addendum — what the 25.1.3 stall looks like from the window (2026-08-30) |
+| 1188 | 2026-09-23 |  | Addendum — a retail 5.5G, measured over USB (2026-09-23) |
 
 ### [`18-brick-is-playable.md`](18-brick-is-playable.md)
 

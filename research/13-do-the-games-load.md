@@ -912,3 +912,27 @@ draws a 7-colour menu and redraws between frames.
 **Identical-to-stock is the expected result even if the patch works**, because the validator is only
 called when launching an eApp and never during boot. These runs show the patch **breaks nothing**.
 They do not show it **does** anything. That needs a title launch.
+
+### The title launch — an unsigned eApp reaches its launch screen (2026-09-23)
+
+The launch the paragraph above asks for, run. A 5G drive was built from `iPod_20.1.3.ipsw` with the
+patch minted onto its own `osos` by the algorithm above (the six sites and `+1716`, reproduced), and
+one **unsigned, unencrypted** eApp was placed in `iPod_Control/Games_RO/` — a minimal title with a
+plain manifest, no `Manifest.plist.p7b` and no `.sinf`, sorted to row 0 of the Games list. The
+retail cold boot ran at the faithful clock with research/18's descent plus one Select;
+`script: 56 of 56 steps fired`.
+
+| frame | @ simulated | non-black | screen |
+|---|---|---|---|
+| 3 | 4.8 s | 75 267 | the Language picker — the patched firmware boots normally |
+| 11 | ~128 s | 75 789 | Extras, Games selected |
+| 18 | **229.7 s** | **67 944** | **the unsigned title's own launch screen, held** |
+
+**The control:** the same firmware and patch, launching a *purchased* title instead, ends at
+**"This game cannot be played"** (frame 21). So the patch lets an unsigned plaintext title past the
+validator and to its launch screen, and does not make an encrypted purchased title playable — both
+halves of this section's reading, on one machine.
+
+**What it does not show:** that the title's *code* runs to completion on hardware. The emulated
+launch screen proves the manifest was accepted and the launch began. Whether a homebrew title then
+behaves correctly on a real 5G or 5.5G is a hardware question, and is not answered here.

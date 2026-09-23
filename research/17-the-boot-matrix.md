@@ -1182,3 +1182,43 @@ to move. The window's own path is covered too — `a_press_on_the_drawn_centre_b
 So: **read `0x052a` and the idle/exhausted line before believing anything about input.** Both arms
 above were measured with `ipod-emulator --headless=400000000`, one data directory each, differing
 only in `disk =` — which, and not `device.N.disk`, is the line the headless run actually resolves.
+
+---
+
+## Addendum — a retail 5.5G, measured over USB (2026-09-23)
+
+The section above says *"No measurement exists anywhere. No retail 5.5G NOR `HwVr`, no 5.5G
+`SysInfo`."* Half of that is now measured. A retail iPod 5.5G (30 GB) was read over USB, without
+writing anything to it. Identifiers — serial number, FireWire GUID — are deliberately not recorded
+here.
+
+**SysInfoExtended**, read as SCSI INQUIRY vital-product-data pages `0xC2`–`0xE9` (40 pages, 235
+keys; a second read was byte-identical):
+
+| key | value |
+|---|---|
+| `FamilyID` | 6 |
+| `UpdaterFamilyID` | **25** — the 5.5G family, matching `iPod_25.1.3.ipsw`'s own manifest |
+| `VisibleBuildID` / `BuildID` | 1.3 / 6.3 |
+| `RAM` | 32 (MB) |
+| `GamesPlatformID` / `GamesPlatformVersion` | 1 / 1 |
+| `FireWireVersion` | 1.62 — also the SCSI product revision |
+
+**The disk** reports **2048-byte logical sectors**, 14,658,336 of them, and is Mac-formatted — an
+Apple Partition Map with 2048-byte blocks, not the MBR every drive image in this project uses:
+`firmware` (`Apple_MDFW`) at block 63, length `0x8000`; `disk` (`Apple_HFS`) from `0x8040`.
+
+**The firmware partition** is stock 1.3: `osos` at `devOffset 0x4800`, `len 0x736000`, checksum
+`0x2c7c48f3` — the same `osos` checksum this project's reference drives carry, as expected, because
+the 1.3 `osos` is byte-identical between the 5G and 5.5G bundles. Its image header sits at
+**`+0x800`**, the 5.5G bundle's shape (research/13 records `+0x200` for 5G bundles), found by
+reproducing the recorded checksum rather than assumed. `aupd`'s applied flag (`+0x08`) is 1.
+
+**Still not measured: `HwVr`.** It lives in the NOR's `SysCfg`, and reading the NOR needs a boot of
+something that can dump it. That is the remaining half of this section's open question, and this
+device is now the obvious way to answer it.
+
+**And a caution for anyone imaging one of these:** this unit's drive returned *"Medium Error —
+Unrecovered read error"* two thirds of the way through a plain `dd`. A 2006–2007 1.8″ drive is
+old enough that a plain read of the whole disk should not be assumed to succeed; a rescue-style
+imager that maps unreadable areas is the safer default.
