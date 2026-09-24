@@ -86,3 +86,54 @@ Clusters worth a second look: ~~`0x60009000..0x60009064` (four channels at strid
 `0x6000d0xx`/`0x6000d1xx` (GPIO banks Rockbox never uses), `0x6000d8xx`/`0x6000d9xx` (unnamed),
 `0x60003000..0x6000300c`, `0x60008000`, `0x70003800`, and `0xc3000410` — one past the `0x410` IDE
 window this emulator models.
+
+## The registers, read off the hardware at last — 2026-09-24
+
+Every address in this document until now was inferred: from literals in the firmware, from what
+the machine did when a region was absent, from what Rockbox's headers name. **A serial console on
+a real 5.5G (`ipod-toolchain/written/34-the-lab-console.md`) makes the device answer directly.**
+`machine()` maps these regions as backing store full of zeros — mapped, in its own words,
+"because an unmapped write is a write that never happened" — so the emulator's answer for all of
+them is known in advance, and every word below is a measured disagreement.
+
+| region | emulator | hardware | verdict |
+|---|---|---|---|
+| `0x60000000` mmio-6 | zeros | **`55555555` across the whole 4 KB** | 1024/1024 differ |
+| `0x70000000` mmio-7 | zeros | chip id + config | 320/1024 differ |
+| `0xc0000000` mmio-c | zeros | zeros | **0/1024 — the emulator is right** |
+| `0xc3000000` IDE | zeros | real registers | 658/1024 differ |
+| `0xc5000000` USB | zeros | real registers | 207/1024 differ |
+| `0xf0000000` cache | zeros | **ARM instructions** | 995/1024 differ |
+| `0x30020000`, `0x30060000` LCD | `0xFF` | **`00000000`** | 1024/1024 differ |
+| `0x30030000`, `0x30070000` LCD | `0xFF` | **`b280b280`** | 1024/1024 differ |
+
+### Four things worth acting on
+
+**1. `PROC_ID` is `55555555`, not `0x00000055`.** `lib.rs` does
+`m.mem.write32(0x6000_0000, 0x0000_0055)`. The firmware reads it with `ldrb`, so the low byte
+matches and nothing has ever broken — but **the entire 4 KB window reads `55555555` on hardware**,
+so any word-width read of anything in mmio-6 disagrees. The comment calls it "PROC_ID (read as a
+byte; 0x55 = CPU)"; the hardware says the value is on every byte of every word in the window.
+
+**2. The LCD `0xFF` fill is wrong, and it was a documented guess.** The source says the region is
+"Filled with `0xFF` rather than zeros because the driver spins on a ready bit". Hardware says two
+of the four windows read `00000000` and the other two read **`b280b280`**. A driver that spins on
+a ready bit is satisfied by `b280b280`, not by `0xFF` — and `0xFF` was chosen to make the spin
+stop, not because anything measured it.
+
+**3. `0xf0000000` contains ARM code.** `ebfff8d8` (`bl`), `e3a00004` (`mov r0, #4`), `e1a00810`
+(`lsl`), `e58a0004` (`str`). It is the cache data array holding recently-executed instructions,
+which is what `ipod-toolchain/written/30` §19 concluded from it containing the dumper's own
+filename. Backing store cannot model this at any initialisation value.
+
+**4. `0xc0000000` is genuinely zeros.** Worth recording because it is the one region where the
+emulator's assumption survives contact, and a differential that only ever finds faults is not
+being read carefully.
+
+### What the instrument does NOT show, and why
+
+The `v` command reads a range twice back to back and reports what moved. It found **almost nothing
+volatile** — and that is a limitation, not a result. Two reads microseconds apart cannot see a
+slowly-changing register. The proof is in this document's own data: the third chip-id word at
+`0x70000008` read `003e5082` earlier in the session and `003f008e` here. It changes; `v` cannot
+see it. A volatility pass worth trusting needs a delay between reads, and does not exist yet.
