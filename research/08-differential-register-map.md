@@ -137,3 +137,51 @@ volatile** — and that is a limitation, not a result. Two reads microseconds ap
 slowly-changing register. The proof is in this document's own data: the third chip-id word at
 `0x70000008` read `003e5082` earlier in the session and `003f008e` here. It changes; `v` cannot
 see it. A volatility pass worth trusting needs a delay between reads, and does not exist yet.
+
+### The full 64 KB, and a live register nobody has named — 2026-09-24
+
+The first pass above read 4 KB per region. Asking for 64 KB produced **the same numbers**, because
+the console clamps a single read to 4096 bytes and the harness believed the short reply — it
+reported "1024 of 1024 words differ" for a window it never read. Chunked and count-asserted, the
+picture changes:
+
+| region | differ | of | live |
+|---|---:|---:|---:|
+| `0x60000000` mmio-6 | 8 450 | 16 384 | **16** |
+| `0x70000000` mmio-7 | 674 | 16 384 | 0 |
+| `0xc0000000` mmio-c | **0** | 16 384 | 0 |
+| `0xc3000000` IDE | 16 384 | 16 384 | 0 |
+| `0xc5000000` USB | 3 275 | 16 384 | **5** |
+| `0xf0000000` cache | 15 465 | 16 384 | 1 |
+| `0x30020000`–`0x30070000` BCM ×4 | 16 384 each | 16 384 | 0 |
+
+#### `0x60006038` — a free-running counter, undocumented, and aliased
+
+Sixteen addresses moved between back-to-back reads, at a perfect `0x100` stride:
+`0x60006038 + n * 0x100`. **They are one register, not sixteen.** The control is a static
+neighbour: `PLL_CONTROL` (`0x…34`) reads `8a121403` and `PLL_STATUS` (`0x…3c`) reads `80000034`
+at *every* alias, so bits 8–11 are not decoded in this block — the same incomplete decoding that
+governs the rest of this part.
+
+It sits **between `PLL_CONTROL` (`0x60006034`) and `PLL_STATUS` (`0x6000603c`)**, and Rockbox's
+`pp5020.h` names neither it nor anything else at `0x…38`. Measured: 16-bit, changes on every read
+(`00007648` → `000013ce` within one round trip), values spread across the whole range — a counter
+wrapping far faster than a serial round trip, which is why consecutive samples look unordered.
+
+**What it is remains open; what it does is not.** It is live, and `machine()` returns a static
+zero for it. Firmware that polls it — for a PLL lock, a delay, or entropy — sees a constant in the
+model and a moving value on the device, and would spin forever in one and not the other.
+
+#### The other live ones
+
+- **USB, 5 addresses** at `0xc500?f84`/`0xc500?384`, toggling `28000605` ↔ `28000205` — one status
+  bit (`0x400`), also aliased.
+- **Cache, `0xf0000000`** — the DATA register, changing as code executes. Expected, and it is the
+  one place backing store is obviously wrong.
+
+#### IDE is state-dependent across runs, and `v` cannot see that
+
+`0xc3000000` read `00003131`/`80003371` in one pass and a flat `00000050` in another minutes later,
+with `v` reporting **0 volatile both times**. Two reads microseconds apart cannot see a register
+that changes with disk state. `v` finds fast registers; it is blind to slow ones, and a region it
+calls stable is only stable *at that timescale*.
