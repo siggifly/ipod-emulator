@@ -988,3 +988,63 @@ with input is comparable to the control's. Until then, treat instruction counts 
 any run carrying a wheel script as **not comparable** to one without — they cover different amounts
 of simulated work, and that is what makes the "input draws less" reading in research/12 an artefact
 of the budget rather than a fact about drawing.
+
+## #6 read off the hardware — 2026-09-24
+
+The first measurements of the BCM2722 taken from a real 5.5G, over the serial console in
+`ipod-toolchain/written/34-the-lab-console.md`. `0x30000000` is the co-processor, not an "LCD
+controller": Rockbox's own `firmware/target/arm/ipod/video/lcd-video.c` names `DATA`, `WR_ADDR`,
+`RD_ADDR` and `CONTROL` at `+0x00000`/`+0x10000`/`+0x20000`/`+0x30000`, and only address bits
+16..18 are decoded.
+
+### `CONTROL` is a live handshake register, and that is the finding
+
+| | value | ready bits (`0x2` write, `0x10` read) |
+|---|---|---|
+| emulator (`hw/video.rs:389`) | `0x52`, fixed | both always set |
+| hardware, shortly after boot | **`0x007f`** | both set |
+| hardware, after idling | **`0xb280`** | **neither set** |
+
+Sampled 64 times a tick apart and 8 times back to back in the same state: constant within a state,
+different between them. **So `0x52` is not wrong because of its value — `0x007f` and `0x52` agree
+on both ready bits. It is wrong because it is FIXED.** On hardware those bits clear, and the wait
+loops in `lcd-video.c` (`while (!(BCM_RD_ADDR & 1))`, `while (!(BCM_CONTROL & 0x10))`) are live
+code that the model never executes.
+
+> ⚠️ **A claim made earlier the same day is retracted here.** Reading `CONTROL` as a 32-bit word
+> returns `b280b280` and as a halfword `b280`, and that was first read as a width artefact — a
+> 16-bit register read at the wrong width. It is not. Re-read at word, halfword and byte width in
+> one pass, all three agree. The two values are two *states*, minutes apart, and the width
+> hypothesis was wrong.
+
+### The ready bits genuinely gate access — proven, not assumed
+
+The console's `g` command performs the driver's own read handshake on-device. In the `0x007f`
+state it returns data. In the `0xb280` state it returns **`timeout: rd_addr not ready`**. The same
+command, the same address, two states, two outcomes. That is the control this measurement needed:
+without it, data from a chip that is always ready proves nothing about gating.
+
+The likely cause of the second state is Rockbox's own `HAVE_LCD_SLEEP` — an idle display puts the
+co-processor to sleep. **Practical consequence for anyone repeating this: the display must be
+awake or the BCM will not answer.**
+
+### BCM internal `0x1f0` — read at last, and it fails the gate for a legible reason
+
+Ledger #6's retirement condition (1) is the block RetailOS reads at internal `0x1f0` to ask the
+co-processor who it is. `FUN_00288058` requires **word 2 == 1** and word 3 to be a valid pointer to
+an 8-entry service directory. On hardware, with the display awake:
+
+```text
+  0x1f0  00014ff0   0x1f4  00000000   0x1f8  00000000   0x1fc  ffff0000
+  0x200  d6dc2f78   0x204  2f790000   0x208  00023883   0x20c  2eb96fc1
+```
+
+**Word 2 is `0`, not `1`.** So RetailOS's gate would fail on this machine exactly as it fails in
+the emulator — and for the right reason: under Rockbox the co-processor has **no firmware**.
+`vmcs.bin` is never uploaded, and the service directory is something the co-processor *firmware*
+publishes, not a hardware constant.
+
+**That settles the shape of #6's retirement.** It cannot be retired by measurement: there is no
+hardware value to copy, because the artefact does not exist until `vmcs.bin` runs. What the
+hardware *did* supply is the baseline — a no-firmware `0x1f0` block that is non-zero and
+structured, which the model currently has no notion of at all.
