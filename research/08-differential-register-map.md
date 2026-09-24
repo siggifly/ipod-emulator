@@ -185,3 +185,28 @@ model and a moving value on the device, and would spin forever in one and not th
 with `v` reporting **0 volatile both times**. Two reads microseconds apart cannot see a register
 that changes with disk state. `v` finds fast registers; it is blind to slow ones, and a region it
 calls stable is only stable *at that timescale*.
+
+### The IIS registers `PAUSED.md` blamed are real — 2026-09-24
+
+The work stopped on 2026-09-08 left a suspected fault it could not confirm: `IISFIFO_WR` running
+at a hardcoded 44 100 frames/s "because `IISCONFIG` (`0x70002800`) and `IISFIFO_CFG`
+(`0x7000280c`) are unmodelled", costing a claimed **628x**. Doom was the arm that would have
+priced it and was never run.
+
+Read off the hardware:
+
+```text
+  70002800  20000070     <- IISCONFIG
+  70002804  a000000a
+  70002808  0000001f
+  7000280c  00100031     <- IISFIFO_CFG
+  70002810..7000283c     all zero
+```
+
+**Both hold real configuration.** The emulator maps neither, so both read zero, and four words of
+audio-clock configuration are simply absent from the model.
+
+**What this settles and what it does not.** It settles the *premise*: the registers exist, carry
+non-zero configuration, and are unmodelled — that is no longer a suspicion. It does **not** confirm
+the 628x figure, which is a claim about cost and still needs the arm that was never run. A premise
+measured is not a conclusion earned.
