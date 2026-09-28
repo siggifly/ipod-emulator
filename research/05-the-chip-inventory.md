@@ -956,6 +956,28 @@ buys only 1.76x of wall clock. That cost is somebody else's fix, in flight as th
 the two compound rather than overlap: with halted steps cheap, 856 M executed instructions in 32
 simulated seconds is about real time on this host.
 
+> **Measured 2026-09-28, and the prediction was half right.** Both changes are now in the tree
+> (`Machine::idle_jump` settles halted cycles arithmetically). Same recipe, same pinned inputs, a
+> fresh drive clone per arm, `--enterlog` on in every arm:
+>
+> | 32 simulated seconds at clock 75 | wall | instructions | real time |
+> |---|---|---|---|
+> | idle jump only (no pacing) | 144.1 s | 1 648 355 647 | 22 % |
+> | pacing only (the paused commit) | 102.8 s | — | 31 % |
+> | pacing + idle jump | **48.0 s** | 856 M | **67 %** |
+>
+> They compound, as predicted; they do not reach real time on this host, which the prediction said
+> they would. What is left is the 856 M instructions that *execute*, at ~18 M/s of host time under
+> `--enterlog`. That is the M7 question in `ROADMAP.md`, not a halting cost.
+>
+> **And the two did not compose correctly on first contact.** Pacing added a deadline —
+> `pp_dma_due` — that neither the halt arm nor `idle_jump` knew about. The halt arm treated a core
+> waiting only on an audio buffer as having nothing armed and woke it for free, and a jump could
+> step up to a millisecond past a DMA completion: 258 paced transfers became 254. Both now read one
+> list, `Machine::held_deadlines`, and with the fix in both arms the jumping and walking machines
+> produce **byte-identical run reports** and identical drive images. The snapshot did not carry
+> the deadline either; `IPODSNP9` does. The 44 100 constant itself is now ledger entry #20.
+
 ###### The oracle, run as a control rather than quoted
 
 `ipod-boot rockbox` on `drives/ipod8g-rockbox.img`, same clock, same `--until=32s`, same wheel

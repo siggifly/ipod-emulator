@@ -7276,6 +7276,28 @@ pub fn install_game_stubs(&mut self, exe_stem: &str, o: GameStubs) -> bool {
     /// `--stop-when-idle` are really asking about. A core that has been asleep for a million cycles
     /// is idle in exactly their sense, and keying them on `executed` alone meant a halted machine
     /// could never reach the condition that ends a run.
+    /// Every deadline this machine holds, in simulated microseconds: the two timers, the drive's
+    /// completion, and each DMA channel waiting on a peripheral that drains at its own clock.
+    ///
+    /// **One list, because two copies of it diverged.** The halt arm asks *"is anything armed?"*
+    /// and [`Self::idle_jump`] asks *"how far is the nearest one?"*, and both used to spell the
+    /// list out inline. When the I2S pacing added `pp_dma_due`, neither learned about it: a core
+    /// waiting only on an audio buffer was woken for free, and a jump could step up to a
+    /// millisecond past a DMA completion. Measured on the 32 s retail list-scroll recipe, that
+    /// moved 258 paced transfers to 254. A deadline added to the machine goes here, and both
+    /// callers see it.
+    ///
+    /// `0` is a timer not yet armed and `u32::MAX` a one-shot that has fired; neither is a
+    /// deadline, so neither is yielded.
+    fn held_deadlines(&self) -> impl Iterator<Item = u32> + '_ {
+        self.timer_next
+            .iter()
+            .copied()
+            .chain(self.mem.ide_irq_due)
+            .chain(self.mem.pp_dma_due.values().copied())
+            .filter(|&d| d != 0 && d != u32::MAX)
+    }
+
     pub fn steps(&self) -> u64 {
         self.executed as u64 + self.idle_steps
     }
@@ -7500,12 +7522,9 @@ pub fn install_game_stubs(&mut self, exe_stem: &str, o: GameStubs) -> bool {
                 ahead = k;
             }
         };
-        // The same list the caller walked to decide this halt was one we hold a deadline for, and
-        // read the same way: `0` is not yet armed, `u32::MAX` is a one-shot that has fired.
-        for d in self.timer_next.iter().copied().chain(self.mem.ide_irq_due) {
-            if d != 0 && d != u32::MAX {
-                nearer(d);
-            }
+        // The same list the caller walked to decide this halt was one we hold a deadline for.
+        for d in self.held_deadlines() {
+            nearer(d);
         }
         if let Some(u) = self.until_usec {
             // Already reached. The run ends at the next 64-step service boundary and the walk to it
@@ -7635,10 +7654,7 @@ pub fn install_game_stubs(&mut self, exe_stem: &str, o: GameStubs) -> bool {
                 // teleport did too — it is the only part of the old behaviour worth keeping.
                 let now = self.mem.usec;
                 let (mut armed, mut due) = (false, false);
-                for d in self.timer_next.iter().copied().chain(self.mem.ide_irq_due) {
-                    if d == u32::MAX || d == 0 {
-                        continue;
-                    }
+                for d in self.held_deadlines() {
                     armed = true;
                     if now.wrapping_sub(d) < 0x8000_0000 {
                         due = true;
@@ -10420,7 +10436,14 @@ impl Machine {
         // (research/03 §57/§58), so every restored machine behaved like the one-core failure it
         // took a day to diagnose: **34 of 34 injected wheel steps fired, all 34 frames read, and
         // the panel never moved** — on a snapshot of a machine that had been answering.
-        o.extend_from_slice(b"IPODSNP8");
+        //
+        // **`9` because a DMA completion can be pending.** The I2S pacing posts an audio
+        // transfer's completion when the FIFO has drained, not when the bytes leave RAM, so at any
+        // instant RetailOS may be waiting on a deadline only `pp_dma_due` holds. Version 8 did not
+        // carry it: a machine restored mid-buffer came back with the channel busy and nothing that
+        // would ever finish it, and the audio driver waited for good. RetailOS refills silence
+        // continuously at its menu, which is exactly where `from-idle` takes its snapshot.
+        o.extend_from_slice(b"IPODSNP9");
         let cpu = self.cpu.save();
         w32(&mut o, cpu.len() as u32);
         for x in &cpu {
@@ -10551,6 +10574,12 @@ impl Machine {
         // left it. The two then disagree for the rest of the session, and the only symptom is a
         // screen at the wrong brightness.
         w32(&mut o, self.mem.backlight.level as u32);
+        // Pending DMA completions, `(channel base, due µs)`. See the version note at the top.
+        w32(&mut o, self.mem.pp_dma_due.len() as u32);
+        for (&base, &due) in &self.mem.pp_dma_due {
+            w32(&mut o, base);
+            w32(&mut o, due);
+        }
         o
     }
 
@@ -10559,7 +10588,7 @@ impl Machine {
     /// Regions are replaced wholesale rather than merged: a partial restore would leave the machine
     /// in a state that never existed, which is worse than refusing.
     pub fn restore(&mut self, b: &[u8]) -> bool {
-        if b.len() < 8 || &b[..8] != b"IPODSNP8" {
+        if b.len() < 8 || &b[..8] != b"IPODSNP9" {
             return false;
         }
         let mut p = 8usize;
@@ -10729,6 +10758,14 @@ impl Machine {
         let level = r32(&mut p);
         if (1..=32).contains(&level) {
             self.mem.backlight.level = level as u8;
+        }
+        // Pending DMA completions. Replaced, never merged: a completion the saved machine did not
+        // hold must not survive into the restored one.
+        self.mem.pp_dma_due.clear();
+        for _ in 0..r32(&mut p) {
+            let base = r32(&mut p);
+            let due = r32(&mut p);
+            self.mem.pp_dma_due.insert(base, due);
         }
         // **Re-derive the address map from the registers that define it.**
         //

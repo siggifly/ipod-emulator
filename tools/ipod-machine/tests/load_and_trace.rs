@@ -1607,11 +1607,11 @@ fn an_older_snapshot_is_refused() {
     let mut img = m.snapshot();
     assert_eq!(
         &img[..8],
-        b"IPODSNP8",
-        "the format moved past v8; update this test"
+        b"IPODSNP9",
+        "the format moved past v9; update this test"
     );
 
-    for old in [b"IPODSNP3", b"IPODSNP4", b"IPODSNP5", b"IPODSNP6", b"IPODSNP7"] {
+    for old in [b"IPODSNP3", b"IPODSNP4", b"IPODSNP5", b"IPODSNP6", b"IPODSNP7", b"IPODSNP8"] {
         img[..8].copy_from_slice(old);
         let mut into = sleeping_machine();
         assert!(
@@ -1623,7 +1623,7 @@ fn an_older_snapshot_is_refused() {
 
     // Positive control: the same bytes with the current magic still restore, so what is refused is
     // the version and not the image.
-    img[..8].copy_from_slice(b"IPODSNP8");
+    img[..8].copy_from_slice(b"IPODSNP9");
     let mut into = sleeping_machine();
     assert!(
         into.restore(&img),
