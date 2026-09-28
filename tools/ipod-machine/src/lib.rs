@@ -4365,15 +4365,27 @@ pub struct Machine {
     /// that clock. `--until=200s` is 200 seconds of iPod at any `--clock`, on any future machine,
     /// whatever changes underneath it. `BUDGET` remains, as the ceiling that stops a wedged run.
     pub until_usec: Option<u32>,
-    /// Loop iterations spent with the core halted, at the same cost as executing one.
+    /// Cycles spent with the core halted, each costing the simulated clock exactly what executing
+    /// an instruction would.
     ///
     /// **The clock is a function of work done, and nothing invents time.** A halted core used to
     /// teleport `usec` to whichever interrupt was due next, which made idle time free: a machine
     /// doing nothing aged thousands of times faster than one doing something, and Rockbox's ten
-    /// idle minutes arrived about thirteen seconds after a person stopped touching the wheel.
-    /// Now a halt costs the same per microsecond as running does, so the whole machine — busy or
+    /// idle minutes arrived about thirteen seconds after a person stopped touching the wheel. A
+    /// halt now costs the same per microsecond as running does, so the whole machine — busy or
     /// idle — runs at one honest fraction of the real part's speed. At a third of speed everything
     /// takes three times as long, which is the point.
+    ///
+    /// **That is a rule about the simulated clock, and it used to be paid in host time as well.**
+    /// The two are separable and only the first is load-bearing. The loop charged a halted cycle by
+    /// running an iteration for it, so a booted iPod sitting at its menu — which is halted for
+    /// about 99% of its cycles — paid full host CPU to sit still: measured on `ipod-boot from-idle
+    /// --clock=75`, 180 M cycles cost 6.1 s of a 2026-era laptop and executed 1.69 M instructions,
+    /// 0.94% of them. Every one of those iterations is exactly linear in the count, so
+    /// [`Machine::idle_jump`] settles a run of them in closed form instead: the same cycles, the
+    /// same microseconds, the same remainder, the same step for every deadline — 0.22 s. What is
+    /// skipped is the host's walk, never the iPod's clock, and the equality is a test
+    /// ([`a_halted_core_lands_where_walking_it_one_cycle_at_a_time_lands`]) rather than a claim.
     ///
     /// Kept apart from [`executed`](Self::executed) deliberately: that must stay a count of
     /// instructions actually run or every profile and novelty figure becomes a measurement of how
@@ -7114,12 +7126,6 @@ pub fn install_game_stubs(&mut self, exe_stem: &str, o: GameStubs) -> bool {
         const CPU_HI_INT_STAT: u32 = 0x6000_4100;
         const HI_INT_STAT: u32 = 0x6000_4110;
         const CPU_HI_INT_EN_STAT: u32 = 0x6000_4120;
-        // Software-raised interrupts. Rockbox names all six registers and uses none of them;
-        // RetailOS uses them as its deferred-work mechanism, which is why they matter here. Its
-        // DMA ISR finishes by writing `INT_FORCED_SET = 1 << 13` at 0x001fc840 — the completion
-        // callback runs at task level on line 13, not in the ISR.
-        const INT_FORCED_STAT: u32 = 0x6000_4014;
-        const HI_INT_FORCED_STAT: u32 = 0x6000_4114;
         const TIMER_CFG: [u32; 2] = [0x6000_5000, 0x6000_5008];
 
         // The enable state and the forced state, both of them already up to date: their set/clear
@@ -7307,6 +7313,30 @@ pub fn install_game_stubs(&mut self, exe_stem: &str, o: GameStubs) -> bool {
     /// [`Memory::quantum`] is what the scheduler actually reads.
     pub const QUANTUM: usize = 1_000;
 
+    /// Halted cycles the run loop pays for one at a time before it will consider skipping any.
+    ///
+    /// A halt begins owing work: the store that set the sleep bit may have armed a timer, started
+    /// a DMA, or woken the coprocessor, and none of that is visible until the next service tick
+    /// consumes it. 128 cycles is exactly two ticks at the loop's 64-step service rate, so by the
+    /// time a jump is considered every deadline is armed, every started transfer has run, every
+    /// overdue wheel step has fired, and a second tick has been observed to change nothing. What
+    /// [`Machine::idle_jump`] then skips is a tick it has watched be inert.
+    ///
+    /// It costs 128 cycles per halt and buys the rest: measured on `ipod-boot from-idle`, 770
+    /// halts over 60 M cycles, so the settle is 0.16% of a window in which 99% of the cycles are
+    /// halted.
+    const IDLE_SETTLE: u64 = 128;
+
+    /// The most simulated time one arithmetic jump may cover.
+    ///
+    /// Every horizon [`Machine::idle_jump`] knows about is enumerated and none of them is
+    /// approximate — but the list is a claim about what this machine models, and a device added
+    /// later will not update it. The cap is what bounds being wrong: an unenumerated periodic
+    /// source is seen a millisecond late rather than at the end of a halt that can run for
+    /// seconds. It costs almost none of the win, because the win is in the ratio: at 75
+    /// instructions per microsecond one jump still replaces 75 000 loop iterations.
+    const IDLE_JUMP_MAX_USEC: u32 = 1_000;
+
     /// Run the coprocessor for up to `budget` instructions.
     ///
     /// **This is a reduced loop, and that is a deliberate limitation rather than an oversight.**
@@ -7358,12 +7388,148 @@ pub fn install_game_stubs(&mut self, exe_stem: &str, o: GameStubs) -> bool {
         ran
     }
 
+    /// How many halted cycles the run loop may apply in **one** arithmetic step.
+    ///
+    /// **The clock must not teleport; the host need not walk.** Those are two claims and only the
+    /// first is load-bearing. Charging a halted core one microsecond per `instr_per_usec` cycles is
+    /// what keeps a resting iPod aging at the same rate as a busy one — the whole of the fix this
+    /// replaced, and untouched here. But the loop that charged it did so one iteration at a time,
+    /// and every one of those iterations is exactly linear: `idle_steps += 1`, a remainder rolled
+    /// into `slept_usec`, the clock identity recomputed, one comparison. A sum of `n` identical
+    /// linear steps has a closed form, and this is the `n`.
+    ///
+    /// **`n` is the distance to the nearest thing that could notice.** Every horizon below either
+    /// ends the halt or would be observed part-way through it, and the smallest wins:
+    ///
+    /// * the two timers and the drive's completion — the deadlines the caller has already read as
+    ///   *armed but not due*, and the reason this core is waiting at all;
+    /// * the click wheel's pending reply, and its next **simulated-time** script step. An
+    ///   instruction-anchored step is not a horizon: `executed` does not move while halted, so a
+    ///   step waiting on an instruction count cannot come due during a jump;
+    /// * `--until`, so a jump cannot step over the moment the run was told to end;
+    /// * `--stop-when-idle`, whose window closes at a fixed *step* rather than a fixed time — the
+    ///   jump lands exactly on it, so `Stop::Idle` is returned on the same step it would have been;
+    /// * the budget, since a halted cycle spends one whether it is walked or skipped;
+    /// * [`IDLE_JUMP_MAX_USEC`](Self::IDLE_JUMP_MAX_USEC), which bounds a horizon nobody wrote down.
+    ///
+    /// **And three states where a skipped service tick would not have been inert, each of which
+    /// refuses the jump entirely rather than being bounded.** A forced interrupt that is enabled
+    /// makes every tick raise one — `service_interrupts_inner` reaches `cpu.irq()` through
+    /// `int_pending | INT_FORCED_STAT`, which is a wider test than the `irq_wake` that decided this
+    /// core was asleep, so the two disagree exactly here. A coprocessor with an enabled source
+    /// pending is woken and interrupted on every tick. And a coprocessor that is awake while
+    /// `executed` sits on a quantum boundary runs a full quantum per halted cycle — `executed` is
+    /// frozen, so that predicate does not rotate: it holds for the whole halt or for none of it.
+    ///
+    /// Returns at least 1, which is the loop's original behaviour and the answer whenever anything
+    /// above is unclear.
+    fn idle_jump(&mut self, ipu: usize, max_steps: u64) -> u64 {
+        // Nothing services a machine with no microsecond timer — `service_interrupts` is behind
+        // that same `is_some`, and so is the clock update this jump performs. There is no horizon
+        // to compute against and no evidence any of it is inert.
+        if max_steps <= 1 || self.mem.usec_timer.is_none() {
+            return 1;
+        }
+
+        // Read rather than remembered, for the reason `service_interrupts_inner` gives: the
+        // registers are the one true copy of the enable state and a second one is how the two come
+        // to disagree. Marked internal because these are the emulator's own reads, made to decide
+        // its own scheduling — `--read-addrs`, `--input-regs` and the region tallies are reports
+        // about what the *firmware* drives.
+        let was_internal = std::mem::replace(&mut self.mem.internal, true);
+        let (_, cpu_en, _, _) = Core::Cpu.int_regs();
+        let en = self.mem.read32(cpu_en);
+        let en_hi = self.mem.read32(cpu_en + 0x100);
+        let pending = self.mem.int_pending | self.mem.read32(INT_FORCED_STAT);
+        let pending_hi = self.mem.int_pending_hi | self.mem.read32(HI_INT_FORCED_STAT);
+        let cop_live = self.mem.second_core && {
+            let (_, cop_en, _, _) = Core::Cop.int_regs();
+            let ce = self.mem.read32(cop_en);
+            let ce_hi = self.mem.read32(cop_en + 0x100);
+            pending & ce != 0
+                || pending_hi & ce_hi != 0
+                || (!self.mem.cop_asleep && self.executed.is_multiple_of(self.mem.quantum))
+        };
+        self.mem.internal = was_internal;
+        if cop_live || pending & en != 0 || pending_hi & en_hi != 0 {
+            return 1;
+        }
+
+        let now = self.mem.usec;
+        let mut ahead = Self::IDLE_JUMP_MAX_USEC;
+        let mut nearer = |d: u32| {
+            let k = d.wrapping_sub(now);
+            if k != 0 && k < ahead {
+                ahead = k;
+            }
+        };
+        // The same list the caller walked to decide this halt was one we hold a deadline for, and
+        // read the same way: `0` is not yet armed, `u32::MAX` is a one-shot that has fired.
+        for d in self.timer_next.iter().copied().chain(self.mem.ide_irq_due) {
+            if d != 0 && d != u32::MAX {
+                nearer(d);
+            }
+        }
+        if let Some(u) = self.until_usec {
+            // Already reached. The run ends at the next 64-step service boundary and the walk to it
+            // is the loop's own; stepping over that boundary is the one overshoot `--until` cannot
+            // absorb.
+            if now.wrapping_sub(u) < 0x8000_0000 {
+                return 1;
+            }
+            nearer(u);
+        }
+        if let Some(w) = self.mem.clickwheel.as_ref() {
+            if let Some((_, due)) = w.reply {
+                if now.wrapping_sub(due) < 0x8000_0000 {
+                    return 1;
+                }
+                nearer(due);
+            }
+            // `WheelStep::due` compares a `u64` against `usec` widened, not wrapped, so this
+            // horizon is computed the way the thing it bounds reads it. Only the next step matters:
+            // a script fires strictly in order, so one that is not due blocks every step behind it.
+            if let Some(s) = w.script.get(w.next).filter(|s| s.in_usec) {
+                let Some(k) = s.at.checked_sub(now as u64).filter(|k| *k != 0) else {
+                    return 1;
+                };
+                if k < ahead as u64 {
+                    ahead = k as u32;
+                }
+            }
+        }
+
+        // The cycle on which `usec` first reads `now + ahead`. `idle_frac` is the remainder already
+        // banked toward the next microsecond, and is below `ipu` by construction, so this is at
+        // least one.
+        let mut n = (ahead as u64) * (ipu as u64) - self.idle_frac as u64;
+        // `--stop-when-idle` closes at a step, not at a time. Landing on it exactly is what makes
+        // `Stop::Idle` come back on the step it always did rather than a jump late.
+        if let Some(win) = self.stop_when_idle {
+            let closes = self.last_novel.saturating_add(win);
+            let here = self.steps();
+            if closes <= here {
+                return 1;
+            }
+            n = n.min(closes - here);
+        }
+        n.clamp(1, max_steps)
+    }
+
     pub fn run(&mut self, budget: usize) -> Stop {
         // Regions, aliases and device mappings are all configured before a run; clearing here means
         // a cached resolution can never outlive the layout it was computed against.
         self.mem.invalidate_fast();
         let mut prev_pc = self.cpu.regs[15];
-        for _ in 0..budget {
+        // Cycles left after this one, counted rather than iterated, because a halted cycle can now
+        // be spent in bulk: [`Machine::idle_jump`] settles `n` of them at once and the budget has
+        // to lose all `n`. `for _ in 0..budget` could only ever lose one.
+        let mut left = budget;
+        // How long the core has been continuously halted, which is what says whether the service
+        // ticks a jump would skip have been observed to be inert. See [`Self::IDLE_SETTLE`].
+        let mut halted_for = 0u64;
+        while left > 0 {
+            left -= 1;
             // Before the fetch, so a taken IRQ lands on the vector rather than one instruction
             // past it. Rate-limited because it costs several memory accesses.
             if self.mem.usec_timer.is_some() && self.steps() & 0x3f == 0 {
@@ -7464,22 +7630,39 @@ pub fn install_game_stubs(&mut self, exe_stem: &str, o: GameStubs) -> bool {
                 };
                 if !armed || irq_wake {
                     self.mem.cpu_sleep = false;
+                    halted_for = 0;
                 } else if due {
                     self.mem.cpu_sleep = false;
                     self.mem.sleeps += 1;
+                    halted_for = 0;
                 } else {
-                    // Genuinely halted with a deadline to wait for. One loop iteration costs one
-                    // cycle whether it runs an instruction or not, so the clock advances at the
-                    // same rate halted as running and the machine keeps one honest ratio to the
-                    // real part. This used to jump straight to the deadline, which made idle free
-                    // and powered an untouched iPod off in seconds; see KNOWN-BUGS.
-                    self.idle_steps += 1;
-                    self.idle_frac += 1;
+                    // Genuinely halted with a deadline to wait for. A halted cycle costs the same
+                    // per microsecond as a running one, so the clock advances at the same rate
+                    // halted as running and the machine keeps one honest ratio to the real part.
+                    // This used to jump straight to the deadline — teleporting the clock, not the
+                    // loop — which made idle free and powered an untouched iPod off in seconds;
+                    // see KNOWN-BUGS.
+                    //
+                    // **What is skipped is host work, never simulated time.** `n` cycles are
+                    // charged here in closed form, exactly as `n` passes through this arm would
+                    // have charged them: the clock owes the same microseconds, the budget loses
+                    // the same cycles, `--stop-when-idle` closes on the same step. See
+                    // [`Self::idle_jump`] for how far it is safe to go and what refuses it.
                     let ipu = self.instr_per_usec.max(1);
-                    if self.idle_frac >= ipu {
-                        self.idle_frac = 0;
-                        self.mem.slept_usec = self.mem.slept_usec.wrapping_add(1);
-                    }
+                    let n = if halted_for < Self::IDLE_SETTLE {
+                        1
+                    } else {
+                        self.idle_jump(ipu, left as u64 + 1)
+                    };
+                    halted_for += n;
+                    left -= n as usize - 1;
+                    self.idle_steps += n;
+                    let banked = self.idle_frac as u64 + n;
+                    self.idle_frac = (banked % ipu as u64) as usize;
+                    self.mem.slept_usec = self
+                        .mem
+                        .slept_usec
+                        .wrapping_add((banked / ipu as u64) as u32);
                     // Every step, not only the ones that tick a microsecond over. The clock is
                     // defined as `executed / instr_per_usec + slept_usec + usec_offset` and it has
                     // to hold at every instant, or a reader of `usec` between two ticks sees a
@@ -9953,6 +10136,18 @@ pub const PROC_ID: u32 = 0x6000_0000;
 
 pub const CPU_CTRL: u32 = 0x6000_7000;
 
+/// Software-raised interrupts, low bank and high. Rockbox names all six registers and uses none of
+/// them; RetailOS uses them as its deferred-work mechanism, which is why they matter here. Its DMA
+/// ISR finishes by writing `INT_FORCED_SET = 1 << 13` at 0x001fc840 — the completion callback runs
+/// at task level on line 13, not in the ISR.
+///
+/// Out here rather than inside `service_interrupts_inner` because [`Machine::idle_jump`] has to ask
+/// the same question that function does — whether a service tick would raise an interrupt — and a
+/// forced bit is the one pending source that `Memory::int_pending` does not carry. Two copies of
+/// the address is how the two answers come to differ.
+pub const INT_FORCED_STAT: u32 = 0x6000_4014;
+pub const HI_INT_FORCED_STAT: u32 = 0x6000_4114;
+
 /// Which interrupt-controller state register a store to `addr` edits, and whether it sets or
 /// clears — `None` for every other address in the machine.
 ///
@@ -11842,6 +12037,213 @@ mod peek_tests {
         assert!(
             !m.mem.cpu_sleep,
             "a pending, enabled IRQ 40 must wake the core — it is what an interrupt is for"
+        );
+    }
+
+    /// A core parked on a deadline it will not reach: `armed` true, `due` false, for as long as
+    /// anyone here runs it. Timer 1 enabled and repeating with the longest period the field holds.
+    ///
+    /// **Both cores parked, which is what a resting iPod is.** `Machine::new` starts the
+    /// coprocessor awake, and an awake coprocessor with `executed` sitting on a quantum boundary —
+    /// which zero is — runs a full quantum on every halted cycle of the CPU's loop. That is a
+    /// machine doing work while halted, so it is one of the states `idle_jump` refuses; a fixture
+    /// that left it there would be measuring the refusal rather than the jump.
+    fn parked_on_a_far_deadline() -> Machine {
+        let mut m = Machine::new(&EApp::none(), 0x1100_0000, 0x0100_0000);
+        map_hardware(&mut m, false);
+        m.set_clock(75);
+        // Bit 31 enable, bit 30 repeat, low 29 a period in microseconds — `timer-pp.c`'s layout,
+        // and the same arrangement `a_pending_enabled_interrupt_wakes_a_halted_core` sets up.
+        m.mem.write32(0x6000_5000, 0xc000_0000 | 0x0fff_ffff);
+        m.mem.cop_asleep = true;
+        m.mem.cpu_sleep = true;
+        m
+    }
+
+    /// **A halted core lands exactly where walking it one cycle at a time lands.**
+    ///
+    /// [`Machine::idle_jump`] settles a run of halted cycles in closed form instead of iterating
+    /// them. That is a claim about the host's time and about nothing else: the clock must owe the
+    /// same microseconds, the cycle count must be the same count, and the sub-microsecond
+    /// remainder must be the same remainder. This is that claim, stated as an equality between two
+    /// machines that differ only in whether they were allowed to skip.
+    ///
+    /// **The control comes first, because without it this test passes on a machine that never
+    /// jumps at all** — which is exactly the shape AGENTS.md §6 warns about. `idle_jump` is asked
+    /// for its answer on a settled halt and has to offer a real one before the two arms are
+    /// compared.
+    ///
+    /// The walked arm gets its budget in [`Machine::IDLE_SETTLE`]-sized slices. `halted_for` is
+    /// per-`run`, so a slice that size can never reach the threshold, and every one of its cycles
+    /// goes through the one-at-a-time path — the code as it stood before the jump existed.
+    ///
+    /// **What this pins is the budget, and what it cannot pin is the clock arithmetic.** Both arms
+    /// reach the same `banked`/`%`/`/` expression, so a mistake in it moves both of them the same
+    /// way and the equality survives — the clock identity holds for *any* partition of the cycles
+    /// into jumps, which is what makes it safe to skip in the first place. A wrong `n` is visible
+    /// here only through the budget, and through the deadline and window a jump lands on, which
+    /// [`a_jump_stops_at_the_nearest_deadline_and_never_past_the_cap`] and
+    /// [`a_jump_lands_on_the_step_that_closes_the_novelty_window`] pin separately.
+    ///
+    /// **How to make it go red** (measured): delete `left -= n as usize - 1;` from the halted arm
+    /// of the run loop. A 1 024 000-cycle budget then spends 73 977 814 320 cycles.
+    #[test]
+    fn a_halted_core_lands_where_walking_it_one_cycle_at_a_time_lands() {
+        const SLICE: usize = Machine::IDLE_SETTLE as usize;
+        const STEPS: usize = SLICE * 8_000;
+
+        let mut probe = parked_on_a_far_deadline();
+        probe.run(SLICE * 2);
+        let offered = probe.idle_jump(75, u64::MAX);
+        assert!(
+            offered > 1_000,
+            "a settled halt offered a jump of {offered} cycles, so the arms below compare nothing"
+        );
+
+        let mut fast = parked_on_a_far_deadline();
+        assert_eq!(fast.run(STEPS), Stop::BudgetExhausted);
+
+        let mut walked = parked_on_a_far_deadline();
+        for _ in 0..STEPS / SLICE {
+            assert_eq!(walked.run(SLICE), Stop::BudgetExhausted);
+        }
+
+        assert!(
+            fast.mem.cpu_sleep && walked.mem.cpu_sleep,
+            "the deadline was meant to stay out of reach; something woke a core and the budget was \
+             spent executing rather than halted"
+        );
+        assert_eq!(fast.idle_steps, STEPS as u64, "the whole budget should have been halted");
+        assert_eq!(fast.idle_steps, walked.idle_steps, "cycles halted");
+        assert_eq!(fast.idle_frac, walked.idle_frac, "sub-microsecond remainder");
+        assert_eq!(fast.mem.slept_usec, walked.mem.slept_usec, "microseconds owed to halting");
+        assert_eq!(fast.mem.usec, walked.mem.usec, "the clock");
+        assert_eq!(fast.mem.sleeps, walked.mem.sleeps, "halts counted");
+        assert_eq!(fast.timer_next, walked.timer_next, "the deadline the timer is holding");
+        assert_eq!(fast.irqs_asserted, walked.irqs_asserted, "interrupts asserted");
+        assert_eq!(fast.executed, walked.executed, "instructions executed");
+    }
+
+    /// **`--stop-when-idle` closes on the step it always closed on, not a jump late.**
+    ///
+    /// The window is measured in *steps*, and a jump moves the step count in one go — so the
+    /// horizon that bounds it is a step count rather than a deadline, and it is the only one of the
+    /// six that is. Landing past it would return `Stop::Idle` with `steps()` already beyond the
+    /// window, which every figure keyed on "how long until it went quiet" would then be wrong by.
+    ///
+    /// **How to make it go red**: drop the `n = n.min(closes - here)` clamp from `idle_jump`.
+    #[test]
+    fn a_jump_lands_on_the_step_that_closes_the_novelty_window() {
+        const WINDOW: u64 = 5_000;
+        let mut m = parked_on_a_far_deadline();
+        m.novelty = Some(HashMap::new());
+        m.stop_when_idle = Some(WINDOW);
+        assert_eq!(m.run(1_000_000), Stop::Idle);
+        assert_eq!(
+            m.steps(),
+            WINDOW,
+            "the window opened at step 0 and closes at {WINDOW}; the run ended at {} instead",
+            m.steps()
+        );
+    }
+
+    /// **The three states in which a skipped service tick would not have been inert.**
+    ///
+    /// Each one makes `service_interrupts_inner` do something on every pass, so skipping the passes
+    /// would lose that something. They are refusals rather than bounds: there is no distance at
+    /// which they become safe.
+    ///
+    /// **How to make it go red**: delete the `cop_live || pending & en != 0 || …` guard from
+    /// `idle_jump`.
+    #[test]
+    fn an_idle_jump_refuses_a_tick_that_would_have_done_something() {
+        const CPU_INT_EN: u32 = 0x6000_4024;
+        const INT_FORCED_SET: u32 = 0x6000_4018;
+        const COP_INT_EN: u32 = 0x6000_4034;
+
+        // The baseline: a settled, quiescent halt jumps.
+        let mut m = parked_on_a_far_deadline();
+        m.run(Machine::IDLE_SETTLE as usize * 2);
+        assert!(m.idle_jump(75, u64::MAX) > 1, "the quiescent case has to jump");
+
+        // A forced bit that is enabled. `irq_wake` does not see it — it tests `int_pending`, and a
+        // forced source is deliberately kept out of that — so the core stays halted while every
+        // service tick reaches `irqs_asserted += 1` and `cpu.irq()`.
+        let mut forced = parked_on_a_far_deadline();
+        forced.run(Machine::IDLE_SETTLE as usize * 2);
+        forced.mem.write32(INT_FORCED_SET, 1 << 13);
+        forced.mem.write32(CPU_INT_EN, 1 << 13);
+        assert_eq!(
+            forced.idle_jump(75, u64::MAX),
+            1,
+            "a forced, enabled interrupt makes every tick raise one — there is nothing to skip"
+        );
+
+        // The coprocessor, with a source pending that its own mask lets through: every tick wakes
+        // it and calls `cop.irq()`.
+        let mut cop = parked_on_a_far_deadline();
+        cop.run(Machine::IDLE_SETTLE as usize * 2);
+        cop.mem.write32(COP_INT_EN, 1 << 13);
+        cop.mem.write32(INT_FORCED_SET, 1 << 13);
+        assert_eq!(
+            cop.idle_jump(75, u64::MAX),
+            1,
+            "a coprocessor with an enabled source pending is woken on every tick"
+        );
+
+        // A coprocessor that is simply awake, with `executed` on a quantum boundary. `executed` is
+        // frozen while the CPU is halted, so that predicate holds for the whole halt or for none of
+        // it — here it holds, and the other core runs a full quantum per halted cycle.
+        let mut awake = parked_on_a_far_deadline();
+        awake.run(Machine::IDLE_SETTLE as usize * 2);
+        awake.mem.cop_asleep = false;
+        assert_eq!(awake.executed % awake.mem.quantum, 0, "the fixture is not on a boundary");
+        assert_eq!(
+            awake.idle_jump(75, u64::MAX),
+            1,
+            "an awake coprocessor on a quantum boundary is executing, not idling"
+        );
+
+        // `--until` already reached. The run ends at the next service boundary and the walk to it
+        // is the loop's own; a jump over it would overshoot the moment the run was told to stop.
+        let mut until = parked_on_a_far_deadline();
+        until.run(Machine::IDLE_SETTLE as usize * 2);
+        until.until_usec = Some(until.mem.usec);
+        assert_eq!(until.idle_jump(75, u64::MAX), 1, "`--until` is already due");
+    }
+
+    /// **The nearest deadline is what bounds a jump, and the cap is what bounds the nearest
+    /// deadline.**
+    ///
+    /// Two halves. A timer 400 µs out stops the jump at 400 µs of simulated time — at 75
+    /// instructions per microsecond, 30 000 cycles less whatever remainder was already banked. And
+    /// with every deadline further away than [`Machine::IDLE_JUMP_MAX_USEC`], the cap is what
+    /// answers instead, which is the bound on being wrong about a horizon nobody enumerated.
+    ///
+    /// **How to make it go red** (both measured): delete the `- self.idle_frac as u64` from the
+    /// closed form and the first assertion reports 29 925 against 29 905 — a jump that lands
+    /// `idle_frac` cycles past the microsecond the deadline falls on. Initialise `ahead` to
+    /// `u32::MAX` instead of the cap and the second reports 20 132 658 944.
+    #[test]
+    fn a_jump_stops_at_the_nearest_deadline_and_never_past_the_cap() {
+        let mut near = parked_on_a_far_deadline();
+        near.run(Machine::IDLE_SETTLE as usize * 2);
+        // Timer 2, enabled and repeating, due 400 µs from now.
+        near.mem.write32(0x6000_5008, 0xc000_0000 | (400 - 1));
+        // One service tick to arm it, which is what puts the deadline in `timer_next`.
+        near.run(64);
+        assert_eq!(
+            near.idle_jump(75, u64::MAX),
+            near.timer_next[1].wrapping_sub(near.mem.usec) as u64 * 75 - near.idle_frac as u64,
+            "the jump has to land on the microsecond the timer comes due, not past it"
+        );
+
+        let mut far = parked_on_a_far_deadline();
+        far.run(Machine::IDLE_SETTLE as usize * 2);
+        assert_eq!(
+            far.idle_jump(75, u64::MAX),
+            Machine::IDLE_JUMP_MAX_USEC as u64 * 75 - far.idle_frac as u64,
+            "with nothing nearer than the cap, the cap is the answer"
         );
     }
 

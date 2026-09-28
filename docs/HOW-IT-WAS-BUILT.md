@@ -74,8 +74,15 @@ around one driver, and the first found by a stack other than Rockbox.
 The day's last change was subtraction. A halted core used to teleport the clock to whichever
 interrupt was due next, which made idle time free — an untouched iPod aged thousands of times too
 fast and powered itself off about thirteen seconds after you stopped touching the wheel. Now a halt
-costs one loop iteration, exactly as running does, so the machine keeps one honest ratio to the real
-part whether it is busy or idle. Nothing was added to pace it. The teleport was simply deleted.
+costs the clock exactly what running costs, so the machine keeps one honest ratio to the real part
+whether it is busy or idle. Nothing was added to pace it. The teleport was simply deleted.
+
+Three weeks later the same rule was separated from the way it was being paid. The loop had been
+charging a halted cycle by *running an iteration* for it, so a booted iPod sitting at its menu — 99 %
+halted — cost as much of the host as one doing work. Every one of those iterations was linear in the
+count, so a stretch of them is now settled by arithmetic instead of walked, bounded by every deadline
+that could end it. The iPod's clock did not move: the same run comes out byte-identical and takes an
+eighth of the time. Two claims had been welded together, and only one of them was true.
 
 ## What the work actually looked like
 

@@ -2236,9 +2236,18 @@ window would not see it, so it wants confirming interactively."* It has now been
 mechanism rather than by watching.
 
 **FIXED the same day, by deleting the teleport rather than by pacing anything.** A halted core now
-costs one loop iteration per cycle, exactly as a running one does, so the clock advances at the same
-rate whether the machine is busy or idle and the whole thing keeps **one honest ratio** to the real
-part. At a third of speed everything takes three times as long — including waiting.
+costs the simulated clock exactly what a running one does, so the clock advances at the same rate
+whether the machine is busy or idle and the whole thing keeps **one honest ratio** to the real part.
+At a third of speed everything takes three times as long — including waiting.
+
+> **The mechanism changed on 2026-09-08 and the rule did not.** This paragraph read *"costs one loop
+> iteration per cycle"* until then, and it was that literally: the loop ran an iteration per halted
+> cycle, so a machine doing nothing cost as much host CPU as one doing something. That is the second
+> half of the sentence below about the headless path, and it is now delivered — a halted stretch is
+> settled in closed form by `Machine::idle_jump` instead of walked, bounded by every deadline that
+> could end it. **The iPod's clock is untouched**: same cycles, same microseconds, same halts, and
+> `ipod-boot rockbox` at 1.5 G reports the same `429 048 halts, 19 104 ms` either side of the change,
+> byte-identical across the whole report. What it cost was 41.5 s of host time; it now costs 5.3 s.
 
 | | halts | simulated time halted | outcome |
 |---|---|---|---|
@@ -2265,6 +2274,13 @@ cannot outrun the wall clock while a person is watching, and leave the headless 
 because a research run that waited out 42 minutes of idle in real time would be useless. That makes
 it the same question as **M7**, approached from the other end: M7 is the machine being too slow while
 executing, this is the machine being infinitely fast while halted.
+
+> **The "leave the headless path skipping" half landed 2026-09-08, and it is the *host* that skips.**
+> The paragraph above was written when the only way to make idle cheap was to make it free, so it
+> proposed one behaviour headless and another at the window. It does not need to: a jump that skips
+> host iterations while charging the clock every microsecond is correct in both places, and there is
+> now one machine again. What remains for the window is the opposite clamp — stopping simulated time
+> **outrunning** the wall clock — which is unrelated to this and still open.
 
 ## Not bugs, though they look like ones
 

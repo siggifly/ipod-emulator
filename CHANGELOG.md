@@ -361,6 +361,19 @@ the two in a way hardware cannot do. `sys_poweroff` went from 315 calls to none.
 would collapse, is retired with it. It turned out to cost nothing: the honest clock reaches the
 same place in **half** the instructions.
 
+### …and stopped charging your laptop for the iPod's idle
+
+The rule above is about the *iPod's* clock and nothing else, but it was being paid twice. A booted
+iPod sitting at its menu is halted for about **99 %** of its cycles, and the emulator ran a full
+loop iteration for every one of them — so doing nothing cost as much of your processor as doing
+something. Measured on a restored, booted machine: 180 million cycles took **6.1 seconds** and
+executed 1.7 million instructions, 0.94 % of them.
+
+A halted stretch is now settled in one arithmetic step instead of walked. The same **6.1 seconds
+became 0.22**, and the machine it produces is identical — the same cycle count, the same clock, the
+same interrupts, the same disk commands, byte for byte in the whole report. The iPod still ages at
+exactly the rate it did; your computer simply stops watching it do nothing.
+
 ### The films have their colours back
 
 Every published animation was built with **one 256-colour palette for the whole film**. A single
