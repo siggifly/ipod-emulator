@@ -8,7 +8,7 @@ that. What it adds is a way to tell a live answer from a dead one **without read
 whole file** — because a document that grows by addendum puts its current answer at the
 bottom, and nothing on the page says so.
 
-946 headings across 18 documents — 60 dated, 19 settled, 15 retracted, 6 corrected.
+953 headings across 18 documents — 62 dated, 20 settled, 16 retracted, 6 corrected.
 
 ## Where each document stands today
 
@@ -21,7 +21,7 @@ above it in the same document may have been superseded.
 | [`02-retailos-boot.md`](02-retailos-boot.md) | *nothing in it is dated* | — | |
 | [`03-rtxc-and-the-video-coprocessor.md`](03-rtxc-and-the-video-coprocessor.md) | 58.  The audio subsystem does start — it needs the coprocessor, 2026-09-05 | `2026-09-05` | settled |
 | [`04-bypass-ledger.md`](04-bypass-ledger.md) | #6 read off the hardware — 2026-09-24 | `2026-09-24` |  |
-| [`05-the-chip-inventory.md`](05-the-chip-inventory.md) | Scrolling settled: there is no acceleration, and the fold is ours — 2026-… | `2026-09-07` |  |
+| [`05-the-chip-inventory.md`](05-the-chip-inventory.md) | The audio DMA completed in zero time — 48 % of the whole run, and 98 % of… | `2026-09-08` | settled |
 | [`06-rockbox-as-oracle.md`](06-rockbox-as-oracle.md) | Doom is played: input reaches the game, and the press has to land inside… | `2026-09-06` |  |
 | [`07-the-flash-images.md`](07-the-flash-images.md) | The storm was the vector table, and the chord now takes input — 2026-09-06 | `2026-09-06` | settled |
 | [`08-differential-register-map.md`](08-differential-register-map.md) | The IIS registers `PAUSED.md` blamed are real — 2026-09-24 | `2026-09-24` |  |
@@ -51,6 +51,7 @@ and nothing dated replaced it.
 | `03-rtxc-and-the-video-coprocessor.md` | 24.  RETRACTED — `0x58` is a plain immediate, and t… | 1148 | 57.  The second core was stalled by a read th… `2026-09-05` |
 | `03-rtxc-and-the-video-coprocessor.md` | The repacker conclusion above is WRONG — the disk i… | 1302 | 57.  The second core was stalled by a read th… `2026-09-05` |
 | `03-rtxc-and-the-video-coprocessor.md` | It renders — ❌ **RETRACTED, see §39** | 1690 | 57.  The second core was stalled by a read th… `2026-09-05` |
+| `05-the-chip-inventory.md` | RETRACTED — the 555 ms is not the redraw, and 58.6… | 790 | The audio DMA completed in zero time — 48 % o… `2026-09-08` |
 | `09-what-the-hardware-must-supply.md` | What is *not* established — **NOT A MEASUREMENT. `-… | 227 | The delegate, measured properly — WRONG, retr… `2026-08-13` |
 | `09-what-the-hardware-must-supply.md` | The delegate, measured properly — WRONG, retracted… | 338 | A sibling with the field set — which turns ou… `2026-08-13` |
 | `09-what-the-hardware-must-supply.md` | A sibling with the field set — which turns out to b… | 524 | — |
@@ -116,19 +117,21 @@ and nothing dated replaced it.
 
 | line | when | state | heading |
 |---|---|---|---|
-| 583 | — | settled | snapshot / restore —  faithful; the control that condemned it was wrong |
-| 858 | 2026-08-13 |  | Independent corroboration from `daniel5151/clicky` (2026-08-13) |
-| 960 | 2026-08-31 |  | Caveat on the interrupt-wake fix (2026-08-31) — it stops the machine idling |
-| 992 | 2026-09-24 |  | #6 read off the hardware — 2026-09-24 |
+| 584 | — | settled | snapshot / restore —  faithful; the control that condemned it was wrong |
+| 859 | 2026-08-13 |  | Independent corroboration from `daniel5151/clicky` (2026-08-13) |
+| 961 | 2026-08-31 |  | Caveat on the interrupt-wake fix (2026-08-31) — it stops the machine idling |
+| 993 | 2026-09-24 |  | #6 read off the hardware — 2026-09-24 |
 
 ### [`05-the-chip-inventory.md`](05-the-chip-inventory.md)
 
-22 headings, 2 of them marked or dated:
+29 headings, 4 of them marked or dated:
 
 | line | when | state | heading |
 |---|---|---|---|
 | 298 | 2026-09-06 |  | The click — `PWM0_CTRL` at `0x7000A000`, and it is a PWM channel, not a piezo — 2026-… |
 | 554 | 2026-09-07 |  | Scrolling settled: there is no acceleration, and the fold is ours — 2026-09-07 |
+| 790 | 2026-09-08 | RETRACTED | RETRACTED — the 555 ms is not the redraw, and 58.6 % of it was never drawing anything… |
+| 820 | 2026-09-08 | settled | The audio DMA completed in zero time — 48 % of the whole run, and 98 % of the gap bet… |
 
 ### [`06-rockbox-as-oracle.md`](06-rockbox-as-oracle.md)
 

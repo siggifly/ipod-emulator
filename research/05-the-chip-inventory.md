@@ -636,7 +636,9 @@ step, not a picture anybody looked at.
 
 **The ceiling is not the wheel.** The fires are **555 ms apart in every arm** — 548, 554, 558 ms at
 26 ms spacing; 531 … 616 ms at 100 ms; 555 ms at 4 ms — and in *instructions* they are 41.6 M apart
-in all three. That is a fixed amount of work per list move, not a timer and not a rate we set. The
+in all three. ~~That is a fixed amount of work per list move~~ — **wrong; see the two dated
+sections at the end of this heading (2026-09-08). It is a fixed amount of work per *unit of time*,
+and it is not the list move: 98 % of it is an audio DMA this machine completed in zero time.** The
 count of clicks is simply how many 555 ms redraws fit inside the gesture, which is why spreading the
 same sixty detents over six seconds instead of a quarter of one buys five times the clicks **and five
 times the scrolling**.
@@ -670,7 +672,11 @@ Two things fall out. **Rockbox is rate-independent where RetailOS is not** — 8
 And the like-for-like number, which is the interval and not the total: **Rockbox's eight fires are
 104 ms apart** (21.083 · 21.187 · 21.291 · 21.395 · 21.499 · 21.603 · 21.707 · 21.811 s — a
 metronome) against RetailOS's 555 ms, on the same emulated machine, in the same session, through the
-same `--wheel` script. So the 555 ms is RetailOS's own cost and not our model refusing to go faster.
+same `--wheel` script. ~~So the 555 ms is RetailOS's own cost and not our model refusing to go
+faster.~~ **That inference is the wrong way round, corrected 2026-09-08.** Rockbox is not five
+times quicker at drawing; at its menu it never arms the audio DMA at all (`pp dma: 0 transfers`),
+so it is the one arm that is *not* carrying our fault. The comparison was evidence about the
+machine and was read as evidence about the firmware.
 *(The panel-frame totals in that table are for the whole 32 s run and are not comparable across the
 two firmwares — Rockbox boots in a fraction of the time and sits at its menu redrawing a clock. The
 interval is the comparison; the totals are context.)* Whether a real 5G pays 41.6 M instructions for
@@ -752,13 +758,19 @@ compensating for a physical edge the input device lacks, and it stops at the ada
   the code and returns the moment the machine falls behind — `--clock=75` is exactly that machine,
   and the compression is fully present there. The fix, if it is ever wanted, is an arrival `Instant`
   on the queued event, not a different constant.
-- **The 555 ms redraw is the dominant term and is not this section's.** It is Addenda 20–25's
-  output-stage wall. Nothing about the wheel can raise a click rate that RetailOS caps at 1.8 Hz.
+- ~~**The 555 ms redraw is the dominant term and is not this section's.** It is Addenda 20–25's
+  output-stage wall. Nothing about the wheel can raise a click rate that RetailOS caps at 1.8 Hz.~~
+  **Withdrawn 2026-09-08.** RetailOS caps nothing; this emulator did. The redraw is 0.6 M
+  instructions and the other 41 M were ours. See the two dated sections below.
 
 ##### The operator's six, arithmetic rather than impression
 
 His log was `released — 4736 frames, 6 detents felt, 61 edges felt (centre)`, on a machine the clock
-calibration had settled at **16**. 41.6 M instructions is 555 ms of the iPod's time at clock 75 and
+calibration had settled at **16**. *(Every number in this subsection is measured on the machine as
+it was before 2026-09-08's audio-DMA fix, and the arithmetic in it was right for that machine. On
+the machine today a list row costs 0.6 M instructions, so the same 38 s of contact has room for
+hundreds of rows rather than fifteen — see the two dated sections below.)* 41.6 M instructions is
+555 ms of the iPod's time at clock 75 and
 **2.6 s at clock 16** — and clock 16 is chosen precisely so that a simulated second costs a wall
 second, so it is 2.6 s of *his* time per list row. 4736 frames at the pad's ~124 Hz is about 38 s of
 contact, which has room for roughly **fifteen** rows. He got six, and the 61 edge crossings are where
@@ -774,6 +786,208 @@ long drag is the guest asking five or six times, because the guest moved the lis
 The way to more clicks is more rows — deliver the gesture at the rate it was made, keep the contact
 whole, and make the redraw cheaper — and every one of those is a change to the emulator rather than
 to the actuator.
+
+##### ⚠️ RETRACTED — the 555 ms is not the redraw, and 58.6 % of it was never drawing anything, 2026-09-08
+
+Everything above about the wheel, the gate, the queue of one and the click-per-view-transition
+stands. **What is wrong is the sentence that reads *"that is a fixed amount of work per list
+move"*, and the profile under it.** The 41.6 M instructions between two clicks are not the cost of
+moving a row. They are the cost of an **audio DMA that this machine completes in zero time**, and
+the list move is 0.6 M of them — 1.4 %.
+
+The reading was honest and the instruments were not lying about their own numbers. Three things
+combined to make it wrong:
+
+- `--profile --profile-window=` over one click interval genuinely does put 58.6 % of that window in
+  the zero-fill loop. It says nothing about *whose* zero-fill, and the window was chosen because it
+  bounded a redraw — so a background load uniform in time reads as a component of the thing the
+  window was named after.
+- `--enterlog=0x0007ccd0`'s detail rows gave the lengths *"5, 0x30, 0x200, 0x1e …"*, and they are
+  the **first 400 arrivals of the run**, which are the boot's. The fills that matter are 9 216 bytes
+  and none of them is in that sample. This is the `adc_log` trap in the instrument table, on a
+  different instrument: an ordering answers *"how did this run open"*, never *"what is it doing
+  now"*. The uncapped `callers:` histogram, which the table already says to read instead, names the
+  real caller in one line.
+- **Rockbox's 104 ms was the right control for the wrong reason.** It does not show that Rockbox
+  draws five times faster. It shows that Rockbox, at its menu, never arms the audio DMA at all —
+  `pp dma: 0 transfers, 0 bytes` — so it never gets onto the treadmill RetailOS is on. The oracle
+  was pointing at the fault the whole time and the comparison was read as being about drawing.
+
+The last bullet of *"What is left, stated as ours"* — *"the 555 ms redraw is the dominant term …
+Nothing about the wheel can raise a click rate that RetailOS caps at 1.8 Hz"* — is withdrawn.
+RetailOS caps nothing. **This emulator did**, and the section that follows is the measurement.
+
+##### ✅ The audio DMA completed in zero time — 48 % of the whole run, and 98 % of the gap between two list rows — 2026-09-08
+
+`0x0007ccd0` is not a wait. It is ARM's `__rt_memclr`, twenty-two instructions, four of them a
+32-byte `stmia` pair with a countdown, and it touches no MMIO:
+
+```text
+0007ccd0  mov      r2, #0x0
+0007ccd4  subs     r1, r1, #0x20
+0007cce8  stmiacs  r0!, {r2, r3, r12, lr}     ; the loop, 32 bytes per pass
+0007ccec  stmiacs  r0!, {r2, r3, r12, lr}
+0007ccf0  subcss   r1, r1, #0x20
+0007ccf4  bcs      0x0007cce8
+```
+
+**One caller makes 99.30 % of the calls.** `--enterlog=0x0007ccd0`'s uncapped census over the
+32-second run: 384 371 of 387 076 arrivals from `lr = 0x0025a778`, against 2 120 from the
+second-placed site and 415 from the third. `0x0025a720`–`0x0025a778` is a double-buffered PCM
+fill: it takes the requested length off the stack, clamps it to `0x20000`, picks the half of the
+buffer the flag byte at `[r4+0x48]` is not currently playing, flips the flag, and clears that half.
+It is an audio driver writing **silence** because it has nothing to play.
+
+And in the same run's report, one line down:
+
+```text
+pp dma: 384400 transfers, 3543752960 bytes
+  ch 0x6000b000  0x17be7ac0 -> 0x70002840  9216 bytes
+  ch 0x6000b000  0x17be9ec0 -> 0x70002840  9216 bytes      ← ping-ponging, forever
+```
+
+`0x6000b000` is `DMA0_BASE_ADDR` (research/08 §1) and `0x70002840` is `IISFIFO_WR`, the I²S
+transmit FIFO — the register file in research/15 already names its two neighbours `IISCONFIG`
+(`0x70002800`) and `IISFIFO_CFG` (`0x7000280c`). The halt registers of that same run land inside
+the loop with `r6 = r9 = 0x17be7ac0` and `r5 = 0x2400`: **the buffer being cleared is the buffer
+being played**, 9 216 bytes of it, which is 2 304 stereo frames — **52.2 ms of audio at 44.1 kHz**.
+
+**We delivered it 628 times faster than that.** 384 400 transfers in 32 simulated seconds is
+12 012 per second against a sample clock's 19.1, and 3.54 GB pushed at a FIFO that can take
+176 kB/s. `run_pp_dma` moved the bytes and posted `DMA_STATUS_INTR` in the same instruction — its
+own comment said so, *"the copy is instantaneous, so the channel is already idle by the time any
+instruction can look"* — which is defensible for the co-processor's host port at `0x30000000`,
+where the destination really does take bytes at bus speed, and is not defensible for a FIFO that
+drains at an audio clock. **The completion interrupt is the only thing that tells the driver a
+buffer has been consumed.** Answer it instantly and the driver refills instantly, forever.
+
+So the shape of this fault is the inverse of the one AGENTS.md §4 is usually about. Nothing was
+spinning on a status bit that never sets. The machine was answering a bit **too fast**, and the
+firmware was doing exactly what firmware should do with that answer.
+
+###### The arithmetic closes exactly
+
+384 400 transfers over 1 648 355 647 instructions is **one buffer every 4 287 instructions**, all
+in. The measured gap between two screen transitions is 40 962 586 instructions, which is
+**9 554 buffers**. There is nothing else in the interval. The 41.6 M *is* the audio loop, to three
+figures, and that is why it was constant regardless of input rate: it is not a property of
+scrolling at all.
+
+###### Both arms, pinned
+
+Identical but for the build — same ROM, same drive (a fresh clone per arm from
+`drives/ipod8g-retail.img`), same clock, same battery, same RTC, same script:
+
+```sh
+FLASH=resources/roms/retail_5g_MA146_HwVr000B0005_internal_rom_000000-0FFFFF.bin \
+DISK=<fresh clone of resources/drives/ipod8g-retail.img> BUDGET=20000000000 \
+ipod-boot retail --clock=75 --battery=100 --rtc=2026-09-07T12:00:00 --until=32s \
+  --wheel='@20s:touch,+1s:rotate=+60,+3s:release' --wheel-click-instr=1950000 \
+  --enterlog=0x0007ccd0,0x000cd430 --profile=60
+# and a second pass of each arm with --enterlog=0x001b9168 alone, for the transition instants
+```
+
+| in 32 simulated seconds | before | after |
+|---|---|---|
+| instructions executed | 1 648 355 647 | **856 471 568** |
+| `0x0007ccd0` arrivals | 387 076 | **3 198** |
+| PP DMA transfers / bytes | 384 400 / 3 543 752 960 | 258 / 4 311 296 |
+| IRQs asserted / taken | 7 638 169 / 404 487 | 120 843 / 31 147 |
+| second core: instructions / sleeps | 32 360 111 / 386 740 | 429 882 / 2 689 |
+| clicks (`0x000cd430`) | **4** | **14** |
+| co-processor frame updates | 10 | 20 |
+| screen transitions (`0x001b9168`) | 4 | 14 |
+
+**The measurement that answers the question this section opened with** is the last row's spacing.
+Before: `@837 063 717 · @878 026 303 · @919 519 972 · @961 436 645` — 40.96 M, 41.49 M, 41.92 M.
+After: fourteen of them, the first at `@837 063 717` **to the instruction**, then 657 261 · 564 072
+· 558 436 · 587 985 · 578 989 · 578 439 · 596 369 · 596 143 · 1 198 079 · 1 220 310 · 1 182 959 ·
+1 221 909 · 1 222 917.
+
+**41.6 M instructions per list row became 0.56–1.22 M** — 34x to 74x, and about 8 ms of the iPod's
+own time per row instead of 555. That is a fluid list, which is what a real 5G has. The earlier
+question *"whether a real 5G pays 41.6 M instructions for a list row"* is answered: it does not,
+and now neither do we.
+
+Two properties of that table are controls rather than results. The **first** transition is at the
+same instruction in both arms, because the boot up to it does not play audio — so the change is
+provably inert until the audio path runs. And the before-arm reproduces this file's own published
+26 ms row exactly (8 `'Weel'` events, **4 clicks**, **10** panel frames), which is what makes the
+after-arm's 14 and 20 comparable to it.
+
+###### The fix, and the one number in it that is assumed
+
+`run_pp_dma` still moves the bytes at bus speed; what it no longer does is post the completion at
+bus speed. A transfer whose peripheral address is `IISFIFO_WR` records a due time of
+`usec + frames / 44 100`, and `service_pp_dma` sets `DMA_STATUS_INTR` when the clock reaches it.
+Every other destination keeps the old behaviour, which is why the co-processor's own transfers are
+untouched. The run report gains `i2s paced: N transfers held for M us`, so a run says whether the
+gate fired at all — 208 transfers holding 10.9 s of the 32 in the arm above.
+
+**44 100 is not read off the part.** The codec model is a recorder by construction (`hw/wm8758.rs`:
+every read on that bus goes to the PMU), and the I²S clock dividers behind `IISCONFIG` are
+unmodelled, so the rate stands in for a register we do not have. Being wrong by an octave costs a
+factor of two; having no rate at all cost a factor of 628. **Retirement condition:** model
+`IISCONFIG`/`IISFIFO_CFG` and the codec's PLL registers well enough to derive the frame rate, and
+delete the constant.
+
+###### What it is worth at the clock the window ships, and what it is not
+
+The operator's report was *"the machine is running at like 5 % normal speed"*, and the arithmetic
+this section replaces is the one that priced it: 41.6 M instructions is **2.6 s of his own time per
+list row** at clock 16, which is the clock chosen so that a simulated second costs a wall second.
+The same row now costs **0.6 M instructions — about 37 ms at clock 16.** That is the 5 %.
+
+**It is not a 70x speedup of the emulator, and saying so would be wrong.** The gain is in what the
+*guest* needs, not in what the host does per simulated second. Same recipe as above with no
+instrumentation at all, timed end to end on this machine while other work was competing for it —
+so read these two as a ratio and not as a benchmark:
+
+| 32 simulated seconds at clock 75 | before | after |
+|---|---|---|
+| wall time | 231.8 s | 132.0 s |
+| instructions executed | 1 648 355 647 | 856 471 568 |
+| of 2 400 M steps, the fraction halted | 31 % | **64 %** |
+
+The host still steps the clock 2 400 M times either way, and the machine now spends nearly two
+thirds of those steps halted — waiting for an audio buffer to drain, which is what it should have
+been doing all along. **A halted step is not currently free**, which is why 48 % fewer instructions
+buys only 1.76x of wall clock. That cost is somebody else's fix, in flight as this is written, and
+the two compound rather than overlap: with halted steps cheap, 856 M executed instructions in 32
+simulated seconds is about real time on this host.
+
+> **Measured 2026-09-28, and the prediction was half right.** Both changes are now in the tree
+> (`Machine::idle_jump` settles halted cycles arithmetically). Same recipe, same pinned inputs, a
+> fresh drive clone per arm, `--enterlog` on in every arm:
+>
+> | 32 simulated seconds at clock 75 | wall | instructions | real time |
+> |---|---|---|---|
+> | idle jump only (no pacing) | 144.1 s | 1 648 355 647 | 22 % |
+> | pacing only (the paused commit) | 102.8 s | — | 31 % |
+> | pacing + idle jump | **48.0 s** | 856 M | **67 %** |
+>
+> They compound, as predicted; they do not reach real time on this host, which the prediction said
+> they would. What is left is the 856 M instructions that *execute*, at ~18 M/s of host time under
+> `--enterlog`. That is the M7 question in `ROADMAP.md`, not a halting cost.
+>
+> **And the two did not compose correctly on first contact.** Pacing added a deadline —
+> `pp_dma_due` — that neither the halt arm nor `idle_jump` knew about. The halt arm treated a core
+> waiting only on an audio buffer as having nothing armed and woke it for free, and a jump could
+> step up to a millisecond past a DMA completion: 258 paced transfers became 254. Both now read one
+> list, `Machine::held_deadlines`, and with the fix in both arms the jumping and walking machines
+> produce **byte-identical run reports** and identical drive images. The snapshot did not carry
+> the deadline either; `IPODSNP9` does. The 44 100 constant itself is now ledger entry #20.
+
+###### The oracle, run as a control rather than quoted
+
+`ipod-boot rockbox` on `drives/ipod8g-rockbox.img`, same clock, same `--until=32s`, same wheel
+script: **`pp dma: 0 transfers, 0 bytes`**, 117 814 811 instructions, 68 co-processor frame
+updates. Rockbox at its menu never arms the channel, so the change cannot have altered it — that is
+a proof from the code path not being entered, not an inference from two runs agreeing. It also
+re-reads the 104 ms: Rockbox was never five times faster at drawing, it was simply not carrying
+RetailOS's load. **An audio-playing Rockbox arm — Doom, which calls `I_InitSound` — was not run:
+its three assets are not in `resources/` and fetching them needs the network.** That is the arm
+that would price the pacing constant against a stack with source, and it is the obvious next one.
 
 ### TV-out is behind the BCM too
 

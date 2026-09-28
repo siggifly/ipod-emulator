@@ -161,19 +161,42 @@ fn a_snapshot_from_an_older_format_is_refused() {
     let mut image = a.snapshot();
     assert_eq!(
         &image[..8],
-        b"IPODSNP8",
+        b"IPODSNP9",
         "the format tag moved; update this test with it"
     );
 
-    image[7] = b'7';
+    image[7] = b'8';
     let mut b = fresh_machine();
     assert!(
         !b.restore(&image),
-        "a v7 image was accepted by the v8 reader"
+        "a v8 image was accepted by the v9 reader"
     );
 
     let mut truncated = a.snapshot();
     truncated.truncate(64);
     let mut c = fresh_machine();
     assert!(!c.restore(&truncated), "a truncated image was accepted");
+}
+
+/// **A DMA completion that is pending when the snapshot is taken is still pending after it.**
+///
+/// The I2S pacing holds an audio transfer's completion until the FIFO has drained, in
+/// `pp_dma_due`. A v8 image did not carry it, so a machine restored mid-buffer had a busy channel
+/// and nothing that would ever finish it. Proven able to fail: with the restore loop deleted this
+/// reports an empty map.
+#[test]
+fn a_pending_dma_completion_survives_a_snapshot() {
+    let mut a = machine_running_through_a_window();
+    a.run(10);
+    a.mem.pp_dma_due.insert(0x6000_b000, 0x0012_3456);
+    a.mem.pp_dma_due.insert(0x6000_b020, 0x0000_0042);
+    let image = a.snapshot();
+
+    let mut b = fresh_machine();
+    b.mem.pp_dma_due.insert(0x6000_b040, 7);
+    assert!(b.restore(&image), "a v9 image was refused by the v9 reader");
+    assert_eq!(
+        b.mem.pp_dma_due, a.mem.pp_dma_due,
+        "the restored machine holds different DMA deadlines from the one that was saved"
+    );
 }
