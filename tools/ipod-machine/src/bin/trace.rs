@@ -3348,6 +3348,30 @@ fn report_dumps(args: &[String], m: &mut ipod_machine::Machine) {
         }
     }
 
+    // --dump-words=ADDR:LEN — 32-bit reads through the firmware's own bus path, one `word ADDR
+    // VALUE` line each. `--dump=` reads a byte at a time, and this machine answers some registers
+    // differently at byte and word width (the mailbox queue, `PROC_ID`), so a comparison with a
+    // device that reads words has to read words too. The line format is the one the hardware
+    // conformance fixture uses, so the two can be diffed without a translation step.
+    for spec in args.iter().filter_map(|a| a.strip_prefix("--dump-words=")) {
+        let parse = |t: &str| {
+            t.strip_prefix("0x")
+                .and_then(|h| u32::from_str_radix(h, 16).ok())
+                .or_else(|| t.parse().ok())
+        };
+        let Some((Some(addr), Some(len))) = spec.split_once(':').map(|(a, l)| (parse(a), parse(l)))
+        else {
+            eprintln!("--dump-words={spec}: want ADDR:LEN");
+            continue;
+        };
+        let was = std::mem::replace(&mut m.mem.internal, true);
+        for off in (0..len & !3).step_by(4) {
+            let a = (addr & !3).wrapping_add(off);
+            println!("word {a:08x} {:08x}", Bus::read32(&mut m.mem, a));
+        }
+        m.mem.internal = was;
+    }
+
     for spec in args.iter().filter_map(|a| a.strip_prefix("--dump=")) {
         let Some((a, l)) = spec.split_once(':') else {
             continue;

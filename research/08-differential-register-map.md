@@ -210,3 +210,47 @@ audio-clock configuration are simply absent from the model.
 non-zero configuration, and are unmodelled — that is no longer a suspicion. It does **not** confirm
 the 628x figure, which is a claim about cost and still needs the arm that was never run. A premise
 measured is not a conclusion earned.
+
+## The conformance gate — the emulator measured against the part, in `cargo test` — 2026-09-28
+
+The tables above were a snapshot, read once and written down. **They are now a gate.**
+`tools/ipod-machine/tests/conformance.rs` holds a capture of the part's peripheral registers as a
+checked-in fixture and diffs this emulator against it on every `cargo test`.
+
+**The capture.** A retail 5.5G (PP5022C) at the Rockbox menu, read through the lab serial console
+with reads only, three passes at +0 s, +2 s and +10 s. A word that moved between any two passes is
+recorded `live` and never compared — that is how a counter is told from configuration without
+guessing, and the slow third pass is there because back-to-back reads miss slow registers (see
+"What the instrument does NOT show" above). **Positive control:** the live set is led by the timer
+block, `USEC_TIMER` (`0x60005010`) and its aliases, which must move. Deliberately *not* captured:
+the cache aperture (executing code), every mask-ROM alias (vendor code, not register state), USB
+(the console's own link runs over it), IDE (state-dependent over minutes, above), and the BCM
+DATA FIFOs (a read pops them). Nothing captured identifies the device.
+
+| window | stable words | diverge | live |
+|---|---:|---:|---:|
+| `0x60000000` mmio-6, 64 KB | 16 112 | 8 165 | 272 |
+| `0x70000000` mmio-7, 64 KB | 16 349 | 637 | 35 |
+| `0xc0000000` mmio-c, 4 KB | 1 024 | **0** | 0 |
+| BCM `RD_ADDR`/`CONTROL`, ch 0 and 1 | 64 | 64 | 0 |
+| **total** | **33 549** | **8 866** | **307** |
+
+**The emulator side runs the same firmware to the same point:** Rockbox, 30 simulated seconds,
+then `trace --dump-words=` reads the same addresses as 32-bit words through the firmware's own bus
+path — so what is compared is what Rockbox would read on each machine. (`--dump=` reads bytes, and
+this machine answers some registers differently at byte and word width.) Stock Rockbox 4.0 here,
+the lab build there; the lab patch adds a debug menu and a serial thread, which is why USB is out.
+
+**The gate fails in both directions**, and both were proven: delete one entry from
+`fixtures/hw-divergences.txt` and it reports `1 NEW divergence`; list a word that agrees and it
+reports `1 divergence RETIRED — delete it`. So the list cannot rot in either direction, and its
+length — **8 866 today** — is the number of words by which this machine is known to differ from
+the part. `CONFORMANCE_BLESS=1` regenerates it and then fails on purpose, so blessing and passing
+are never the same run.
+
+**Where the count lives, so the fixes can be ordered by what they buy.** mmio-6 is 92 % of it and
+is dominated by a few whole-page classes rather than thousands of independent facts: the `PROC_ID`
+page reads `55555555` in all 1 024 words (item 1 above), and unused space in several blocks —
+`0x60004000`, `0x60007000`, `0x6000d000` — reads a filler of `cacad0d0` that the model returns as
+zero (2 128 words between them). The chip-id string differs in its first byte: hardware `0x20`
+(a space), the emulator `0x2d` (`-`). mmio-c is the one window where the model is right in full.
