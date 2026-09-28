@@ -2351,6 +2351,14 @@ fn main() {
         for line in m.mem.piezo.report() {
             println!("{line}");
         }
+        // The audio codec. `hw/wm8758.rs` has recorded every register write since it was written,
+        // uncapped, precisely so a run could say what the firmware told the part — and nothing
+        // printed it. Its clock registers are what the I²S frame rate is derived from (ledger
+        // #20), so a run that cannot show them cannot check that derivation. Silent on a run that
+        // never addressed the part.
+        for line in m.mem.wm8758.report() {
+            println!("{line}");
+        }
         // Every number here is checkable against something. `commands` should equal the transmits
         // RetailOS's `0x00283fa0` starts; `data reads` should equal the loads at `0x00281364` plus
         // `0x00283f04`; `frames dropped` says whether an injected sequence outran the driver; and
