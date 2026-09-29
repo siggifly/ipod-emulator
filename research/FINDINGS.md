@@ -8,7 +8,7 @@ that. What it adds is a way to tell a live answer from a dead one **without read
 whole file** — because a document that grows by addendum puts its current answer at the
 bottom, and nothing on the page says so.
 
-955 headings across 18 documents — 63 dated, 20 settled, 16 retracted, 6 corrected.
+956 headings across 18 documents — 64 dated, 20 settled, 16 retracted, 6 corrected.
 
 ## Where each document stands today
 
@@ -24,7 +24,7 @@ above it in the same document may have been superseded.
 | [`05-the-chip-inventory.md`](05-the-chip-inventory.md) | The audio DMA completed in zero time — 48 % of the whole run, and 98 % of… | `2026-09-08` | settled |
 | [`06-rockbox-as-oracle.md`](06-rockbox-as-oracle.md) | Doom is played: input reaches the game, and the press has to land inside… | `2026-09-06` |  |
 | [`07-the-flash-images.md`](07-the-flash-images.md) | The storm was the vector table, and the chord now takes input — 2026-09-06 | `2026-09-06` | settled |
-| [`08-differential-register-map.md`](08-differential-register-map.md) | The conformance gate — the emulator measured against the part, in `cargo… | `2026-09-28` |  |
+| [`08-differential-register-map.md`](08-differential-register-map.md) | The first snippet run on the part (2026-09-29) | `2026-09-29` |  |
 | [`09-what-the-hardware-must-supply.md`](09-what-the-hardware-must-supply.md) | GPIOL, and what it exposed — **RESOLVED 2026-08-14, and both halves below… | `2026-08-14` |  |
 | [`10-the-resource-image.md`](10-the-resource-image.md) | 8b. The audit this fix owed, run 2026-08-13 | `2026-08-13` |  |
 | [`11-the-videocore-runtime.md`](11-the-videocore-runtime.md) | *nothing in it is dated* | — | |
@@ -161,7 +161,7 @@ and nothing dated replaced it.
 
 ### [`08-differential-register-map.md`](08-differential-register-map.md)
 
-14 headings, 4 of them marked or dated:
+15 headings, 5 of them marked or dated:
 
 | line | when | state | heading |
 |---|---|---|---|
@@ -169,6 +169,7 @@ and nothing dated replaced it.
 | 141 | 2026-09-24 |  | The full 64 KB, and a live register nobody has named — 2026-09-24 |
 | 189 | 2026-09-24 |  | The IIS registers `PAUSED.md` blamed are real — 2026-09-24 |
 | 214 | 2026-09-28 |  | The conformance gate — the emulator measured against the part, in `cargo test` — 2026… |
+| 308 | 2026-09-29 |  | The first snippet run on the part (2026-09-29) |
 
 ### [`09-what-the-hardware-must-supply.md`](09-what-the-hardware-must-supply.md)
 
