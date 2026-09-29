@@ -286,9 +286,13 @@ passes mark copies of a live register as live themselves, and a constant cannot 
   `c000270f`, and `+0x24`/`+0x30` are live exactly where `+0x04`/`+0x10` (`TIMER1_VAL`,
   `USEC_TIMER`) are. That holds in all 128 copies.
 
-Together they are 251 divergences, fixable without a device: mirror these two pages in the model.
-Neither RetailOS nor Rockbox is known to address the copies, but the timers are a live model, so
-R4 applies to the change. The other 12 pages have no live word in their base block. They still
+**Done the same day:** `DECODE_MIRRORS` makes the model mirror these two pages. The Rockbox-backed
+gate, **run on this host**, retired **187** divergences and added none: 5 714 → **5 527**,
+measured. It isn't the 251 predicted, because on `0x60006000` four base-block words (`+0x0c`,
+`+0x34`, `+0x3c`, `+0x4c`) are already wrong in the model, and their 63 copies now repeat the
+wrong value instead of 0. Fix those four registers and the copies follow. Neither RetailOS nor
+Rockbox is known to address the copies. The timers are a live model, so R4's re-run pass is still
+owed. The other 12 pages have no live word in their base block. They still
 need the write-then-read below, preferably one register per page chosen for being harmless to
 poke (not a DMA control or cache word while Rockbox runs).
 
