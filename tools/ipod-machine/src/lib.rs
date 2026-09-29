@@ -589,6 +589,11 @@ pub struct Memory {
     pub unmapped: BTreeMap<u32, UnmappedPage>,
     /// `(base, size, target)` — address windows that are another view of memory elsewhere.
     pub aliases: Vec<(u32, u32, u32)>,
+    /// `(page, mask)` — a 4 KB device page that decodes only `mask`'s address bits, so every
+    /// offset answers as `page | (offset & mask)`. Applied last in [`Memory::translate`], after
+    /// the MMAP and base aliases, so the uncached `0x64xxxxxx` view mirrors the same way. See
+    /// [`DECODE_MIRRORS`].
+    pub mirrors: Vec<(u32, u32)>,
     /// `(address, value_a, value_b)` words that **alternate** between two values on each read.
     ///
     /// For busy flags. Named for `0x7000003c`, which turned out not to need it — that register's
@@ -2359,7 +2364,13 @@ impl Memory {
         for &(base, size, target) in &self.aliases[..self.mmap_alias_floor] {
             let off = a.wrapping_sub(base);
             if off < size {
-                return target.wrapping_add(off);
+                a = target.wrapping_add(off);
+                break;
+            }
+        }
+        for &(page, mask) in &self.mirrors {
+            if a & !0xfff == page {
+                return page | (a & mask);
             }
         }
         a
@@ -4671,6 +4682,7 @@ impl Machine {
             ],
             unmapped: BTreeMap::new(),
             aliases: Vec::new(),
+            mirrors: Vec::new(),
             read_toggle: Vec::new(),
             toggle_state: Vec::new(),
             backlight: Backlight::default(),
@@ -11128,6 +11140,22 @@ pub fn seed_chip_id(m: &mut Machine) {
     }
 }
 
+/// Device pages that decode fewer address bits than their 4 KB, as `(page, mask)`.
+///
+/// **Measured, read-only, and only where a read-only snapshot can prove it.** A repeating value
+/// could be a constant that happens to match (research/08), but a *live* word cannot. The
+/// conformance fixture's three passes mark copies of a live register as live themselves:
+///
+/// - `0x60005000`, the timers: a `0x20` block. `+0x20` reads `+0x00`'s `c000270f`, and `+0x24`
+///   and `+0x30` are live exactly where `TIMER1_VAL` (`+0x04`) and `USEC_TIMER` (`+0x10`) are, in
+///   all 128 copies;
+/// - `0x60006000`: a `0x100` block. `+0x38`, the free-running register `pp5020.h` never names, is
+///   live at every `0x100`, 16 of 16.
+///
+/// The other mirrored `0x6000xxxx` pages have no live word to prove it with and stay unmirrored
+/// until a device write-then-read settles them.
+pub const DECODE_MIRRORS: &[(u32, u32)] = &[(0x6000_5000, 0x1f), (0x6000_6000, 0xff)];
+
 /// What the part answers in the unused space of three `0x6000xxxx` blocks.
 pub const MMIO6_FILLER: u32 = 0xcaca_d0d0;
 
@@ -11396,6 +11424,9 @@ pub fn map_hardware(m: &mut Machine, cold_boot: bool) {
     // Pushed inside the same guard as the rest, and *before* `mmap_alias_floor` is set: an alias
     // registered past that floor is treated as MMAP-derived and gets truncated the next time the
     // firmware programs a window.
+    if m.mem.mirrors.is_empty() {
+        m.mem.mirrors.extend_from_slice(DECODE_MIRRORS);
+    }
     if m.mem.aliases.is_empty() {
         m.mem.aliases.push((0x6400_0000, 0x0010_0000, 0x6000_0000));
         if cold_boot {
@@ -13079,5 +13110,56 @@ mod word_path_tests {
         m.mem.invalidate_fast();
         assert!(m.mem.plain_word(0x2000_0004).is_none());
         assert_eq!(m.mem.read32(0x2000_0004), 0xbbbb_bbaa);
+    }
+}
+
+#[cfg(test)]
+mod decode_mirror_tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    const FIXTURE: &str = include_str!("../tests/fixtures/hw-registers-5.5g-rockbox.txt");
+
+    /// Every captured word on a mirrored page equals the word at its base-block offset, and a
+    /// live word's copies are live: the premise of [`DECODE_MIRRORS`], held to the fixture.
+    #[test]
+    fn the_fixture_repeats_at_the_mirror_stride() {
+        let (mut words, mut live) = (BTreeMap::new(), BTreeSet::new());
+        for l in FIXTURE.lines() {
+            match l.split_whitespace().collect::<Vec<_>>().as_slice() {
+                ["word", a, v] => {
+                    let a = u32::from_str_radix(a, 16).unwrap();
+                    words.insert(a, u32::from_str_radix(v, 16).unwrap());
+                }
+                ["live", a] => {
+                    live.insert(u32::from_str_radix(a, 16).unwrap());
+                }
+                _ => {}
+            }
+        }
+        for &(page, mask) in DECODE_MIRRORS {
+            for a in (page..page + 0x1000).step_by(4) {
+                let b = page | (a & mask);
+                assert_eq!(live.contains(&a), live.contains(&b), "{a:#010x} vs {b:#010x}: live");
+                if let (Some(x), Some(y)) = (words.get(&a), words.get(&b)) {
+                    assert_eq!(x, y, "{a:#010x} vs {b:#010x}");
+                }
+            }
+        }
+    }
+
+    /// A write through the base block reads back at every copy, through the bus and through the
+    /// uncached alias, and a page next door is untouched.
+    #[test]
+    fn copies_are_the_same_storage() {
+        let mut m = Machine::new(&EApp::none(), 0x1100_0000, 0x0100_0000);
+        map_hardware(&mut m, false);
+        m.mem.write32(0x6000_5008, 0x1234_5678); // TIMER2_CFG
+        assert_eq!(m.mem.read32(0x6000_5028), 0x1234_5678);
+        assert_eq!(m.mem.read32(0x6000_5fe8), 0x1234_5678);
+        assert_eq!(m.mem.read32(0x6400_5048), 0x1234_5678);
+        m.mem.write32(0x6000_6f08, 0x0bad_cafe);
+        assert_eq!(m.mem.read32(0x6000_6008), 0x0bad_cafe);
+        assert_eq!(m.mem.translate(0x6000_7108), 0x6000_7108, "0x60007000 is not mirrored yet");
     }
 }
