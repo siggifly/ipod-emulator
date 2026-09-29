@@ -3417,6 +3417,22 @@ matter are id `0x509c` (mode 0) and id `0x50a1` (mode 2). Both ids are confirmed
 `--storeaddr` on the objects' own `+0x1c`: written **once each**, by the one instruction
 `0x0021afc8  strh r1,[r4,#0x1c]`, out of `[descriptor+0x8]`.
 
+> **Corrected 2026-09-29** (`ipod-toolchain` `docs/retailos-menu-tree.md` and NEXT §1). The two
+> descriptors and their ids and modes stand. Three things around them don't:
+>
+> - **The count and start.** The table proper holds **793** `'None'` records, from `0x004cb51c`.
+>   Of the 799 `--wordref` hits, 4 are code and 2 are lone records elsewhere.
+> - **What `'None'` is.** It is one value of an element-kind FourCC at `+0x4`, beside `Str `,
+>   `BMap`, `Cntl`, `Draw`, `StSt` and `DtTm`: 1 656 length-prefixed elements in all.
+> - **Where `parentId` is.** It is not at `+0x0`. The factory `0x0021a4f4` reads `+0x0` as a
+>   halfword **class id** into a class registry, and passes `+0xc` (when it isn't 0 or -1) to a
+>   resolver as the **parent reference**.
+>
+> The stream is the data half of a resource map compiled into `OSOS` (`0x331da0`, data base
+> `0x3385f4`: 619 `View`, 40 `Menu`, 991 `Str`). `GetResource('View', id)` returns the resource,
+> and the root element sits at `+8`. So "not resource-image data" stays true of the `rsrc` image,
+> but these *are* resources, in a second map.
+
 What the class *is* falls out of `0x001acfc0`: `[this+0x114]` is a data source with a count at
 `+0x30`, a page size at `+0x50` and a scroll offset at `+0x60`, and `[this+0xac]` is the current
 index. **It is a scrolling list.** `0x001ae09c` is list-rendering strategy 2 of 3, and it is the only
@@ -3707,7 +3723,8 @@ Two experiments, in order of cost:
 - **"The widget ids come from the `rsrc` image."** No. 799 descriptor records are compiled into
   `OSOS` itself from `0x004cc188`, and `--enterlog` on the factory names the two byte-for-byte:
   `0x004d1b24` and `0x004d1b80`. This file is called *the resource image* and the temptation to route
-  every unexplained id through `rsrc` is strong; the table is in the firmware.
+  every unexplained id through `rsrc` is strong; the table is in the firmware. *(Corrected 2026-09-29: 793 records from `0x004cb51c`,
+  part of a resource map compiled into `OSOS`. See the correction under §2 above.)*
 - **"`Demo` names this subsystem."** `extract_symbols` reports `Demo+0xc4` for the notification
   producers, and there are `"Demo"` strings at `0x00197860` and `0x0016d8ac`. Both sit in constant
   pools between an epilogue and the next prologue — pattern-A adjacency, exactly the source
