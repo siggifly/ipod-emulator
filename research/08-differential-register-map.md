@@ -304,3 +304,31 @@ block ignores — and one read-only snapshot cannot tell an alias of a register 
 happens to match. Both blocks are live models (the DMA engines, the core control), so guessing the
 decode would change behaviour, not just a readout. **Needs a device capture:** write a distinctive
 value to a register, read it back at each candidate alias, restore it.
+
+### The first snippet run on the part (2026-09-29)
+
+`snippets/timer-loop.words` was loaded through the lab console (`L`, `I`, `X 1`) and run once on
+the retail 5.5G. The capture is checked in as `snippets/device/timer-loop.5.5g-2026-09-29.report`.
+`snippet … --device=<that> --timing=1,2,3` says **AGREE: 15 same, 0 differ, 4 timing**, with
+`PROC_ID` `55555555` on both.
+
+**Timing is the one real difference, and it has an exact cause.** The loop is `subs` plus a taken
+`bne`:
+
+| | 10 000 iterations |
+|---|---|
+| the part | **501 µs** at `cpu_hz=80000000` |
+| the emulator | **266 µs** |
+| ratio | **1.88×** |
+
+- The part's number is exactly what ARM7TDMI cycle counts predict: `subs` takes 1 cycle and a
+  taken branch 3 (2S + 1N), so 4 cycles per iteration, 40 000 cycles, 500 µs at 80 MHz.
+- The emulator's clock charges about one instruction per cycle-slot (`clock_ipu=75`) and has no
+  branch penalty.
+- So "how fast" answers from the emulator run about 2× optimistic on branchy code.
+- The model fix is per-class cycle costs, at least taken-branch = 3, against an 80 MHz clock. That
+  change would move every timing conclusion measured so far, so R4 applies before it lands.
+
+**Console quirk:** a line longer than about 21 bytes written in one burst is silently dropped by
+the console's USB receive path. Writing it in 16-byte pieces 20 ms apart works (tested up to 125
+bytes). The host side has to chunk.
