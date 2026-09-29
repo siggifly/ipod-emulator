@@ -72,6 +72,7 @@ pub mod ipsw;
 pub mod mount;
 pub mod rockbox;
 pub mod settings;
+pub mod snippet;
 /// Whether this computer can run a tool this program shells out to — asked by running it.
 pub mod tooling;
 /// What a volume will do with an 8 GiB file, measured rather than named.

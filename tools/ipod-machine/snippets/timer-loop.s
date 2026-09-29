@@ -1,5 +1,9 @@
 @ timer-loop — the first hardware/emulator differential snippet.
 @
+@ Checked in as `timer-loop.words` too, hand-assembled, because the repository keeps no binaries
+@ outside docs/media/. `cargo test` holds the two to each other. Run: `snippet timer-loop.words`,
+@ or against a device capture: `snippet timer-loop.words --device=REPORT --timing=1,2,3`.
+@
 @ Contract: ARM state, position-independent, called as `void f(u32 io[16])` with IRQs masked.
 @   io[0]  PROC_ID read as a word        (0x60000000)
 @   io[1]  USEC_TIMER before the loop    (0x60005010)

@@ -1,0 +1,27 @@
+@ timer-loop.s, assembled by hand into the text form the tests and `snippet` read.
+@ One word per token, little-endian in memory. `the_checked_in_words_are_the_assembly` decodes
+@ every word with the interpreter's own disassembler and holds it to the mnemonic in the source,
+@ so an edit to one file without the other fails `cargo test`. Offsets are from the load address.
+e59f1048   @ 00 ldr   r1, proc_id          (pc+8+0x48 = 0x50)
+e5912000   @ 04 ldr   r2, [r1]
+e5802000   @ 08 str   r2, [r0, #0]
+e5903010   @ 0c ldr   r3, [r0, #16]
+e3530000   @ 10 cmp   r3, #0
+059f303c   @ 14 ldreq r3, default_n        (pc+8+0x3c = 0x58)
+05803010   @ 18 streq r3, [r0, #16]
+e59f1030   @ 1c ldr   r1, usec_timer       (pc+8+0x30 = 0x54)
+e5912000   @ 20 ldr   r2, [r1]
+e2533001   @ 24 1: subs r3, r3, #1
+1afffffd   @ 28 bne   1b
+e591c000   @ 2c ldr   r12, [r1]
+e5802004   @ 30 str   r2, [r0, #4]
+e580c008   @ 34 str   r12, [r0, #8]
+e04cc002   @ 38 sub   r12, r12, r2
+e580c00c   @ 3c str   r12, [r0, #12]
+e5902014   @ 40 ldr   r2, [r0, #20]
+e2822001   @ 44 add   r2, r2, #1
+e5802014   @ 48 str   r2, [r0, #20]
+e12fff1e   @ 4c bx    lr
+60000000   @ 50 proc_id
+60005010   @ 54 usec_timer
+00002710   @ 58 default_n = 10 000
