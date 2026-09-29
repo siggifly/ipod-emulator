@@ -4326,7 +4326,7 @@ rather than pretending.
 #### 16.7.1 Six assertions CI never executes, named
 
 **The decision, recorded because the alternative already cost a day.** Six tests carry
-`#[cfg_attr(not(debug_assertions), ignore)]`, and both CI workflows run `--release`. So these are
+`#[cfg_attr(not(debug_assertions), ignore)]`, and the CI workflow runs `--release`. So these are
 the assertions this project accepts are **never executed by CI**:
 
 | test | what it holds |
