@@ -85,10 +85,9 @@ One branch per topic, named for the topic. One issue per branch.
 
 This is the most surprising fact about this repository and it costs people real time:
 
-- `.github/workflows/ci.yml` builds Linux, macOS and Windows, and **has never executed once.**
-  `gh api repos/siggifly/ipod-emulator/actions/runs` answers `total_count: 0`, and a manual dispatch
-  answers `HTTP 422: Actions has been disabled for this user`. That is account-level; the repository
-  API still cheerfully reports `enabled: true`.
+- **GitHub is a read-only mirror.** Actions is disabled for the account, and the repository keeps
+  no `.github/workflows/`, removed 2026-09-29 because nothing ran them: GitHub never did, and Forgejo
+  ignores that folder while `.forgejo/workflows/` exists.
 - The gates that actually run live in `.forgejo/workflows/ci.yml` and run on a **different forge**.
   They fire on pushes and pull requests to `dev` and `master` there. A pull request opened on GitHub
   does not reach them.
