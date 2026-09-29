@@ -332,3 +332,16 @@ the retail 5.5G. The capture is checked in as `snippets/device/timer-loop.5.5g-2
 **Console quirk:** a line longer than about 21 bytes written in one burst is silently dropped by
 the console's USB receive path. Writing it in 16-byte pieces 20 ms apart works (tested up to 125
 bytes). The host side has to chunk.
+
+**The first write-then-read decode test (2026-09-29).** Armed writes of `0x5a5a5a50`, each restored
+and checked:
+
+- **`0x6000b070`** (DMA channel 3 `RAM_ADDR`): it read back at `+0xf0` and `+0xff0`, and not at
+  `+0x10` (channel 0) or `+0x90`. So the page is **four real `0x20` channels, mirrored every
+  `0x80`**. The capture's `0x20` period was idle channels holding equal values. The model now
+  mirrors it (`DECODE_MIRRORS`). The gate retired nothing yet: the part's base block holds channel
+  0's audio setup (`+0x18` `70000000`, `+0x1c` `20010000`) where the model answers 0, and the copies
+  now repeat that. Fix those and the copies follow.
+- **`0x60009070`** (the second controller's channel 3): the write was ignored, and it reads `1`
+  before, during and after. Not a latch while Rockbox runs (the controller is probably not
+  clocked), so this page is undecided.
