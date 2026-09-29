@@ -2434,9 +2434,20 @@ impl Memory {
     /// the byte path was therefore invisible to both: the coprocessor read `0x55`, decided it was
     /// the CPU, and ran Apple's bootloader concurrently with the real one — which is what six
     /// resets in a cold boot looked like from the outside.
+    ///
+    /// **`PROC_ID` is a whole 4 KB page, and the core id is on every byte of every word.** Read off a
+    /// retail 5.5G at the Rockbox menu (research/08, the conformance fixture), all 1 024 words of
+    /// `0x60000000..0x60000fff` answer `55555555`: the block decodes no address bits below the page
+    /// and drives the id onto all four byte lanes. This used to answer `0x55` in the low byte at the
+    /// one address and zero everywhere else. Every firmware here masks with `and #0xff` or reads
+    /// with `ldrb`, so nothing broke — and 1 024 words disagreed with the part.
     pub(crate) fn core_register(&self, addr: u32) -> Option<u32> {
-        if addr == PROC_ID && self.asking == Core::Cop {
-            return Some(Core::Cop.proc_id() as u32);
+        if addr & !0xfff == PROC_ID {
+            let id = match self.asking {
+                Core::Cpu => Core::Cpu.proc_id(),
+                Core::Cop => Core::Cop.proc_id(),
+            } as u32;
+            return Some(id * 0x0101_0101);
         }
         if self.second_core && addr == Core::Cop.ctrl() {
             return Some(if self.cop_asleep { 0x8000_0000 } else { 0 });
@@ -7298,6 +7309,15 @@ pub fn install_game_stubs(&mut self, exe_stem: &str, o: GameStubs) -> bool {
             .filter(|&d| d != 0 && d != u32::MAX)
     }
 
+    /// Make `addr` the return point: when `PC` reaches it, [`Machine::run`] stops with
+    /// [`Stop::Returned`]. An eApp's loader sets this from the image; a caller that places bare
+    /// code and a return address of its own — the hardware differential's snippet runner — sets
+    /// it here, to an address nothing is mapped at, so a stray branch is `Lost` rather than a
+    /// return.
+    pub fn set_exit(&mut self, addr: u32) {
+        self.exit_addr = addr;
+    }
+
     pub fn steps(&self) -> u64 {
         self.executed as u64 + self.idle_steps
     }
@@ -11128,7 +11148,8 @@ pub fn map_hardware(m: &mut Machine, cold_boot: bool) {
     // it is the coprocessor and sleeps within three instructions; and had it decided
     // otherwise, it would spin forever waiting for a COP that never reports sleeping. Every
     // boot before this was a coprocessor boot. Report CPU, and report the COP already asleep.
-    m.mem.write32(0x6000_0000, 0x0000_0055); // PROC_ID (read as a byte; 0x55 = CPU)
+    // PROC_ID is answered by `Memory::core_register`, for whichever core is asking and across its
+    // whole page, so nothing is seeded for it here.
                                              // **The chip-id register is NOT seeded here, and that is a decision.** `trace.rs` seeds
                                              // `0x70000000` with `0x00360000`, and its comment records the measurement behind it: Apple's
                                              // bootloader reads bits 16..23 and compares against **`0x36`**, taking its PP5021C path when it
