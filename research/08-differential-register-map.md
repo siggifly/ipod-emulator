@@ -254,3 +254,25 @@ page reads `55555555` in all 1 024 words (item 1 above), and unused space in sev
 `0x60004000`, `0x60007000`, `0x6000d000` — reads a filler of `cacad0d0` that the model returns as
 zero (2 128 words between them). The chip-id string differs in its first byte: hardware `0x20`
 (a space), the emulator `0x2d` (`-`). mmio-c is the one window where the model is right in full.
+
+### Retirements
+
+- **`PROC_ID` is a page** (2026-09-28): `core_register` answers `55555555` (`aaaaaaaa` for the
+  COP) across `0x60000000..0x60000fff`. 8 866 → **7 842**.
+- **The `cacad0d0` filler** (2026-09-29): `mmio6_unused` names the three sets exactly —
+  `0x60004200..0x60004fff`; `0x60007000` except `+0x00/+0x04/+0x10` of every `0x100`; the last
+  `0x80` of every `0x200` in `0x6000d000` — and `map_hardware` seeds them. A resource-free test
+  holds the set to this fixture word for word (2 128 filler words, no others). 7 842 → **5 714**,
+  **predicted, not yet gated**: every one of the 2 128 entries read `00000000` on the emulator
+  side, so none was written by Rockbox, but the Rockbox-backed gate has not been run on this
+  change. The first run on a host with `resources/` confirms it or names the exceptions. What the
+  part does with a *write* to filler is not captured; the model lets it stick.
+
+**Still open in mmio-6, and why they are not fixed from the fixture alone.** The DMA pages
+`0x60008000`, `0x60009000` and `0x6000a000` repeat at a `0x80` stride and read `00000001` in most
+words (928 of 1 024 on `0x60008000`), and `0x60007000`'s three registers repeat every `0x100`
+(`CPU_CTRL` at `0x60007104` reads `80000000`). Those are *decode* facts — which address bits the
+block ignores — and one read-only snapshot cannot tell an alias of a register from a constant that
+happens to match. Both blocks are live models (the DMA engines, the core control), so guessing the
+decode would change behaviour, not just a readout. **Needs a device capture:** write a distinctive
+value to a register, read it back at each candidate alias, restore it.

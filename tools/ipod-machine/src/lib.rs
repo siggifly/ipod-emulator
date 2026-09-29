@@ -11128,6 +11128,45 @@ pub fn seed_chip_id(m: &mut Machine) {
     }
 }
 
+/// What the part answers in the unused space of three `0x6000xxxx` blocks.
+pub const MMIO6_FILLER: u32 = 0xcaca_d0d0;
+
+/// Whether `off`, an offset into the `0x60000000` block, is unused space that reads
+/// [`MMIO6_FILLER`] on the part.
+///
+/// **Measured, not inferred** — the conformance fixture (`tests/fixtures/hw-registers-5.5g-
+/// rockbox.txt`, research/08 §"The conformance gate") holds 2 128 words that read `cacad0d0`,
+/// stable across all three passes, and they are exactly these three sets:
+///
+/// - `0x60004200..0x60004fff` — the interrupt controller decodes its first `0x200` and nothing
+///   past it (896 words);
+/// - `0x60007000` except `+0x00`, `+0x04`, `+0x10` of every `0x100` — `CPU_CTRL`, `COP_CTRL` and
+///   the word at `+0x10` repeat at that stride, and everything between them is filler (976);
+/// - `0x6000d000`, the last `0x80` of every `0x200` — twelve GPIO ports of `0x20` fill `0x180`,
+///   and the rest of each half-kilobyte is filler (256).
+///
+/// No other address in the fixture reads it. What the part does with a **write** to these words
+/// is not in any capture; they are seeded here as backing store, so a write sticks, which is the
+/// model's existing answer for every unmodelled word. A write-then-read on the device settles it.
+pub fn mmio6_unused(off: u32) -> bool {
+    match off & !0xfff {
+        0x4000 => off & 0xfff >= 0x200,
+        0x7000 => !matches!(off & 0xff, 0x00 | 0x04 | 0x10),
+        0xd000 => off & 0x1ff >= 0x180,
+        _ => false,
+    }
+}
+
+/// Seed [`MMIO6_FILLER`] into a freshly created `mmio-6` region wherever [`mmio6_unused`] says the
+/// part answers it. Only on creation: a restored snapshot carries its own bytes.
+fn fill_mmio6_unused(r: &mut Region) {
+    for off in (0..r.data.len() as u32).step_by(4) {
+        if mmio6_unused(off) {
+            r.data[off as usize..off as usize + 4].copy_from_slice(&MMIO6_FILLER.to_le_bytes());
+        }
+    }
+}
+
 pub fn map_hardware(m: &mut Machine, cold_boot: bool) {
     for (name, base, size) in [
         // SDRAM, as the hardware actually has it: one contiguous 64 MB at 0x10000000, plus the
@@ -11185,11 +11224,15 @@ pub fn map_hardware(m: &mut Machine, cold_boot: bool) {
         if m.mem.regions.iter().any(|r| r.name == name) {
             continue;
         }
+        let fresh = name == "mmio-6";
         m.mem.regions.push(Region {
             name,
             base,
             data: vec![0; size],
         });
+        if fresh {
+            fill_mmio6_unused(m.mem.regions.last_mut().unwrap());
+        }
     }
     // The LCD controller, at 0x30020000/0x30030000/0x30060000/0x30070000. Filled with 0xFF
     // rather than zeros because the driver spins on a ready bit:
@@ -12849,6 +12892,63 @@ mod figure_tests {
                 "{} is said with {want}",
                 si(n)
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod mmio6_filler_tests {
+    use super::*;
+
+    const FIXTURE: &str = include_str!("../tests/fixtures/hw-registers-5.5g-rockbox.txt");
+
+    fn mmio6_words() -> Vec<(u32, u32)> {
+        FIXTURE
+            .lines()
+            .filter_map(|l| {
+                let f: Vec<&str> = l.split_whitespace().collect();
+                match f.as_slice() {
+                    ["word", a, v] => Some((
+                        u32::from_str_radix(a, 16).unwrap(),
+                        u32::from_str_radix(v, 16).unwrap(),
+                    )),
+                    _ => None,
+                }
+            })
+            .filter(|&(a, _)| a >> 16 == 0x6000)
+            .collect()
+    }
+
+    /// `mmio6_unused` is the fixture's filler set exactly — no word it names reads anything else
+    /// on the part, and no filler word escapes it. Resource-free, so it runs everywhere the
+    /// Rockbox-backed conformance gate skips.
+    #[test]
+    fn the_filler_set_is_the_captured_one() {
+        let words = mmio6_words();
+        let filler = words.iter().filter(|&&(_, v)| v == MMIO6_FILLER).count();
+        assert_eq!(filler, 2128, "the fixture's filler count");
+        for (a, v) in words {
+            assert_eq!(
+                v == MMIO6_FILLER,
+                mmio6_unused(a - 0x6000_0000),
+                "{a:#010x} reads {v:08x} on the part"
+            );
+        }
+    }
+
+    /// And the machine answers it, through the bus and through the uncached alias, warm and cold.
+    #[test]
+    fn a_fresh_machine_reads_the_filler() {
+        for cold in [false, true] {
+            let mut m = Machine::new(&EApp::none(), 0x1100_0000, 0x0100_0000);
+            map_hardware(&mut m, cold);
+            for (a, v) in mmio6_words().into_iter().filter(|&(_, v)| v == MMIO6_FILLER) {
+                assert_eq!(m.mem.read32(a), v, "cold={cold} {a:#010x}");
+            }
+            assert_eq!(m.mem.read32(0x6400_4200), MMIO6_FILLER, "the 0x64000000 alias");
+            // The registers beside it are untouched.
+            assert_ne!(m.mem.read32(0x6000_4020), MMIO6_FILLER);
+            assert_ne!(m.mem.read32(0x6000_d030), MMIO6_FILLER);
         }
     }
 }

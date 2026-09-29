@@ -8,7 +8,7 @@ that. What it adds is a way to tell a live answer from a dead one **without read
 whole file** — because a document that grows by addendum puts its current answer at the
 bottom, and nothing on the page says so.
 
-954 headings across 18 documents — 63 dated, 20 settled, 16 retracted, 6 corrected.
+955 headings across 18 documents — 63 dated, 20 settled, 16 retracted, 6 corrected.
 
 ## Where each document stands today
 
@@ -161,7 +161,7 @@ and nothing dated replaced it.
 
 ### [`08-differential-register-map.md`](08-differential-register-map.md)
 
-13 headings, 4 of them marked or dated:
+14 headings, 4 of them marked or dated:
 
 | line | when | state | heading |
 |---|---|---|---|
