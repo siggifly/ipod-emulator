@@ -268,6 +268,30 @@ zero (2 128 words between them). The chip-id string differs in its first byte: h
   change. The first run on a host with `resources/` confirms it or names the exceptions. What the
   part does with a *write* to filler is not captured; the model lets it stick.
 
+**Triage of the 5 714, measured 2026-09-29 from the fixture and the divergence list alone.**
+
+| class | words | what settles it |
+|---|---|---|
+| copies: on 14 pages the capture repeats a base block across the whole 4 KB page (`0x60008000`, `0x60009000`, `0x6000a000` at `0x80`; `0x6000b000`, `0x60003000` at `0x20`; `0x6000e000`, `0x6000d000` at `0x200`; `0x70000000`, `0x6000c000`, `0x6000f000`, `0x60006000`, `0x60007000` at `0x100`; `0x60001000` at `0x40`; timers `0x60005000`, see below), and the emulator answers `0` past the base block | **5 091** | one decode answer per page |
+| real mismatches inside those base blocks | 230 | per register |
+| the display co-processor, `0x3002/3/6/7xxxx` | 64 | bypass #6 |
+| pages that don't repeat (`0x70008000`, `0x70002000`, `0x7000c000`, `0x70006000`, `0x7000a000`, `0x60004000`, `0x70003000`) | 329 | per register |
+
+**Two of the 14 pages are already settled as aliases, read-only**, because the capture's three
+passes mark copies of a live register as live themselves, and a constant cannot move:
+
+- **`0x60006000`:** `+0x38` (the free-running register named nowhere in `pp5020.h`) is `live` at
+  **every** `0x100` copy (`0x60006038 … 0x60006f38`, 16 of 16). It decodes 8 address bits.
+- **`0x60005000` (timers):** the block is `0x20`, not `0x10`. `+0x20` reads `+0x00`'s
+  `c000270f`, and `+0x24`/`+0x30` are live exactly where `+0x04`/`+0x10` (`TIMER1_VAL`,
+  `USEC_TIMER`) are. That holds in all 128 copies.
+
+Together they are 251 divergences, fixable without a device: mirror these two pages in the model.
+Neither RetailOS nor Rockbox is known to address the copies, but the timers are a live model, so
+R4 applies to the change. The other 12 pages have no live word in their base block. They still
+need the write-then-read below, preferably one register per page chosen for being harmless to
+poke (not a DMA control or cache word while Rockbox runs).
+
 **Still open in mmio-6, and why they are not fixed from the fixture alone.** The DMA pages
 `0x60008000`, `0x60009000` and `0x6000a000` repeat at a `0x80` stride and read `00000001` in most
 words (928 of 1 024 on `0x60008000`), and `0x60007000`'s three registers repeat every `0x100`
