@@ -2469,39 +2469,7 @@ impl Bus for Memory {
     /// four byte-accesses into one word-access would quietly change every number those reports have
     /// ever produced. The saving here is address resolution, not accounting.
     fn read32(&mut self, addr: u32) -> u32 {
-        let a = addr & !3;
-        if let Some(v) = self.core_register(a) {
-            return v;
-        }
-        if let Some((idx, off)) = self.fast_region(a, false) {
-            // `count` is a no-op unless something asked for accounting, so hoist that test out of
-            // the four calls rather than making them and returning immediately from each.
-            // `input_probe` is in the list because it consumes `count` too — the hoist has to name
-            // every consumer or it silences one. See the write path below for what that cost.
-            //
-            // This half cost its own wrong conclusion, separately from the write half. `--input-regs`
-            // answers "which addresses does the firmware read that nothing ever wrote", and with
-            // `input_probe` missing here it counted only byte reads: on the retail boot it saw
-            // 44 510 reads of PROCESSOR_ID against the true 128 150, and missed CPU_INT_STAT's
-            // 167 264 outright. research/09's register table was built on that.
-            if self.accounting
-                || self.page_log.is_some()
-                || !self.read_addrs.is_empty()
-                || self.input_probe.is_some()
-            {
-                for i in 0..4 {
-                    self.count(a.wrapping_add(i), false, 0);
-                }
-            }
-            let d = &self.regions[idx].data[off..off + 4];
-            return u32::from_le_bytes([d[0], d[1], d[2], d[3]]);
-        }
-        u32::from_le_bytes([
-            self.read8(a),
-            self.read8(a.wrapping_add(1)),
-            self.read8(a.wrapping_add(2)),
-            self.read8(a.wrapping_add(3)),
-        ])
+        self.read32_via(addr, true)
     }
 
     fn write32(&mut self, addr: u32, val: u32) {
@@ -2647,6 +2615,144 @@ impl Bus for Memory {
 
     fn write8(&mut self, addr: u32, val: u8) {
         self.write8_inner(addr, val)
+    }
+}
+
+impl Memory {
+    /// `read32`, with the word path switchable so a test can hold it against the machine without
+    /// it. `word_path: false` is exactly the `read32` that existed before the word path.
+    fn read32_via(&mut self, addr: u32, word_path: bool) -> u32 {
+        let a = addr & !3;
+        if let Some(v) = self.core_register(a) {
+            return v;
+        }
+        if let Some((idx, off)) = self.fast_region(a, false) {
+            // `count` is a no-op unless something asked for accounting, so hoist that test out of
+            // the four calls rather than making them and returning immediately from each.
+            // `input_probe` is in the list because it consumes `count` too — the hoist has to name
+            // every consumer or it silences one. See the write path below for what that cost.
+            //
+            // This half cost its own wrong conclusion, separately from the write half. `--input-regs`
+            // answers "which addresses does the firmware read that nothing ever wrote", and with
+            // `input_probe` missing here it counted only byte reads: on the retail boot it saw
+            // 44 510 reads of PROCESSOR_ID against the true 128 150, and missed CPU_INT_STAT's
+            // 167 264 outright. research/09's register table was built on that.
+            if self.accounting
+                || self.page_log.is_some()
+                || !self.read_addrs.is_empty()
+                || self.input_probe.is_some()
+            {
+                for i in 0..4 {
+                    self.count(a.wrapping_add(i), false, 0);
+                }
+            }
+            let d = &self.regions[idx].data[off..off + 4];
+            return u32::from_le_bytes([d[0], d[1], d[2], d[3]]);
+        }
+        // **The word path: a page that is not plain, holding a word that is.** A page carrying one
+        // device register — the timer block, the interrupt controller, the GPIO banks — is off the
+        // page cache as a whole, so every *other* word on it arrived here as four `read8` calls,
+        // each translating the address and walking the region list again; a host profile put
+        // ~45 % of samples there. When no byte of the word is claimed by anything `read8_inner`
+        // consults ahead of `locate`, the answer is the backing word, so resolve it once and read
+        // it once. Anything `plain_word` is unsure of takes the byte path, unchanged.
+        let plain = if word_path { self.plain_word(a) } else { None };
+        if let Some((idx, off)) = plain {
+            let d = &self.regions[idx].data[off..off + 4];
+            let v = u32::from_le_bytes([d[0], d[1], d[2], d[3]]);
+            // The accounting `read8` does per byte, including the value it writes back into a
+            // `--readlog` row, so no report can tell which path served the word. Same hoist as the
+            // page path above: `count` does nothing unless one of these asked for it.
+            if self.accounting
+                || self.page_log.is_some()
+                || !self.read_addrs.is_empty()
+                || self.input_probe.is_some()
+            {
+                for i in 0..4u32 {
+                    let logged = self.read_log.sample().len();
+                    self.count(a.wrapping_add(i), false, 0);
+                    if self.read_log.sample().len() > logged {
+                        if let Some(e) = self.read_log.last_mut() {
+                            e.2 = (v >> (8 * i)) as u8;
+                        }
+                    }
+                }
+            }
+            return v;
+        }
+        self.read32_bytewise(a)
+    }
+
+    /// A word read as the four byte reads the bus performs — what `read32` falls back to when
+    /// neither the page cache nor the word path can answer.
+    fn read32_bytewise(&mut self, a: u32) -> u32 {
+        u32::from_le_bytes([
+            self.read8(a),
+            self.read8(a.wrapping_add(1)),
+            self.read8(a.wrapping_add(2)),
+            self.read8(a.wrapping_add(3)),
+        ])
+    }
+
+    /// The region and offset that answer a word read at `a` (word-aligned) when the answer is
+    /// nothing but those four backing bytes — or `None`, and the byte path decides.
+    ///
+    /// **Every intercept `read8_inner` consults ahead of `locate` must appear here** — the rule
+    /// [`page_is_plain`](Self::page_is_plain) states for pages, and has broken seven times. Checked
+    /// against the whole word, and conservative wherever the byte path is conditional: a device
+    /// that *might* answer takes the word off this path. `core_register` is absent only because
+    /// `read32` has already answered it. The test `the_word_path_agrees_with_four_byte_reads`
+    /// walks every mapped device page both ways and compares values and side effects.
+    fn plain_word(&self, a: u32) -> Option<(usize, usize)> {
+        let hits = |base: u32, size: u32| base.wrapping_sub(a) < 4 || a.wrapping_sub(base) < size;
+        if Mbx::queue(a).is_some()
+            || self.read_toggle.iter().any(|&(at, _, _)| hits(at, 4))
+            || self.read_overrides.iter().any(|&(at, _)| hits(at, 4))
+            || self.read_or_masks.iter().any(|&(at, _)| hits(at, 4))
+            || self.usec_timer.is_some_and(|b| hits(b, 4))
+            || self.bcm.as_ref().is_some_and(|b| {
+                hits(b.base, Bcm::WINDOW) || b.alias.is_some_and(|x| hits(x, Bcm::WINDOW))
+            })
+            // In array mode the chip answers `None` and the region serves the byte, but the byte
+            // path still tallies the read for `--nor-reads`; either reason keeps it there.
+            || self.nor.as_ref().is_some_and(|n| {
+                (n.intercepts() || self.nor_reads.is_some())
+                    && n.windows.iter().any(|&(b, s)| hits(b, s))
+            })
+            || self.ata.as_ref().is_some_and(|(b, _)| hits(*b, 0x410))
+            || self.i2c_base.is_some_and(|b| {
+                (self.pmu.is_some() || self.i2c_fill.is_some()) && hits(b + 0x0c, 0x10)
+            })
+            || self.clickwheel.as_ref().is_some_and(|w| {
+                hits(w.base + ClickWheel::CTRL, ClickWheel::WINDOW - ClickWheel::CTRL)
+            })
+            // Answered from the region, but *observed* per byte — so it stays on the byte path.
+            || hits(self.piezo.base, Piezo::PAGE)
+            || self.mmap_base.is_some_and(|b| hits(b, 0x40))
+            || self.int_ack_on_read.iter().any(|&(at, _)| hits(at, 4))
+            || PP_DMA.iter().any(|c| hits(c.chans, 0x20 * c.n))
+        {
+            return None;
+        }
+        // One translation for the word — unless it straddles an alias edge, where each byte would
+        // translate on its own.
+        let t = self.translate(a);
+        if self.translate(a.wrapping_add(3)) != t.wrapping_add(3) {
+            return None;
+        }
+        // `locate` is first-match per byte. The first region holding byte 0 answers all four only
+        // if it holds all four, and no earlier region *begins* on byte 1..3 and would claim it.
+        for (i, r) in self.regions.iter().enumerate() {
+            let off = t.wrapping_sub(r.base) as usize;
+            if off < r.data.len() {
+                return (off + 4 <= r.data.len()).then_some((i, off));
+            }
+            if r.base.wrapping_sub(t).wrapping_sub(1) < 3 {
+                return None;
+            }
+        }
+        // Unmapped: the byte path records it per byte, as it always has.
+        None
     }
 }
 
@@ -12744,5 +12850,134 @@ mod figure_tests {
                 si(n)
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod word_path_tests {
+    use super::*;
+
+    /// A warm or cold `map_hardware` machine with every region filled from one deterministic
+    /// pattern — so a read that came from the wrong region, or the wrong offset, reads a different
+    /// value rather than the same zero — and every read-side instrument armed.
+    fn machine(cold: bool) -> Machine {
+        let mut m = Machine::new(&EApp::none(), 0x1100_0000, 0x0100_0000);
+        map_hardware(&mut m, cold);
+        let mut x = 0x2545_f491u32;
+        for r in &mut m.mem.regions {
+            for b in &mut r.data {
+                x ^= x << 13;
+                x ^= x >> 17;
+                x ^= x << 5;
+                *b = x as u8;
+            }
+        }
+        m.mem.invalidate_fast();
+        m.mem.accounting = true;
+        m.mem.input_probe = Some((0x6000_0000, 0x0001_0000));
+        m.mem.read_addrs = vec![0x6000_5000, 0x6000_5001, 0x6000_5003, 0x6000_d030, 0x7000_0002];
+        m.mem.set_store_addr_bounds();
+        m
+    }
+
+    /// Every word of the device pages a firmware reads, plus region edges and unmapped space.
+    fn addresses() -> Vec<u32> {
+        let mut out = Vec::new();
+        for (base, len) in [
+            (0x6000_0000u32, 0x1_0000u32), // mmio-6, all of it: timers, interrupts, GPIO, DMA
+            (0x6400_4000, 0x1000),         // the uncached alias of the interrupt controller
+            (0x7000_0000, 0x1_0000),       // mmio-7: chip id, XMB, I2C, the piezo page
+            (0xc000_0000, 0x1000),
+            (0xc300_0000, 0x1000),
+            (0xc500_0000, 0x1000),
+            (0xf000_f000, 0x1000), // the MMAP registers on a cold machine
+            (0x3002_0000, 0x100),
+            (0x4001_ff00, 0x100),  // the last words of IRAM
+            (0x5000_0000, 0x40),   // unmapped
+        ] {
+            out.extend((0..len).step_by(4).map(|o| base + o));
+        }
+        out
+    }
+
+    /// **The word path is only a speed-up if nothing can tell it from four byte reads.** Two
+    /// identical machines read the same addresses in the same order, one through `read32` and one
+    /// through `read32` with the word path switched off; every value must match, and so must every side effect the byte
+    /// path has — interrupt acks, the read log with its values, the per-region tallies, the
+    /// input probe, unmapped accounting, and memory itself.
+    #[test]
+    fn the_word_path_agrees_with_four_byte_reads() {
+        for cold in [false, true] {
+            let (mut a, mut b) = (machine(cold), machine(cold));
+            a.mem.int_pending = 0xffff_ffff;
+            b.mem.int_pending = 0xffff_ffff;
+            let mut worded = 0;
+            for (n, addr) in addresses().into_iter().enumerate() {
+                // An unaligned `ldr` reaches the bus word-aligned; the core rotates.
+                let asked = addr | (n as u32 & 3);
+                if a.mem.plain_word(addr).is_some() && a.mem.fast_region(addr, false).is_none() {
+                    worded += 1;
+                }
+                let (va, vb) = (a.mem.read32(asked), b.mem.read32_via(asked, false));
+                assert_eq!(va, vb, "cold={cold} {addr:#010x}");
+            }
+            assert!(worded > 1000, "the word path served only {worded} reads; the test is not testing it");
+            let m = (&a.mem, &b.mem);
+            assert_eq!(m.0.int_pending, m.1.int_pending, "cold={cold}");
+            assert_eq!(m.0.read_log.sample(), m.1.read_log.sample(), "cold={cold}");
+            assert_eq!(m.0.read_log.seen(), m.1.read_log.seen(), "cold={cold}");
+            assert_eq!(m.0.read_sites, m.1.read_sites, "cold={cold}");
+            assert_eq!(m.0.region_reads, m.1.region_reads, "cold={cold}");
+            assert_eq!(m.0.input_regs, m.1.input_regs, "cold={cold}");
+            assert_eq!(m.0.unmapped_totals(), m.1.unmapped_totals(), "cold={cold}");
+            for (ra, rb) in m.0.regions.iter().zip(&m.1.regions) {
+                assert!(ra.data == rb.data, "cold={cold}: {} differs", ra.name);
+            }
+            // The read log recorded real values, not the zeros `count` pushes.
+            assert!(m.0.read_log.sample().iter().any(|e| e.2 != 0));
+        }
+    }
+
+    /// The word path must decline every word a device answers. Each of these has a byte-path
+    /// behaviour the backing region cannot reproduce.
+    #[test]
+    fn the_word_path_declines_what_a_device_answers() {
+        let m = machine(false);
+        for (addr, why) in [
+            (0x6000_5010, "USEC_TIMER is the clock"),
+            (0x6000_5004, "TIMER1_VAL acknowledges on read"),
+            (0x6000_603c, "PLL_STATUS is OR-masked"),
+            (0x6000_b004, "a DMA STATUS latch clears on read"),
+            (Mbx::BASE + Mbx::CPU_QUEUE, "reading the queue takes the message"),
+            (Piezo::BASE, "the piezo observes reads"),
+            (0x5000_0000, "unmapped reads are recorded per byte"),
+        ] {
+            assert!(m.mem.plain_word(addr).is_none(), "{addr:#010x}: {why}");
+        }
+        for addr in [0x6000_5000, 0x6000_d030, 0x6000_7000, 0x7000_0000] {
+            assert!(m.mem.plain_word(addr).is_some(), "{addr:#010x} is plain backing store");
+        }
+    }
+
+    /// `locate` is first-match *per byte*, so a word whose bytes two regions would answer must
+    /// take the byte path — here a region that ends one byte into the word, and a region that
+    /// begins inside it.
+    #[test]
+    fn a_word_split_between_regions_reads_each_byte_from_its_own() {
+        let mut m = Machine::new(&EApp::none(), 0x1100_0000, 0x0100_0000);
+        m.mem.regions.clear();
+        m.mem.regions.push(Region { name: "late", base: 0x2000_0002, data: vec![0xbb; 8] });
+        m.mem.regions.push(Region { name: "early", base: 0x2000_0000, data: vec![0xaa; 5] });
+        m.mem.invalidate_fast();
+        assert!(m.mem.plain_word(0x2000_0000).is_none());
+        assert_eq!(m.mem.read32(0x2000_0000), 0xbbbb_aaaa);
+        // `late` is first and holds all four bytes, so it answers the whole word.
+        assert_eq!(m.mem.plain_word(0x2000_0004), Some((0, 2)));
+        assert_eq!(m.mem.read32(0x2000_0004), 0xbbbb_bbbb);
+        // With `early` first, byte 4 is its last; bytes 5.. fall through to `late`.
+        m.mem.regions.reverse();
+        m.mem.invalidate_fast();
+        assert!(m.mem.plain_word(0x2000_0004).is_none());
+        assert_eq!(m.mem.read32(0x2000_0004), 0xbbbb_bbaa);
     }
 }
