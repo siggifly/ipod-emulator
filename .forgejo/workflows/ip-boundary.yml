@@ -17,8 +17,10 @@ name: ip-boundary
 # pattern a string it MUST catch. If that string gets through, the job fails
 # before it ever looks at the repository.
 #
-# ON `code.veldi.io`: that is the forge this repository's origin lives on, and it
-# is legitimate here. The pattern does not match it — the brand is `Veldi` with a
+# ON `code.veldi.io`: that was the forge this repository's origin lived on until
+# it moved to `code.siggifly.net` (2026-10-04/06; GitHub stays the public mirror).
+# The old hostname survives in history and in commit messages, and it is
+# legitimate there. The pattern does not match it — the brand is `Veldi` with a
 # capital V, the org is `veldi-io` with a hyphen, and the hostname is `veldi.io`
 # with a dot. Verified by the self-test's negative case, not by assertion.
 
