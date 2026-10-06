@@ -331,6 +331,31 @@ the retail 5.5G. The capture is checked in as `snippets/device/timer-loop.5.5g-2
 - The model fix is per-class cycle costs, at least taken-branch = 3, against an 80 MHz clock. That
   change would move every timing conclusion measured so far, so R4 applies before it lands.
 
+### The T1 timing suite on the part (2026-10-07)
+
+Seven snippets (`snippets/t1-*.s`, assembled with GNU as 2.46 for `arm7tdmi`) add one body to the
+`subs`/`bne` loop each and run 10 000 times on the retail 5.5G through the lab console. Reports are
+checked in under `snippets/device/t1-*.5.5g-2026-10-07.report`; repeated runs gave the same
+microseconds to within 1. Every value agrees with this machine (`every_t1_device_capture_agrees_on_values`);
+only timing differs.
+
+| body | part | extra cycles per iteration at 80 MHz | ARM7TDMI datasheet | emulator |
+|---|---|---|---|---|
+| none (the loop) | 500 µs | 4 in total (1 + 3) | 4 | 266 µs |
+| `ldr` from SDRAM | 876 µs | +3 | 3 (1S+1N+1I) | 400 µs |
+| `ldr` from IRAM | 876 µs | +3 | 3 | 400 µs |
+| `str` to SDRAM | 875 µs | **+3** | **2** (2N) | 400 µs |
+| `mul` (small operand) | 872 µs | +3 | 1S+mI, m=2: 3 | 400 µs |
+| `cmp` + untaken `beq` | 750 µs | +2 | 2 | 533 µs |
+| `ldmia` 3 registers | 1126 µs | +5 | nS+1N+1I: 5 | 400 µs |
+
+- **The part is the datasheet** at 80 MHz, with the cache hiding SDRAM-vs-IRAM for a hot word.
+- **One exception: a store costs 3, not 2.** Write-through to SDRAM with no write buffer would do
+  that; it is the first number here the datasheet does not predict.
+- **The emulator charges every instruction the same** (`clock_ipu=75`), so its ratios run from
+  1.4× (cmp/branch) to 2.8× (`ldm`). Per-class costs from this table — branch taken 3, load 3,
+  store 3, multiply 1S+mI, LDM/STM n+2 — are the fix, and these captures are its test.
+
 **Console quirk:** a line longer than about 21 bytes written in one burst is silently dropped by
 the console's USB receive path. Writing it in 16-byte pieces 20 ms apart works (tested up to 125
 bytes). The host side has to chunk.
