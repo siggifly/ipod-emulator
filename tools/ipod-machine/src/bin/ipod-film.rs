@@ -174,6 +174,28 @@ fn concat_paced(dir: &Path, pace: Pace) -> Result<f64, String> {
         .and_then(|s| s.parse::<f64>().ok())
         .ok_or("frames.tsv has no `sampled every N instructions` header to scale durations by")?;
 
+    // The columns are found **by name**, from the `# index\tfile\t…` header. They were a fixed
+    // index once, and when the writer gained `first_usec` (4fdec71) the index went on reading the
+    // neighbouring column — `samples`, a count of 1 to a few hundred — as a duration in
+    // instructions, so every film came out 0.00 s long while this file's own test, still holding
+    // the old layout, passed. A manifest without the column is an error, not a guess.
+    let header: Vec<&str> = text
+        .lines()
+        .find_map(|l| l.strip_prefix("# ").filter(|h| h.starts_with("index\t")))
+        .ok_or("frames.tsv has no `# index\tfile\t…` column header")?
+        .split('\t')
+        .map(str::trim)
+        .collect();
+    let col = |names: &[&str]| {
+        names
+            .iter()
+            .find_map(|n| header.iter().position(|h| h == n))
+            .ok_or_else(|| format!("frames.tsv has no `{}` column: {header:?}", names[0]))
+    };
+    let file_col = col(&["file"])?;
+    // `held` is the same column under the name it had before 4fdec71, so an old film still concats.
+    let held_col = col(&["held_instr", "held"])?;
+
     let mut out = String::new();
     let mut total = 0.0f64;
     let mut last: Option<String> = None;
@@ -182,17 +204,17 @@ fn concat_paced(dir: &Path, pace: Pace) -> Result<f64, String> {
             continue;
         }
         let f: Vec<&str> = l.split('\t').collect();
-        if f.len() < 7 {
-            continue;
-        }
-        let held: f64 = f[6]
+        let (Some(file), Some(held)) = (f.get(file_col), f.get(held_col)) else {
+            return Err(format!("frames.tsv row is shorter than its header: {l:?}"));
+        };
+        let held: f64 = held
             .trim()
             .parse()
-            .map_err(|_| format!("bad held_instr: {}", f[6]))?;
+            .map_err(|_| format!("bad held_instr: {held}"))?;
         let d = pace.of(held, rate);
-        out.push_str(&format!("file '{}'\nduration {d:.4}\n", f[1]));
+        out.push_str(&format!("file '{file}'\nduration {d:.4}\n"));
         total += d;
-        last = Some(f[1].to_string());
+        last = Some(file.to_string());
     }
     if let Some(l) = last {
         out.push_str(&format!("file '{l}'\n"));
@@ -699,19 +721,34 @@ mod tests {
     /// The concat list is built from the manifest, and the last file is listed **twice** — the
     /// demuxer will not honour the final entry's duration otherwise. Asserted rather than trusted,
     /// because that repeat is the reason `-t TOTAL` exists at the call site.
+    ///
+    /// **The manifest is written by the emulator's own writer**, [`Film::finish`], not typed out
+    /// here. A hand-written copy is what let this test pass for a month while every film came out
+    /// 0.00 s: the writer gained a column, the copy did not, and the reader's fixed index was only
+    /// ever checked against the copy.
     #[test]
     fn the_concat_list_repeats_its_last_frame_and_totals_the_durations() {
+        use ipod_machine::film::{Film, Frame};
         let d = std::env::temp_dir().join(format!("ipod-film-test-{}", std::process::id()));
-        std::fs::create_dir_all(&d).unwrap();
-        std::fs::write(
-            d.join("frames.tsv"),
-            "# film of 0x000e0000, 320x240, sampled every 1000000 instructions\n\
-             # 3 samples collapsed to 2 frames\n\
-             # index\tfile\trepeat_of\tfirst\tlast\tsamples\theld\tnonblack\tdigest\n\
-             0\tframe-00000.png\t-\t0\t0\t1\t1000000\t5\t0xaa\n\
-             1\tframe-00001.png\t-\t1000000\t2000000\t2\t2000000\t7\t0xbb\n",
-        )
-        .unwrap();
+        let mut film = Film::parse(&format!("0xE0000:140:F0:1M:{}", d.display())).unwrap();
+        // 1 sample then 2: held 1 M and 2 M instructions, so 1 s + 2 s at the natural pace. The
+        // sample counts differ from the held counts on purpose — reading the wrong one shows.
+        for (index, samples) in [(0usize, 1u64), (1, 2)] {
+            film.frames.push(Frame {
+                index,
+                file: format!("frame-{index:05}.png"),
+                repeat_of: None,
+                first_at: index as u64 * 1_000_000,
+                last_at: (index as u64 + samples - 1) * 1_000_000,
+                first_usec: index as u64 * 13_333,
+                last_usec: (index as u64 + samples - 1) * 13_333,
+                samples,
+                nonblack: 5,
+                digest: index as u64,
+            });
+        }
+        film.samples = 3;
+        film.finish();
         let total = concat(&d).unwrap();
         let c = std::fs::read_to_string(d.join("frames.concat")).unwrap();
         assert_eq!(
@@ -726,6 +763,24 @@ mod tests {
         assert!(std::fs::read_to_string(d.join("frames.total"))
             .unwrap()
             .starts_with("3.0"));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A manifest without a `held_instr` column is refused, not read at whatever index it used to
+    /// be at — a film 0.00 s long is the failure this exists to make loud.
+    #[test]
+    fn a_manifest_without_the_held_column_is_an_error() {
+        let d = std::env::temp_dir().join(format!("ipod-film-nohold-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(
+            d.join("frames.tsv"),
+            "# film of 0x000e0000, 320x240, sampled every 1000000 instructions\n\
+             # index\tfile\trepeat_of\tfirst_instr\tsamples\tnonblack\n\
+             0\tframe-00000.png\t-\t0\t1\t5\n",
+        )
+        .unwrap();
+        let e = concat(&d).unwrap_err();
+        assert!(e.contains("held_instr"), "{e}");
         let _ = std::fs::remove_dir_all(&d);
     }
 }
