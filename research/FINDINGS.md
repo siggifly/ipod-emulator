@@ -168,8 +168,8 @@ and nothing dated replaced it.
 | 90 | 2026-09-24 |  | The registers, read off the hardware at last — 2026-09-24 |
 | 141 | 2026-09-24 |  | The full 64 KB, and a live register nobody has named — 2026-09-24 |
 | 189 | 2026-09-24 |  | The IIS registers `PAUSED.md` blamed are real — 2026-09-24 |
-| 214 | 2026-09-28 |  | The conformance gate — the emulator measured against the part, in `cargo test` — 2026… |
-| 308 | 2026-09-29 |  | The first snippet run on the part (2026-09-29) |
+| 216 | 2026-09-28 |  | The conformance gate — the emulator measured against the part, in `cargo test` — 2026… |
+| 310 | 2026-09-29 |  | The first snippet run on the part (2026-09-29) |
 
 ### [`09-what-the-hardware-must-supply.md`](09-what-the-hardware-must-supply.md)
 

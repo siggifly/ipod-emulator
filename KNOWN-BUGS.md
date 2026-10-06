@@ -50,6 +50,10 @@ attract loop, not somebody playing it**: the wheel script's last event is at 92.
 console is still scrolling in both arms. Whether wheel input reaches the game is untested. See
 [research/06](research/06-rockbox-as-oracle.md) §*"What Doom was waiting for"*.
 
+> **Answered 2026-09-06 (`a63f7f9`), in research/06 §*"Doom is played"*: input reaches the game
+> and drives the player** — when each press is held across one of Doom's button polls after the
+> title is up.
+
 **Not yet fixed by it, but next in line:** `pcm-pp.c`'s `dma_tx_lock`/`dma_tx_unlock` are the same
 pair around a critical section, so audio DMA would have been masked the same way.
 

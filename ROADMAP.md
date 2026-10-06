@@ -56,10 +56,10 @@ with six devices that all half-work.
 | | state |
 |---|---|
 | RetailOS | **boots** cold from the reset vector, formats its own volume, and **takes wheel input — proven with a control on 2026-09-05**: 99 frames delivered and read, Language list -> main menu -> a settings page several levels down, against a no-input arm that holds the picker for 2 250 s. ~200 s of simulated time to the picker and **a further ~1 200 s before it answers a press** on a cold boot, which is the number M7 is really about. The audio subsystem now starts — the four-slot voice pool fills — but no codec is modelled, so still no sound |
-| Rockbox 4.0 | **boots to its main menu and takes wheel input** (2026-08-18), and **cold-boots to it** through Apple's bootloader and its own (2026-08-19) — same 10 304 ATA commands and 74 057 lit pixels with one core or two. **Doom's game loop runs** (2026-09-06). Rockbox reaches it by shortcut and its three assets are installed by the harness rather than demanded of a hand-prepared drive. It used to stop after its startup console — last panel change at 153 s, 29 pictures, all of them that console — because this machine threw away the interrupt enable Doom's clock is armed with: `CPU_INT_EN` and `CPU_INT_DIS` were consumed a tick later, set before clear, so `timer_register`'s disable/enable pair 22 instructions apart came out disabled and `TIMER2` never fired. With the ports applied at the store, the same 600 s run reaches the Freedoom title screen at 157.2 s and draws **575 distinct pictures, the last first drawn at 600.0 s** — the 3D view with a status bar, changing every half second to the end — and `TIMER2_VAL` goes from 0 reads to 17 589. **That is the attract loop, not a player**: the wheel script's last event is at 92.76 s, before the title exists, so whether input reaches the game is the next thing to measure. A retail boot is unchanged to the instruction. See KNOWN-BUGS and [research/06](research/06-rockbox-as-oracle.md). Still no sound |
+| Rockbox 4.0 | **boots to its main menu and takes wheel input** (2026-08-18), and **cold-boots to it** through Apple's bootloader and its own (2026-08-19) — same 10 304 ATA commands and 74 057 lit pixels with one core or two. **Doom's game loop runs, and Doom is played** (2026-09-06). Rockbox reaches it by shortcut and its three assets are installed by the harness rather than demanded of a hand-prepared drive. It used to stop after its startup console — last panel change at 153 s, 29 pictures, all of them that console — because this machine threw away the interrupt enable Doom's clock is armed with: `CPU_INT_EN` and `CPU_INT_DIS` were consumed a tick later, set before clear, so `timer_register`'s disable/enable pair 22 instructions apart came out disabled and `TIMER2` never fired. With the ports applied at the store, the same 600 s run reaches the Freedoom title screen at 157.2 s and draws **575 distinct pictures, the last first drawn at 600.0 s** — the 3D view with a status bar, changing every half second to the end — and `TIMER2_VAL` goes from 0 reads to 17 589. That run alone was the attract loop — its wheel script's last event is at 92.76 s, before the title exists. **Input reaches the game and drives the player** (2026-09-06, `a63f7f9`): with each press held across one of Doom's button polls after the title is up, the menu opens, `New Game` starts MAP01, and the view turns, the fist swings and the player walks, while the no-input control stays in the attract loop. See research/06 §*"Doom is played"*. A retail boot is unchanged to the instruction. See KNOWN-BUGS and [research/06](research/06-rockbox-as-oracle.md). Still no sound |
 | iPodLinux | `ipodloader2` **builds and cold-boots** (2026-08-18) — Apple's bootloader enters it, and it misdetects the chip and addresses a 1G iPod's registers until `0x70000000` bit 23:16 answers `'2'`; with that forced it gets past detection and stalls before the drive. [research/16](research/16-the-third-bootloader.md). **The kernel boots** (2026-08-20, `NEXT.md` 0z): both partitions, FAT32 root, `init`, `pivot_root`, and ZeroSlackr's `userland.ext3` loop-mounted. What stalls now is userland — ZeroLauncher reaches *"Finishing Up…"* and spins in two adjacent 16-byte buckets of its own flat binary. The kernel-*source* "located" claim in this file still has **no recorded source** |
 | Installing an OS | **done** — `install-os` for the firmware partition, `put-files` for the FAT32 volume; the whole chain cold-boots |
-| Our own bootloader / OS | not started, and deliberately not designed for yet |
+| Our own bootloader | not started, and deliberately not designed for yet. *(An own OS was listed here too: moved out of this project, not siggifly work — operator, 2026-10-06.)* |
 | Bypass ledger | **#6 is the only one live on the path every number in `research/` is measured on.** #4 and #11 survive only in the warm-entry recipes, which by construction have no bootloader. #17 left the table 2026-08-19, and **#7 left it for good on 2026-09-05** — retired on cause, by fixing the `CPU_QUEUE` read that made the second core unrunnable and making two cores the default. The per-run banner now reports `bypasses live: 3`, and `4` under `--no-second-core` |
 | Bootloaders | **three, and all three run**: Apple's retail, Rockbox's, and `ipodloader2` |
 | Audio | **the subsystem starts, the hardware does not exist.** RetailOS's four-slot voice pool at `0x1088342c` fills with two cores and is four zeros with one — it needed the coprocessor, which is why it looked absent since 0.1. The Wolfson WM8758 still answers no I²C: 52 transfers on the baseline recipe, registers recorded, entirely unmodelled. Rockbox talks to it and gets silence |
@@ -336,7 +336,12 @@ runs on it already believes.
 
 ### Supporting both, without a second boot ROM
 
-We cannot get a 5.5G NOR: boot ROMs are per-unit, and Apple no longer serves anything. **M5 is the
+When this was written we could not get a 5.5G NOR: boot ROMs are per-unit, and Apple no longer
+serves anything. **One has since been read, 2026-09-23** (`1c7f19f`, research/17 §*"Addendum — a
+retail 5.5G, measured over USB"*): a loaned retail 5.5G, dumped with stock Rockbox's *Dump ROM
+contents*. Its `HwVr` is `0x000B0011`, and outside the SysCfg identity page it is byte-identical to
+the 5G dump, so Apple's flash bootloader is the same on both. It is one borrowed unit's ROM — not
+something a user can obtain or this project can ship — so the argument below stands. **M5 is the
 answer, and this is a second reason to want it.** A synthesised boot ROM makes `HwVr`, the serial
 and the FireWire GUID into *settings* rather than accidents of which dump somebody found — so "which
 iPod is this" becomes a choice, and both generations fall out of the same mechanism that solves
@@ -349,12 +354,28 @@ because the bootloader lays its handoff structures at the top of IRAM and everyt
 moves with them. It is also the thing that made `ipodloader2` look wrong; see
 [research/16](research/16-the-third-bootloader.md).
 
-## M5 · A synthesised boot ROM · **the top of the list, 2026-08-18**
+## M5 · A synthesised boot ROM · *(done in practice; two checks still open)*
+
+> **Status 2026-10-06.** This was "the top of the list" on 2026-08-18, and in practice it is done:
+> `994b2a0` (2026-08-19) booted a synthesised iPod with the OS read off its own drive, research/17
+> is the boot matrix that measured it, and **0.5.0 ships it** — CHANGELOG §*"It boots without a
+> dump, on all three revisions"*, with the 5.5G `A444` as what the start button makes. A user with
+> no NOR dump can run this program. **Two things this section asks for are still not done:**
+>
+> - **The handoff diff against the real ROM.** No snapshot-and-diff of the real boot ROM's handoff
+>   against the synthesised one is recorded. research/17 §*"What this does not establish"* measures
+>   the handoff's constants one by one, which is the input to that diff and not the diff. The
+>   "settled when" below is therefore half met.
+> - **The 5.5G-default gate.** 0.5.0 already makes a 5.5G by default, ahead of §*"The gate"*
+>   below, and nothing records that gate being re-checked. Its last line — the NOR's other modes —
+>   cannot pass on a synthesised ROM at all (research/17 §*"What a synthesised ROM cannot do"*), so
+>   the gate needs restating rather than only running.
 
 Finding a NOR dump is the hardest step in using this program, and the **first outside report**
 (issue #2) is exactly someone stuck on it. It is now also the *only* route to being a 5.5G, because
 our reference hardware is a 5G and a second boot ROM cannot be obtained: boot ROMs are per-unit and
-Apple serves nothing.
+Apple serves nothing. *(2026-10-06: one retail 5.5G NOR was read off a loaned unit on 2026-09-23 —
+see §"Supporting both" above. It is a reference for this project, not a route for a user.)*
 
 ### What is actually being synthesised
 
@@ -579,7 +600,8 @@ different amount of work, and each benefits from every instrument built for the 
 table (`MODELS`) already separates "models we know about" from "models that boot", so the shape is
 there.
 
-**Our own bootloader, and our own OS.** Kept as intent rather than architecture: designing for it
+**Our own bootloader.** *(This entry also named our own OS; that moved out of this project, not
+siggifly work — operator, 2026-10-06.)* Kept as intent rather than architecture: designing for it
 now means designing around something that does not exist. Note that "multi-boot" is not a layer we
 have to write — `ipodloader2` already is one; it is an OS to install (M3).
 

@@ -191,7 +191,9 @@ calls stable is only stable *at that timescale*.
 The work stopped on 2026-09-08 left a suspected fault it could not confirm: `IISFIFO_WR` running
 at a hardcoded 44 100 frames/s "because `IISCONFIG` (`0x70002800`) and `IISFIFO_CFG`
 (`0x7000280c`) are unmodelled", costing a claimed **628x**. Doom was the arm that would have
-priced it and was never run.
+priced it and was never run. *(`PAUSED.md` was an untracked handover note in one checkout, never
+committed; it was deleted 2026-10-06 once its work had landed — the idle jump as `907807d`
+(2026-09-08), the audio-DMA pacing as `063db71`. This section is what remains of it.)*
 
 Read off the hardware:
 
