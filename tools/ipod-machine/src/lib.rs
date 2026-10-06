@@ -11152,9 +11152,14 @@ pub fn seed_chip_id(m: &mut Machine) {
 /// - `0x60006000`: a `0x100` block. `+0x38`, the free-running register `pp5020.h` never names, is
 ///   live at every `0x100`, 16 of 16.
 ///
-/// The other mirrored `0x6000xxxx` pages have no live word to prove it with and stay unmirrored
-/// until a device write-then-read settles them.
-pub const DECODE_MIRRORS: &[(u32, u32)] = &[(0x6000_5000, 0x1f), (0x6000_6000, 0xff)];
+/// The other mirrored `0x6000xxxx` pages stay unmirrored until a device write-then-read settles
+/// them.
+/// - `0x6000b000`, the DMA channels: a `0x80` block (four `0x20` channels). **Written, not
+///   inferred** (2026-09-29, research/08): `0x5a5a5a50` into channel 3's `RAM_ADDR` (`+0x70`) read back
+///   at `+0xf0` and `+0xff0`, and not at `+0x10` or `+0x90`. The capture's apparent `0x20` period was
+///   idle channels holding equal values.
+pub const DECODE_MIRRORS: &[(u32, u32)] =
+    &[(0x6000_5000, 0x1f), (0x6000_6000, 0xff), (0x6000_b000, 0x7f)];
 
 /// What the part answers in the unused space of three `0x6000xxxx` blocks.
 pub const MMIO6_FILLER: u32 = 0xcaca_d0d0;
