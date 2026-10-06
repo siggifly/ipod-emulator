@@ -449,6 +449,62 @@ pub fn volume_software(path: &Path) -> Option<String> {
     (!found.is_empty()).then(|| found.join(", "))
 }
 
+/// Whether Rockbox, booted against this drive, will render in **its own font**.
+///
+/// Rockbox carries one font built in — an 8 px sysfont — and loads everything else off
+/// `/.rockbox/fonts/` on the data volume. A volume without them is an ordinary state to Rockbox, not
+/// an error: it boots, mounts, finds no theme and no fonts, and draws its menus in the fallback
+/// without a word. That is how three of the shipped screenshots came to be pictures of the sysfont
+/// (KNOWN-BUGS, *"`ipod-boot rockbox` runs Rockbox against a volume Rockbox is not installed on"*).
+/// This is the check that makes the condition something a run can say out loud.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RockboxFonts {
+    /// `/.rockbox/fonts/` holds at least one `.fnt` — the count is how many.
+    Present(usize),
+    /// `/.rockbox` exists but carries no font: Rockbox will run its theme in the sysfont.
+    NoFonts,
+    /// No `/.rockbox` on the volume at all: a stock Apple drive, or one nobody installed onto.
+    NotInstalled,
+    /// No readable FAT32 data volume — a drive Apple's firmware has not formatted yet, or not a
+    /// drive. Rockbox cannot find anything on it either.
+    NoVolume(String),
+}
+
+impl RockboxFonts {
+    /// True only when Rockbox will find a font to render in.
+    pub fn ok(&self) -> bool {
+        matches!(self, RockboxFonts::Present(_))
+    }
+}
+
+/// Read the drive's data volume, read-only, and say what Rockbox will find under `/.rockbox`.
+pub fn rockbox_fonts(path: &Path) -> RockboxFonts {
+    let mut vol = match crate::fat::Fat32::open_ro(path) {
+        Ok(v) => v,
+        Err(e) => return RockboxFonts::NoVolume(e),
+    };
+    let entries = match vol.walk() {
+        Ok(e) => e,
+        Err(e) => return RockboxFonts::NoVolume(e),
+    };
+    if !entries.iter().any(|e| e.is_dir && e.path.eq_ignore_ascii_case("/.rockbox")) {
+        return RockboxFonts::NotInstalled;
+    }
+    let fonts = entries
+        .iter()
+        .filter(|e| !e.is_dir)
+        .filter(|e| {
+            let p = e.path.to_ascii_lowercase();
+            p.starts_with("/.rockbox/fonts/") && p.ends_with(".fnt")
+        })
+        .count();
+    if fonts == 0 {
+        RockboxFonts::NoFonts
+    } else {
+        RockboxFonts::Present(fonts)
+    }
+}
+
 /// What an Apple software bundle turned out to contain.
 pub fn ipsw_facts(path: &Path) -> Vec<Fact> {
     let Ok(zip) = crate::ipsw::Zip::open(path) else {
@@ -1305,6 +1361,42 @@ mod classify_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The font bug's guard. A stock volume, a `.rockbox` with no fonts, and an installed one are
+    /// three different answers, and only the last renders in Rockbox's own font. Built on a real
+    /// FAT32 volume written by this crate's writer and read back by its reader, not a mock.
+    #[test]
+    fn rockbox_fonts_tells_a_stock_volume_from_an_installed_one() {
+        let p = std::env::temp_dir().join(format!("ipod-rbfonts-{}.img", std::process::id()));
+
+        // Not a drive at all.
+        std::fs::write(&p, [0u8; 4096]).unwrap();
+        assert!(matches!(rockbox_fonts(&p), RockboxFonts::NoVolume(_)));
+
+        // A formatted volume nobody installed onto — the stock Apple drive's state.
+        crate::fat::tests::synth(&p);
+        assert_eq!(rockbox_fonts(&p), RockboxFonts::NotInstalled);
+        assert!(!rockbox_fonts(&p).ok());
+
+        // `.rockbox` present, fonts absent: Rockbox still falls back to its sysfont.
+        let mut v = crate::fat::Fat32::open(&p).unwrap();
+        let fonts = v.mkdir_p("/.rockbox/fonts").unwrap();
+        v.write_file(fonts, "README.txt", b"not a font").unwrap();
+        v.flush().unwrap();
+        drop(v);
+        assert_eq!(rockbox_fonts(&p), RockboxFonts::NoFonts);
+
+        // And with a font, case-insensitively, the way Rockbox's own FAT driver matches it.
+        let mut v = crate::fat::Fat32::open(&p).unwrap();
+        let fonts = v.mkdir_p("/.rockbox/fonts").unwrap();
+        v.write_file(fonts, "15-Adobe-Helvetica.FNT", &[0x52; 600]).unwrap();
+        v.flush().unwrap();
+        drop(v);
+        assert_eq!(rockbox_fonts(&p), RockboxFonts::Present(1));
+        assert!(rockbox_fonts(&p).ok());
+
+        let _ = std::fs::remove_file(&p);
+    }
 
     fn entry(magic: &[u8; 4], tag: &str, dev: u32, off: u32, len: u32, addr: u32) -> Vec<u8> {
         let mut e = vec![0u8; 40];

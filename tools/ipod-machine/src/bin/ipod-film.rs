@@ -296,21 +296,13 @@ fn run(args: &[String]) -> Result<(), String> {
         format!("scale=iw*{scale}:ih*{scale}:flags=neighbor,fps={fps}")
     };
     let gif = out.join("film.gif");
-    ffmpeg(&[
-        "-f",
-        "concat",
-        "-safe",
-        "0",
-        "-i",
-        &out.join("frames.concat").display().to_string(),
-        "-t",
-        &format!("{total:.4}"),
-        "-vf",
-        &format!("{vf},split[a][b];[a]palettegen=stats_mode=full[p];[b][p]paletteuse=dither=none"),
-        "-loop",
-        "0",
-        &gif.display().to_string(),
-    ])?;
+    let vf =
+        format!("{vf},split[a][b];[a]palettegen=stats_mode=full[p];[b][p]paletteuse=dither=none");
+    let concat = out.join("frames.concat").display().to_string();
+    let total_s = format!("{total:.4}");
+    let args =
+        ["-f", "concat", "-safe", "0", "-i", &concat, "-t", &total_s, "-vf", &vf, "-loop", "0"];
+    ffmpeg_gif(&args, &gif.display().to_string())?;
     println!("film -> {} ({total:.2}s)", gif.display());
     Ok(())
 }
@@ -326,6 +318,28 @@ fn ffmpeg(args: &[&str]) -> Result<(), String> {
     } else {
         Err("ffmpeg failed".into())
     }
+}
+
+/// Every gif this program writes goes through here, so no encode can forget the flag below.
+fn ffmpeg_gif(args: &[&str], gif: &str) -> Result<(), String> {
+    ffmpeg(&gif_argv(args, gif))
+}
+
+/// **`-gifflags -transdiff`**: ffmpeg's gif muxer defaults to `+transdiff`, which stores each frame
+/// as a difference against the previous one and punches a transparent index into every pixel it
+/// judges unchanged. With disposal 1 those holes show the *earlier* frame through, and the result
+/// is pixels no frame of the machine ever produced: `ipod-15-rockbox-wheel.gif` carried yellow
+/// ticks at a 24 px period on row 23 — the keyframe's selection bar showing through 26 holes — in a
+/// film whose raw frames read one clean run of 320 px on that row. KNOWN-BUGS, *"The gif encode
+/// invents pixels the panel never showed"*. Off, every frame is opaque and is exactly its own
+/// picture; `tests/shipped_gifs.rs` holds every gif in `docs/media/` to that.
+const GIF_FLAGS: [&str; 2] = ["-gifflags", "-transdiff"];
+
+fn gif_argv<'a>(args: &[&'a str], gif: &'a str) -> Vec<&'a str> {
+    let mut v = args.to_vec();
+    v.extend(GIF_FLAGS);
+    v.push(gif);
+    v
 }
 
 /// How a film's frames become a gif. The two published films want opposite answers and the reason
@@ -381,7 +395,7 @@ fn publish(dir: &Path, name: &str, fps: u32, mode: Palette, post: &Path) -> Resu
                       [a]palettegen=stats_mode=single:reserve_transparent=0[p];\
                       [b][p]paletteuse=dither=none:new=1";
             let fd = final_delay(dir)?;
-            ffmpeg(&[
+            let args = [
                 "-f",
                 "concat",
                 "-safe",
@@ -398,18 +412,18 @@ fn publish(dir: &Path, name: &str, fps: u32, mode: Palette, post: &Path) -> Resu
                 &fd,
                 "-loop",
                 "0",
-                &gif,
-            ])?;
+            ];
+            ffmpeg_gif(&args, &gif)?;
         }
         Palette::Resampled => {
             let vf = format!(
                 "scale=iw*2:ih*2:flags=neighbor,fps={fps},split[a][b];\
                  [a]palettegen=stats_mode=full[p];[b][p]paletteuse=dither=none"
             );
-            ffmpeg(&[
-                "-f", "concat", "-safe", "0", "-i", &cp, "-t", &total, "-vf", &vf, "-loop", "0",
+            ffmpeg_gif(
+                &["-f", "concat", "-safe", "0", "-i", &cp, "-t", &total, "-vf", &vf, "-loop", "0"],
                 &gif,
-            ])?;
+            )?;
         }
     }
     println!("  -> {gif}   (640x480, {total}s, {fps} fps)");
@@ -654,6 +668,25 @@ fn do_gameplay(film: &Path, post: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The gif-palette bug's guard on the encoder side: transdiff is off on every gif, and the flag
+    /// sits before the output path, where ffmpeg reads it as an output option.
+    #[test]
+    fn every_gif_is_encoded_without_transparent_differences() {
+        let v = gif_argv(&["-i", "in", "-loop", "0"], "out.gif");
+        assert_eq!(v.last(), Some(&"out.gif"));
+        let at = v.iter().position(|a| *a == "-gifflags").expect("-gifflags missing");
+        assert_eq!(v[at + 1], "-transdiff");
+        assert!(at + 1 < v.len() - 1, "the flag must precede the output");
+        // And nothing in this file calls the raw `ffmpeg` with a `.gif` output behind its back.
+        let src = include_str!("ipod-film.rs");
+        let raw_gif_calls = src
+            .split("ffmpeg(&[")
+            .skip(1)
+            .filter(|call| call.split("])").next().unwrap_or("").contains("&gif"))
+            .count();
+        assert_eq!(raw_gif_calls, 0, "a gif encode bypasses ffmpeg_gif");
+    }
 
     #[test]
     fn suffixed_counts_parse() {

@@ -637,6 +637,28 @@ fn resolve(
     (repo_default, From::Repo)
 }
 
+/// Say out loud when Rockbox is about to be run against a volume it will render in its sysfont.
+///
+/// Rockbox treats a missing theme as normal and says nothing, so this is the only place the
+/// condition can be made visible. A warning, not a refusal: running Rockbox against a stock volume
+/// is a legitimate thing to do, and a warning that cannot be missed is all the font bug needed.
+fn warn_unless_rockbox_fonts(disk: &Path) {
+    use ipod_machine::inspect::{rockbox_fonts, RockboxFonts};
+    let why = match rockbox_fonts(disk) {
+        RockboxFonts::Present(_) => return,
+        RockboxFonts::NoFonts => "has /.rockbox but no fonts in /.rockbox/fonts/".to_string(),
+        RockboxFonts::NotInstalled => "has no /.rockbox on its data volume".to_string(),
+        RockboxFonts::NoVolume(e) => format!("has no readable FAT32 data volume ({e})"),
+    };
+    eprintln!(
+        "ipod-boot rockbox: WARNING: {} {why}.\n  \
+         Rockbox will boot, find no font, and draw every screen in its built-in 8 px sysfont \
+         without saying so.\n  \
+         Install it with `ipod-boot rockbox-install DISK.img OUT.img` and run with DISK=OUT.img.",
+        disk.display()
+    );
+}
+
 fn env_u64(key: &str, default: u64) -> u64 {
     std::env::var(key)
         .ok()
@@ -1060,8 +1082,15 @@ fn compose(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
         Recipe::Rockbox => {
             let img = std::env::var("IMG").unwrap_or_else(|_| "rb-main.raw".into());
             let (flash, flash_from) = resolve(user, "FLASH", saved.flash(), retail_flash());
-            let (src, disk_from) =
-                resolve(user, "DISK", saved.disk.clone(), res.join("drives/ipod8g.img"));
+            // **The repository default is a drive Rockbox is installed on**, because Rockbox run
+            // against a stock Apple volume finds no `/.rockbox/fonts/` and draws everything in the
+            // 8 px sysfont it carries, silently — three shipped screenshots were pictures of that.
+            // `ipod-boot rockbox-install` writes this drive; the stock one is the fallback only so
+            // that a tree without it still gets the warning below rather than a missing-file error.
+            let rb_default = res.join("drives/ipod8g-rockbox.img");
+            let repo_disk =
+                if rb_default.exists() { rb_default } else { res.join("drives/ipod8g.img") };
+            let (src, disk_from) = resolve(user, "DISK", saved.disk.clone(), repo_disk);
             let osos = res.join("vendor/rockbox/bin").join(&img);
             let budget = env_u64("BUDGET", 200_000_000);
             let (work, cleanup) = match env_path("WORKDISK") {
@@ -1076,6 +1105,7 @@ fn compose(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
                 require(&flash, "NOR dump (FLASH=)")?;
                 require(&src, "disk image (DISK=)")?;
                 require(&osos, "Rockbox image (IMG=)")?;
+                warn_unless_rockbox_fonts(&src);
                 clone_file(&src, &work)?;
             }
             let mut a = head(budget);

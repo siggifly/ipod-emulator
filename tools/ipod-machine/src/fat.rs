@@ -695,7 +695,7 @@ fn dir_entries(name: &str, cluster: u32, size: u32, is_dir: bool, existing: &[St
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// A minimal but real FAT32 volume: MBR, BPB, two FATs, one root cluster.
@@ -703,7 +703,7 @@ mod tests {
     /// Built here rather than borrowed from a drive image so the test owns every parameter — the
     /// bugs this is guarding against are arithmetic (which sector is cluster N, which FAT copy did
     /// we forget), and they hide behind a volume whose numbers you did not choose.
-    fn synth(path: &Path) {
+    pub(crate) fn synth(path: &Path) {
         const PART: u32 = 1; // partition LBA
         const SECTORS: u32 = 8192;
         const RESERVED: u32 = 32;
