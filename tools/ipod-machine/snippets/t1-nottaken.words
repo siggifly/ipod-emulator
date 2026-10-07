@@ -1,0 +1,31 @@
+@ t1-nottaken.s, assembled with GNU as 2.46 (-mcpu=arm7tdmi) into the text form the tests and `snippet` read.
+@ One word per token, little-endian in memory. Offsets are from the load address.
+e92d40f0   @ 00 push {r4, r5, r6, r7, lr}
+e59f1058   @ 04 ldr r1, [pc, #88]
+e5912000   @ 08 ldr r2, [r1]
+e5802000   @ 0c str r2, [r0]
+e5903010   @ 10 ldr r3, [r0, #16]
+e3530000   @ 14 cmp r3, #0
+059f304c   @ 18 ldreq r3, [pc, #76]
+05803010   @ 1c streq r3, [r0, #16]
+e2804018   @ 20 add r4, r0, #24
+e59f103c   @ 24 ldr r1, [pc, #60]
+e5912000   @ 28 ldr r2, [r1]
+e3530000   @ 2c cmp r3, #0
+0a000001   @ 30 beq 3c <snippet+0x3c>
+e2533001   @ 34 subs r3, r3, #1
+1afffffb   @ 38 bne 2c <snippet+0x2c>
+e591c000   @ 3c ldr ip, [r1]
+e5802004   @ 40 str r2, [r0, #4]
+e580c008   @ 44 str ip, [r0, #8]
+e04cc002   @ 48 sub ip, ip, r2
+e580c00c   @ 4c str ip, [r0, #12]
+e5902014   @ 50 ldr r2, [r0, #20]
+e2822001   @ 54 add r2, r2, #1
+e5802014   @ 58 str r2, [r0, #20]
+e8bd40f0   @ 5c pop {r4, r5, r6, r7, lr}
+e12fff1e   @ 60 bx lr
+60000000   @ 64 .word 0x60000000
+60005010   @ 68 .word 0x60005010
+00002710   @ 6c .word 0x00002710
+40000000   @ 70 .word 0x40000000

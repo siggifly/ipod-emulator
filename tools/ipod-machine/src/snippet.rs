@@ -542,4 +542,99 @@ mod tests {
         assert_eq!(c.missing, ["io[15]"]);
         assert!(!c.agrees());
     }
+
+    /// Every `snippets/*.s` with a `.words` beside it, as (name, source, words).
+    fn suite() -> Vec<(String, String, String)> {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("snippets");
+        let mut out: Vec<_> = std::fs::read_dir(&dir)
+            .expect("snippets/ is readable")
+            .filter_map(|e| {
+                let p = e.ok()?.path();
+                (p.extension()? == "s").then_some(p)
+            })
+            .filter_map(|s| {
+                let w = s.with_extension("words");
+                let name = s.file_stem()?.to_string_lossy().into_owned();
+                Some((name, std::fs::read_to_string(&s).ok()?, std::fs::read_to_string(&w).ok()?))
+            })
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// `the_checked_in_words_are_the_assembly`, for every snippet in the suite rather than one:
+    /// each instruction word decodes to the source line's mnemonic and each `.word` is its
+    /// literal. `push`/`pop`/`ldmia` are the assembler's names for block transfers, which the
+    /// interpreter prints as `stm…`/`ldm…`.
+    #[test]
+    fn every_snippet_s_words_are_its_assembly() {
+        let suite = suite();
+        assert!(suite.len() >= 8, "timer-loop and the seven T1 snippets: {}", suite.len());
+        for (name, source, words) in &suite {
+            let lines: Vec<(String, Option<u32>)> = source
+                .lines()
+                .filter_map(|l| {
+                    let l = l.split('@').next().unwrap().trim();
+                    let l = l.split_once(':').map_or(l, |(_, rest)| rest).trim();
+                    let mut t = l.split_whitespace();
+                    let op = t.next()?;
+                    if op == ".word" {
+                        return Some((op.to_string(), t.next().and_then(parse_u).map(|v| v as u32)));
+                    }
+                    (!op.starts_with('.')).then(|| (op.to_string(), None))
+                })
+                .collect();
+            let code = parse_words(words).unwrap_or_else(|e| panic!("{name}.words: {e}"));
+            assert_eq!(code.len(), lines.len() * 4, "{name}: one word per source line");
+            for (i, (w, (op, literal))) in code.chunks(4).zip(&lines).enumerate() {
+                let w = u32::from_le_bytes(w.try_into().unwrap());
+                if op == ".word" {
+                    assert_eq!(Some(w), *literal, "{name} word {i}: .word");
+                    continue;
+                }
+                let text = arm7tdmi::disasm::arm(w, LOAD + 4 * i as u32, None);
+                let got = text.split_whitespace().next().unwrap_or("");
+                let ok = match op.as_str() {
+                    "push" => got.starts_with("stm"),
+                    "pop" => got.starts_with("ldm"),
+                    "ldmia" => got.starts_with("ldm"),
+                    _ => got == op,
+                };
+                assert!(ok, "{name} word {i}: source {op:?}, decoded {text:?}");
+            }
+        }
+    }
+
+    /// Every snippet in the suite runs to completion on the machine and honours the contract
+    /// (PROC_ID in io[0], the default count written back, one call, a timer that moved).
+    #[test]
+    fn every_snippet_runs_and_reports() {
+        for (name, _, words) in suite() {
+            let r = run(&parse_words(&words).unwrap(), &Options::default());
+            assert_eq!(get(&r, "status"), "ok", "{name}: {r:?}");
+            assert_eq!(word(&r, "io[0]"), 0x5555_5555, "{name}: PROC_ID");
+            assert_eq!(word(&r, "io[4]"), 10_000, "{name}: default count");
+            assert_eq!(word(&r, "io[5]"), 1, "{name}: one call");
+            assert!(word(&r, "io[3]") > 0, "{name}: the timer moved");
+        }
+    }
+
+    /// The T1 captures (2026-10-07, retail 5.5G, 80 MHz) are checked in and agree with this
+    /// machine on every value; only the timer words differ. When per-class cycle costs land, the
+    /// timing ratios these print are what should go to 1.0.
+    #[test]
+    fn every_t1_device_capture_agrees_on_values() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("snippets");
+        let timing: BTreeSet<String> = ["io[1]", "io[2]", "io[3]"].iter().map(|s| s.to_string()).collect();
+        let mut seen = 0;
+        for (name, _, words) in suite().into_iter().filter(|(n, _, _)| n.starts_with("t1-")) {
+            let dev = dir.join("device").join(format!("{name}.5.5g-2026-10-07.report"));
+            let dev = parse_report(&std::fs::read_to_string(&dev).unwrap_or_else(|e| panic!("{dev:?}: {e}")));
+            let emu = run(&parse_words(&words).unwrap(), &Options::default());
+            let c = compare(&emu, &dev, &timing);
+            assert!(c.agrees(), "{name}: {c:?}");
+            seen += 1;
+        }
+        assert_eq!(seen, 7, "the seven T1 captures");
+    }
 }

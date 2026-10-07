@@ -191,7 +191,9 @@ calls stable is only stable *at that timescale*.
 The work stopped on 2026-09-08 left a suspected fault it could not confirm: `IISFIFO_WR` running
 at a hardcoded 44 100 frames/s "because `IISCONFIG` (`0x70002800`) and `IISFIFO_CFG`
 (`0x7000280c`) are unmodelled", costing a claimed **628x**. Doom was the arm that would have
-priced it and was never run.
+priced it and was never run. *(`PAUSED.md` was an untracked handover note in one checkout, never
+committed; it was deleted 2026-10-06 once its work had landed — the idle jump as `907807d`
+(2026-09-08), the audio-DMA pacing as `063db71`. This section is what remains of it.)*
 
 Read off the hardware:
 
@@ -329,6 +331,67 @@ the retail 5.5G. The capture is checked in as `snippets/device/timer-loop.5.5g-2
 - The model fix is per-class cycle costs, at least taken-branch = 3, against an 80 MHz clock. That
   change would move every timing conclusion measured so far, so R4 applies before it lands.
 
+### Three more pages decoded by a write — 2026-10-07
+
+Registers chosen from the emulator's store log of Rockbox and RetailOS (which code writes what),
+written through the lab console's spec runner (toolchain `tools/capture/run.py`, records in
+`captures/m3`) and restored:
+
+- **`0x6000d000`, GPIO: `0x200`.** `GPIOF_OUTPUT_VAL` (the only port with `OUTPUT_EN` 0) took `0xa5`
+  at all 7 copies.
+- **`0x60009000`, the second DMA controller: `0x80`.** Channel 1 `RAM_ADDR` (`+0x30`) latched at all
+  31 copies. The 2026-09-29 write to `+0x70` was ignored because it landed past this controller's two
+  channels, on filler that reads `1` — not because the controller is unclocked.
+- **`0x60001000`, the mailbox: `0x40`.** `MBX_MSG_SET` bits 8–15 showed in `MBX_MSG_STAT` and all 63
+  copies; `MBX_MSG_CLR` restored `STAT` to `00000008` exactly.
+- `0x60003008`: an OR of `0x5a000000` did not stick, so that page stays undecided. `0x6000f000` reads
+  the eight exception vectors and ignores writes; a write to the same table at `0xf000f000` hung the
+  console, so that block is not written while Rockbox runs.
+
+`DECODE_MIRRORS` now carries all six device-settled pages. The model fix it exposed: `MBX_MSG_SET` and
+`MBX_MSG_CLR` read `0` on the part — they are strobes — but stored the last write here; they no
+longer do. The gate moves 5 527 → **5 532**: two base-block mismatches retired, and the copies on the
+two pages now repeat the base words the model still gets wrong (`STAT` `08` vs `0c`, a run-state bit;
+and a few GPIO port values) instead of reading `0`. Fix those base words and the copies follow.
+
+### The T1 timing suite on the part (2026-10-07)
+
+Seven snippets (`snippets/t1-*.s`, assembled with GNU as 2.46 for `arm7tdmi`) add one body to the
+`subs`/`bne` loop each and run 10 000 times on the retail 5.5G through the lab console. Reports are
+checked in under `snippets/device/t1-*.5.5g-2026-10-07.report`; repeated runs gave the same
+microseconds to within 1. Every value agrees with this machine (`every_t1_device_capture_agrees_on_values`);
+only timing differs.
+
+| body | part | extra cycles per iteration at 80 MHz | ARM7TDMI datasheet | emulator |
+|---|---|---|---|---|
+| none (the loop) | 500 µs | 4 in total (1 + 3) | 4 | 266 µs |
+| `ldr` from SDRAM | 876 µs | +3 | 3 (1S+1N+1I) | 400 µs |
+| `ldr` from IRAM | 876 µs | +3 | 3 | 400 µs |
+| `str` to SDRAM | 875 µs | **+3** | **2** (2N) | 400 µs |
+| `mul` (small operand) | 872 µs | +3 | 1S+mI, m=2: 3 | 400 µs |
+| `cmp` + untaken `beq` | 750 µs | +2 | 2 | 533 µs |
+| `ldmia` 3 registers | 1126 µs | +5 | nS+1N+1I: 5 | 400 µs |
+
+- **The part is the datasheet** at 80 MHz, with the cache hiding SDRAM-vs-IRAM for a hot word.
+- **One exception: a store costs 3, not 2.** Write-through to SDRAM with no write buffer would do
+  that; it is the first number here the datasheet does not predict.
+- **The emulator charges every instruction the same** (`clock_ipu=75`), so its ratios run from
+  1.4× (cmp/branch) to 2.8× (`ldm`). Per-class costs from this table — branch taken 3, load 3,
+  store 3, multiply 1S+mI, LDM/STM n+2 — are the fix, and these captures are its test.
+
 **Console quirk:** a line longer than about 21 bytes written in one burst is silently dropped by
 the console's USB receive path. Writing it in 16-byte pieces 20 ms apart works (tested up to 125
 bytes). The host side has to chunk.
+
+**The first write-then-read decode test (2026-09-29).** Armed writes of `0x5a5a5a50`, each restored
+and checked:
+
+- **`0x6000b070`** (DMA channel 3 `RAM_ADDR`): it read back at `+0xf0` and `+0xff0`, and not at
+  `+0x10` (channel 0) or `+0x90`. So the page is **four real `0x20` channels, mirrored every
+  `0x80`**. The capture's `0x20` period was idle channels holding equal values. The model now
+  mirrors it (`DECODE_MIRRORS`). The gate retired nothing yet: the part's base block holds channel
+  0's audio setup (`+0x18` `70000000`, `+0x1c` `20010000`) where the model answers 0, and the copies
+  now repeat that. Fix those and the copies follow.
+- **`0x60009070`** (the second controller's channel 3): the write was ignored, and it reads `1`
+  before, during and after. Not a latch while Rockbox runs (the controller is probably not
+  clocked), so this page is undecided.

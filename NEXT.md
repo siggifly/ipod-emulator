@@ -685,7 +685,17 @@ the work. Every number taken against that file since depended on how many times 
 **Measure against `PRISTINE`.** A fingerprint taken on the working image is a statement about that
 file's history, not about the machine — and it will not reproduce on anyone else's copy.
 
-## 0c — Cold-booted Rockbox reads 0 mV and powers itself off · **top of the live queue, 2026-08-18**
+## 0c — ~~Cold-booted Rockbox reads 0 mV and powers itself off~~ · **SETTLED 2026-08-19 — the clock, then a swallowed byte store; it cold-boots to its menu**
+
+> **Superseded 2026-10-06; kept below as the record.** Both halves were answered within a day of
+> this being written. The 0 mV reading and the power-off went with `7e30c1f` (2026-08-18 21:59),
+> which stopped the clock jumping between two adjacent instructions: `sys_poweroff` 315 calls →
+> none (research/06 §*"2026-08-18, later still: the cold boot stops powering off, and starts
+> stalling"*; CHANGELOG 0.5.0 §*"The clock stopped inventing time"*). The stall that followed went
+> with `a72a768` (2026-08-19): byte stores under 1 MB were being swallowed by the flash model on a
+> cold boot, and with that fixed **cold-booted Rockbox reaches its main menu** — the same menu
+> warm entry reaches, through Apple's bootloader and its own (ROADMAP §*"Where we are"*). This was
+> never re-titled, so it kept claiming the top of the live queue for seven weeks.
 
 *(An orphan duplicate of item 1b's heading stood here with no body until 2026-08-18. Its real
 entry, retired, is further down. A file that carries a heading twice will eventually have someone

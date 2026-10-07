@@ -3469,6 +3469,9 @@ impl Memory {
             if let Some((buf, i)) = self.locate_write(stat) {
                 buf[i] = if set { buf[i] | val } else { buf[i] & !val };
             }
+            // SET and CLR are strobes, not storage: on the part both read 0 (conformance fixture,
+            // `60001004`/`60001008`), so the written byte must not land in their backing word.
+            return;
         }
         match self.locate_write(addr) {
             Some((buf, i)) => buf[i] = val,
@@ -11152,9 +11155,31 @@ pub fn seed_chip_id(m: &mut Machine) {
 /// - `0x60006000`: a `0x100` block. `+0x38`, the free-running register `pp5020.h` never names, is
 ///   live at every `0x100`, 16 of 16.
 ///
-/// The other mirrored `0x6000xxxx` pages have no live word to prove it with and stay unmirrored
-/// until a device write-then-read settles them.
-pub const DECODE_MIRRORS: &[(u32, u32)] = &[(0x6000_5000, 0x1f), (0x6000_6000, 0xff)];
+/// The other mirrored `0x6000xxxx` pages stay unmirrored until a device write-then-read settles
+/// them.
+/// - `0x6000b000`, the DMA channels: a `0x80` block (four `0x20` channels). **Written, not
+///   inferred** (2026-09-29, research/08): `0x5a5a5a50` into channel 3's `RAM_ADDR` (`+0x70`) read back
+///   at `+0xf0` and `+0xff0`, and not at `+0x10` or `+0x90`. The capture's apparent `0x20` period was
+///   idle channels holding equal values.
+/// - `0x6000d000`, GPIO: a `0x200` block. **Written** (2026-10-07, toolchain captures/m3):
+///   `GPIOF_OUTPUT_VAL` (the only port with every pin an input) took `0xa5` and it showed at all 7
+///   copies.
+/// - `0x60009000`, the second DMA controller: a `0x80` block. **Written** (2026-10-07): channel 1's
+///   `RAM_ADDR` (`+0x30`) latched `0x5a5a5a50` and showed at all 31 copies. The earlier write to
+///   `+0x70` landed past this controller's two channels, on filler, which is why it was ignored.
+/// - `0x60001000`, the mailbox: a `0x40` block. **Written** (2026-10-07): `MBX_MSG_SET` bits 8-15
+///   showed in `MBX_MSG_STAT` and all 63 copies, and `MBX_MSG_CLR` took them back. Reads at a copy
+///   now see the base registers. A SET/CLR *strobe* at a copy is still only stored: [`Mbx`]'s
+///   strobe and queue matching runs on the raw address, before translation. Neither Rockbox nor
+///   RetailOS writes a copy, so this is noted rather than modelled.
+pub const DECODE_MIRRORS: &[(u32, u32)] = &[
+    (0x6000_1000, 0x3f),
+    (0x6000_5000, 0x1f),
+    (0x6000_6000, 0xff),
+    (0x6000_9000, 0x7f),
+    (0x6000_b000, 0x7f),
+    (0x6000_d000, 0x1ff),
+];
 
 /// What the part answers in the unused space of three `0x6000xxxx` blocks.
 pub const MMIO6_FILLER: u32 = 0xcaca_d0d0;
