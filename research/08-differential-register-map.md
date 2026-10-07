@@ -331,6 +331,29 @@ the retail 5.5G. The capture is checked in as `snippets/device/timer-loop.5.5g-2
 - The model fix is per-class cycle costs, at least taken-branch = 3, against an 80 MHz clock. That
   change would move every timing conclusion measured so far, so R4 applies before it lands.
 
+### Three more pages decoded by a write — 2026-10-07
+
+Registers chosen from the emulator's store log of Rockbox and RetailOS (which code writes what),
+written through the lab console's spec runner (toolchain `tools/capture/run.py`, records in
+`captures/m3`) and restored:
+
+- **`0x6000d000`, GPIO: `0x200`.** `GPIOF_OUTPUT_VAL` (the only port with `OUTPUT_EN` 0) took `0xa5`
+  at all 7 copies.
+- **`0x60009000`, the second DMA controller: `0x80`.** Channel 1 `RAM_ADDR` (`+0x30`) latched at all
+  31 copies. The 2026-09-29 write to `+0x70` was ignored because it landed past this controller's two
+  channels, on filler that reads `1` — not because the controller is unclocked.
+- **`0x60001000`, the mailbox: `0x40`.** `MBX_MSG_SET` bits 8–15 showed in `MBX_MSG_STAT` and all 63
+  copies; `MBX_MSG_CLR` restored `STAT` to `00000008` exactly.
+- `0x60003008`: an OR of `0x5a000000` did not stick, so that page stays undecided. `0x6000f000` reads
+  the eight exception vectors and ignores writes; a write to the same table at `0xf000f000` hung the
+  console, so that block is not written while Rockbox runs.
+
+`DECODE_MIRRORS` now carries all six device-settled pages. The model fix it exposed: `MBX_MSG_SET` and
+`MBX_MSG_CLR` read `0` on the part — they are strobes — but stored the last write here; they no
+longer do. The gate moves 5 527 → **5 532**: two base-block mismatches retired, and the copies on the
+two pages now repeat the base words the model still gets wrong (`STAT` `08` vs `0c`, a run-state bit;
+and a few GPIO port values) instead of reading `0`. Fix those base words and the copies follow.
+
 ### The T1 timing suite on the part (2026-10-07)
 
 Seven snippets (`snippets/t1-*.s`, assembled with GNU as 2.46 for `arm7tdmi`) add one body to the

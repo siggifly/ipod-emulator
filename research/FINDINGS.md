@@ -8,7 +8,7 @@ that. What it adds is a way to tell a live answer from a dead one **without read
 whole file** — because a document that grows by addendum puts its current answer at the
 bottom, and nothing on the page says so.
 
-957 headings across 18 documents — 65 dated, 20 settled, 16 retracted, 6 corrected.
+958 headings across 18 documents — 66 dated, 20 settled, 16 retracted, 6 corrected.
 
 ## Where each document stands today
 
@@ -161,7 +161,7 @@ and nothing dated replaced it.
 
 ### [`08-differential-register-map.md`](08-differential-register-map.md)
 
-16 headings, 6 of them marked or dated:
+17 headings, 7 of them marked or dated:
 
 | line | when | state | heading |
 |---|---|---|---|
@@ -170,7 +170,8 @@ and nothing dated replaced it.
 | 189 | 2026-09-24 |  | The IIS registers `PAUSED.md` blamed are real — 2026-09-24 |
 | 216 | 2026-09-28 |  | The conformance gate — the emulator measured against the part, in `cargo test` — 2026… |
 | 310 | 2026-09-29 |  | The first snippet run on the part (2026-09-29) |
-| 334 | 2026-10-07 |  | The T1 timing suite on the part (2026-10-07) |
+| 334 | 2026-10-07 |  | Three more pages decoded by a write — 2026-10-07 |
+| 357 | 2026-10-07 |  | The T1 timing suite on the part (2026-10-07) |
 
 ### [`09-what-the-hardware-must-supply.md`](09-what-the-hardware-must-supply.md)
 
