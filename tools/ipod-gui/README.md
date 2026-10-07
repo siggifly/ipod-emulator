@@ -6,7 +6,7 @@ model: the same `ipod-machine` crate the `trace` recipes use, the same periphera
 devices, built by the same calls in the same order.
 
 ```
-cargo build --release --manifest-path tools/ipod-emulator/Cargo.toml
+cargo build --release -p ipod-gui          # the crate is ipod-gui; its binary is ipod-emulator
 $CARGO_TARGET_DIR/release/ipod-emulator
 ```
 
