@@ -398,6 +398,18 @@ pub enum BootTarget {
     /// `rb-main.raw`, its bootloader, `ipodloader2`. The same contract Apple's own `flsh` images
     /// have, which is why one code path serves both.
     Image(PathBuf),
+    /// **An operating system that is not Apple's**, lifted out of the drive's own firmware
+    /// partition (the `osos` entry) and entered the way `trace --osos-from-disk --boot-osos
+    /// --cold-boot --bcm --no-bcm-registry` enters it.
+    ///
+    /// Not [`BootTarget::Os`], which assumes Apple's: that boot reads the NOR's identity into a
+    /// `sysinfo_t` handoff, synthesises the co-processor's bootstrap and publishes the GENCMD
+    /// registry, and an OS that brings the display up itself finds the part already past the state
+    /// it starts from. Here the NOR is [`ipod_machine::nor::stub`], no handoff is written, the
+    /// co-processor starts as it does out of reset, and the UART's line status reads "transmitter
+    /// empty" (the machine has no UART model). The wheel, buttons, hold switch, drive and panel are
+    /// the same as for `Os`.
+    DriveOs,
     /// A title, played on the iPod's own screen and driven by its own wheel.
     ///
     /// **Not an `Image`, and the difference is the whole machine.** An `Image` is raw ARM entered at
@@ -413,10 +425,11 @@ pub enum BootTarget {
 }
 
 impl BootTarget {
-    /// Whether this is the ordinary boot. The machine is built differently for everything else:
-    /// no low mirror, the non-cold memory map, and the CPU placed where the image is.
+    /// Whether the OS comes off the drive: Apple's, or [`BootTarget::DriveOs`]. The machine is built
+    /// differently for everything else: no low mirror, the non-cold memory map, and the CPU placed
+    /// where the image is.
     pub fn is_os(&self) -> bool {
-        *self == BootTarget::Os
+        matches!(self, BootTarget::Os | BootTarget::DriveOs)
     }
 
     /// One line for a person, and for the window's picker.
@@ -427,6 +440,7 @@ impl BootTarget {
             BootTarget::Nor(t) if t == "diag" => "Diagnostics".into(),
             BootTarget::Nor(t) if t == "disk" => "Disk mode".into(),
             BootTarget::Nor(t) => t.clone(),
+            BootTarget::DriveOs => "Third-party OS".into(),
             BootTarget::Image(p) => p
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
@@ -1021,6 +1035,27 @@ fn placeholder_app() -> EApp {
 }
 
 impl Config {
+    /// The machine for `--boot-osos-image=DISK`: [`BootTarget::DriveOs`] on that drive.
+    ///
+    /// **Built from nothing but the drive**, so it reads no library and writes no restore point: a
+    /// third-party OS has no device in the library to pair a snapshot with, and a snapshot of RAM
+    /// against a drive the OS has since written is the stale pair [`Config::frozen`] documents.
+    /// `workdisk` is the image itself, as for any device in direct mode, so what the OS writes
+    /// stays in the file.
+    pub fn drive_os(disk: PathBuf) -> Config {
+        Config {
+            workdisk: disk.clone(),
+            disk,
+            snapshot: None,
+            clock: ipod_machine::CLOCK,
+            retune: true,
+            click_gap: ipod_machine::pace::wheel_click_gap(ipod_machine::CLOCK),
+            snap_at: SNAP_AT,
+            boot: BootTarget::DriveOs,
+            ..Config::default()
+        }
+    }
+
     /// Whether this launch may restore — asked in exactly one place because two places would
     /// eventually disagree, and disagreeing is the bug.
     ///
@@ -1269,6 +1304,9 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
     // saying "identical" here before measuring it is the mistake this comment is now the record
     // of. See [`ipod_machine::seed_chip_id`] for which byte and why.
     ipod_machine::seed_chip_id(&mut m);
+    if cfg.boot == BootTarget::DriveOs {
+        m.mem.read_overrides.push((UART0_LSR, UART0_LSR_READY));
+    }
     {
         use arm7tdmi::Bus as _;
         // `--charger`: GPIOL bit 3 low is "mains charger attached", and it is what decides between
@@ -1278,7 +1316,15 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
         }
     }
 
-    let flash = cfg.nor.bytes()?;
+    // **A third-party OS gets a NOR that is only a `flsh` directory with a `vmcs`**, so it can
+    // bring the co-processor up itself. Everything below that asks "what iPod is this" is skipped
+    // for it — see [`BootTarget::DriveOs`].
+    let drive_os = cfg.boot == BootTarget::DriveOs;
+    let flash = if drive_os {
+        ipod_machine::nor::stub()
+    } else {
+        cfg.nor.bytes()?
+    };
     // **The high-level boot.**
     //
     // A synthesised ROM carries the identity block and no code — executing it would branch to
@@ -1289,7 +1335,6 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
     //
     // Everything about *which iPod this is* comes from the synthesised flash, so RetailOS reads the
     // same identity it would read off a real one.
-    use arm7tdmi::Bus as _;
     let synthetic = ipod_machine::nor::is_synthetic(&flash);
     // **Booting one of the ROM's own images instead of the OS.**
     //
@@ -1304,7 +1349,7 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
         // "this boot has no NOR image" means. `a_game_machine_has_no_ipod_hardware` is the test
         // that keeps the early return honest.
         BootTarget::Game { .. } => None,
-        BootTarget::Os => None,
+        BootTarget::Os | BootTarget::DriveOs => None,
         BootTarget::Nor(tag) => {
             let img = ipod_machine::inspect::nor_image(&flash, tag).ok_or_else(|| {
                 let have: Vec<String> = ipod_machine::inspect::nor_images(&flash)
@@ -1341,7 +1386,7 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
             ));
         }
     }
-    if synthetic || boot_image.is_some() {
+    if synthetic || boot_image.is_some() || drive_os {
         let (osos, load_at, entry) = match boot_image {
             Some((name, img)) => {
                 println!("  booting `{name}`: {} bytes -> 0x10000000", img.len());
@@ -1400,73 +1445,9 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
                 load_at + entry
             );
         }
-
-        // The handoff, byte for byte as a cold boot leaves it.
-        let cfg_block = ipod_machine::inspect::syscfg(&flash);
-        let identity = cfg.nor.identity()?;
-        let model = cfg
-            .nor
-            .model()
-            .ok_or("the synthesised ROM names a model this program does not know")?;
-        let syscfg_bytes = match &cfg_block {
-            Some(c) => {
-                let at = ipod_machine::inspect::SYSCFG_AT;
-                let len = ipod_machine::inspect::SYSCFG_HEADER
-                    + c.records.len() * ipod_machine::inspect::SYSCFG_RECORD;
-                flash.get(at..at + len).unwrap_or(&[]).to_vec()
-            }
-            None => Vec::new(),
-        };
-        let block = ipod_machine::nor::handoff(&identity, model, &syscfg_bytes);
-        for (i, chunk) in block.chunks(4).enumerate() {
-            let mut w = [0u8; 4];
-            w[..chunk.len()].copy_from_slice(chunk);
-            m.mem.write32(
-                ipod_machine::nor::HANDOFF_AT + (i as u32) * 4,
-                u32::from_le_bytes(w),
-            );
+        if !drive_os {
+            hand_off_to_os(&mut m, cfg, &flash)?;
         }
-        // The scaffolding a real ROM would already have done — see `install_sysinfo` in trace.rs,
-        // where the same reasoning is spelled out and bisected.
-        let hw = |m: &mut Machine, off: u32, v: u32| {
-            m.mem.write32(ipod_machine::nor::HANDOFF_AT + off, v)
-        };
-        hw(&mut m, 0x60, u32::from_le_bytes(*b"Flsh"));
-        hw(&mut m, 0x68, 0x2000_0000);
-        hw(&mut m, 0x6c, 0x0010_0000);
-        hw(&mut m, 0x74, u32::from_le_bytes(*b"Sdrm"));
-        hw(&mut m, 0x7c, 0x1000_0000);
-        // **Not `RAM_SIZE`** — that is this loader's 8 MB scratch region, and writing it here told
-        // RetailOS the iPod had 8 MB of SDRAM. The value a real cold boot leaves in these fields is
-        // 0x04000000, measured; `trace`'s `--sysinfo` default is the same number.
-        //
-        // Whether it varies by model is NOT established. The 5.5G 80 GB is widely reported to carry
-        // 64 MB against everything else's 32 MB, and Rockbox builds the Video for 64 "always. This
-        // is reduced at runtime if needed" — but our own hardware is a 30 GB 5G, which should then
-        // be 32 MB, and its handoff reads 0x04000000 here anyway. So either this field is not the
-        // memory size or the reporting is wrong, and until that is measured the hardware's own
-        // value is used rather than a per-model guess.
-        const MEASURED_SDRAM_WORD: u32 = 0x0400_0000;
-        hw(&mut m, 0x80, MEASURED_SDRAM_WORD);
-        hw(&mut m, 0x88, u32::from_le_bytes(*b"Frwr"));
-        hw(&mut m, 0x9c, u32::from_le_bytes(*b"Iram"));
-        hw(&mut m, 0xa4, 0x4000_0000);
-        hw(&mut m, 0xa8, 0x0002_0000);
-        hw(&mut m, 0xe0, MEASURED_SDRAM_WORD);
-        hw(&mut m, 0x128, 0x0005_0014);
-        m.mem.write32(
-            ipod_machine::nor::HANDOFF_TAG_AT,
-            u32::from_le_bytes(*b"IsyS"),
-        );
-        m.mem.write32(
-            ipod_machine::nor::HANDOFF_TAG_AT + 4,
-            ipod_machine::nor::HANDOFF_AT,
-        );
-        println!(
-            "  identity: {} · {}",
-            identity.serial.as_deref().unwrap_or("(no serial)"),
-            identity.guid_hex()
-        );
     }
     let size = flash.len() as u32;
     // **Whether the flash also answers at 0**, which is true only of a cold boot from the reset
@@ -1523,7 +1504,7 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
     // research/04 records `--bcm-registry` turning 4 DMA transfers into 104. That is a different
     // claim from *the panel goes black*, and the two had been written down as one.
     let mut bcm = Bcm::new(0x3000_0000);
-    bcm.registry = true;
+    bcm.registry = !drive_os;
     // The boot screen. A real NOR carries a `logo` image and Apple's bootloader blits it; a
     // synthesised one carries the project's own mark, because it could not carry Apple's artwork
     // if it wanted to. Either way it is white on black — every iPod with video boots the same
@@ -1667,6 +1648,85 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
         m.arm_novelty();
     }
     Ok(m)
+}
+
+/// The UART0 line-status register. The machine has no UART model, so the word reads whatever was
+/// last stored there, and a driver that polls it for "transmitter empty" never sees it.
+const UART0_LSR: u32 = 0x7000_6014;
+/// THRE and TEMT set, data-ready clear: what [`UART0_LSR`] reads for [`BootTarget::DriveOs`].
+const UART0_LSR_READY: u32 = 0x60;
+
+/// Write the `sysinfo_t` block Apple's boot ROM leaves in IRAM for the OS it starts, from the
+/// identity in the synthesised NOR.
+fn hand_off_to_os(m: &mut Machine, cfg: &Config, flash: &[u8]) -> Result<(), String> {
+    use arm7tdmi::Bus as _;
+    // The handoff, byte for byte as a cold boot leaves it.
+    let cfg_block = ipod_machine::inspect::syscfg(flash);
+    let identity = cfg.nor.identity()?;
+    let model = cfg
+        .nor
+        .model()
+        .ok_or("the synthesised ROM names a model this program does not know")?;
+    let syscfg_bytes = match &cfg_block {
+        Some(c) => {
+            let at = ipod_machine::inspect::SYSCFG_AT;
+            let len = ipod_machine::inspect::SYSCFG_HEADER
+                + c.records.len() * ipod_machine::inspect::SYSCFG_RECORD;
+            flash.get(at..at + len).unwrap_or(&[]).to_vec()
+        }
+        None => Vec::new(),
+    };
+    let block = ipod_machine::nor::handoff(&identity, model, &syscfg_bytes);
+    for (i, chunk) in block.chunks(4).enumerate() {
+        let mut w = [0u8; 4];
+        w[..chunk.len()].copy_from_slice(chunk);
+        m.mem.write32(
+            ipod_machine::nor::HANDOFF_AT + (i as u32) * 4,
+            u32::from_le_bytes(w),
+        );
+    }
+    // The scaffolding a real ROM would already have done — see `install_sysinfo` in trace.rs,
+    // where the same reasoning is spelled out and bisected.
+    let hw = |m: &mut Machine, off: u32, v: u32| {
+        m.mem.write32(ipod_machine::nor::HANDOFF_AT + off, v)
+    };
+    hw(m, 0x60, u32::from_le_bytes(*b"Flsh"));
+    hw(m, 0x68, 0x2000_0000);
+    hw(m, 0x6c, 0x0010_0000);
+    hw(m, 0x74, u32::from_le_bytes(*b"Sdrm"));
+    hw(m, 0x7c, 0x1000_0000);
+    // **Not `RAM_SIZE`** — that is this loader's 8 MB scratch region, and writing it here told
+    // RetailOS the iPod had 8 MB of SDRAM. The value a real cold boot leaves in these fields is
+    // 0x04000000, measured; `trace`'s `--sysinfo` default is the same number.
+    //
+    // Whether it varies by model is NOT established. The 5.5G 80 GB is widely reported to carry
+    // 64 MB against everything else's 32 MB, and Rockbox builds the Video for 64 "always. This
+    // is reduced at runtime if needed" — but our own hardware is a 30 GB 5G, which should then
+    // be 32 MB, and its handoff reads 0x04000000 here anyway. So either this field is not the
+    // memory size or the reporting is wrong, and until that is measured the hardware's own
+    // value is used rather than a per-model guess.
+    const MEASURED_SDRAM_WORD: u32 = 0x0400_0000;
+    hw(m, 0x80, MEASURED_SDRAM_WORD);
+    hw(m, 0x88, u32::from_le_bytes(*b"Frwr"));
+    hw(m, 0x9c, u32::from_le_bytes(*b"Iram"));
+    hw(m, 0xa4, 0x4000_0000);
+    hw(m, 0xa8, 0x0002_0000);
+    hw(m, 0xe0, MEASURED_SDRAM_WORD);
+    hw(m, 0x128, 0x0005_0014);
+    m.mem.write32(
+        ipod_machine::nor::HANDOFF_TAG_AT,
+        u32::from_le_bytes(*b"IsyS"),
+    );
+    m.mem.write32(
+        ipod_machine::nor::HANDOFF_TAG_AT + 4,
+        ipod_machine::nor::HANDOFF_AT,
+    );
+    println!(
+        "  identity: {} · {}",
+        identity.serial.as_deref().unwrap_or("(no serial)"),
+        identity.guid_hex()
+    );
+    Ok(())
 }
 
 /// Copy-on-write where the filesystem has it, a plain copy where it does not.
@@ -4028,6 +4088,87 @@ fn report_headless(
 mod tests {
     use super::*;
     use ipod_machine::{WheelEvent, WheelStep};
+
+    /// A drive with a firmware directory whose `osos` entry is sixteen words of `b .`, at LBA 63
+    /// where `image_from_drive` reads it. Sparse beyond what is written.
+    fn drive_with_osos(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("ipod-driveos-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("os.img");
+        let base = ipod_machine::ipsw::FIRMWARE_LBA as usize * 512;
+        let body = [0xfeu8, 0xff, 0xff, 0xea].repeat(16);
+        let offset = 0x4400usize;
+        let mut img = vec![0u8; base + offset + 0x200 + body.len()];
+        let rec = base + ipod_machine::ipsw::DIRECTORY_AT;
+        img[rec..rec + 4].copy_from_slice(b"!ATA");
+        img[rec + 4..rec + 8].copy_from_slice(b"soso");
+        for (at, v) in [(0x0c, offset as u32), (0x10, body.len() as u32), (0x14, 0x1000_0000)] {
+            img[rec + at..rec + at + 4].copy_from_slice(&v.to_le_bytes());
+        }
+        img[base + offset + 0x200..][..body.len()].copy_from_slice(&body);
+        std::fs::write(&path, img).unwrap();
+        path
+    }
+
+    /// **`BootTarget::DriveOs` is `trace --osos-from-disk --boot-osos --cold-boot --bcm
+    /// --no-bcm-registry --rdval=0x70006014=0x60`, and `Os` on the same drive is not.**
+    ///
+    /// The `Os` arm is the control: the same drive and a synthesised ROM write the `sysinfo_t`
+    /// handoff and publish the registry, so a pass that comes from the drive having no handoff
+    /// anyway would show there too. Each assertion goes red with its own line: take the
+    /// `read_overrides` push out of `build`, put `registry = true` back, or let `DriveOs` into the
+    /// `hand_off_to_os` call.
+    #[test]
+    fn a_drive_os_is_entered_like_trace_enters_it_and_unlike_the_ipod_os() {
+        let disk = drive_with_osos("build");
+        let os = Config {
+            nor: ipod_machine::nor::Source::Synthetic {
+                model: ipod_machine::nor::DEFAULT_MODEL.into(),
+                seed: 1,
+                serial: None,
+                guid: None,
+                splash: None,
+            },
+            clock: ipod_machine::CLOCK,
+            boot: BootTarget::Os,
+            ..Config::drive_os(disk.clone())
+        };
+        let control = build(&os, true).expect("a synthesised ROM and a drive with an osos");
+        assert_eq!(control.mem.peek32(ipod_machine::nor::HANDOFF_TAG_AT), Some(u32::from_le_bytes(*b"IsyS")));
+        assert!(control.mem.bcm.as_ref().unwrap().registry);
+        assert!(control.mem.read_overrides.iter().all(|&(a, _)| a != UART0_LSR));
+
+        let cfg = Config::drive_os(disk);
+        assert_eq!(cfg.boot, BootTarget::DriveOs);
+        assert!(cfg.snapshot.is_none(), "no restore point for an OS that is in no library");
+        assert_eq!(cfg.workdisk, cfg.disk, "the OS writes to the image it was given");
+        let m = build(&cfg, true).expect("a drive with an osos entry");
+        assert_eq!(m.cpu.regs[15], 0x1000_0000, "entered at the osos entry");
+        assert_eq!(m.mem.peek32(0x1000_0000), Some(0xeaff_fffe), "the image is in SDRAM");
+        assert_eq!(m.mem.peek32(ipod_machine::nor::HANDOFF_TAG_AT), Some(0), "no handoff block");
+        assert!(!m.mem.bcm.as_ref().unwrap().registry, "--no-bcm-registry");
+        assert!(m.mem.read_overrides.contains(&(UART0_LSR, UART0_LSR_READY)), "--rdval");
+        // The stub NOR answers at 0x20000000 with a vmcs record the display driver can find.
+        assert_eq!(
+            m.mem.peek32(0x2000_0000 + 0xf_fe00 + 4),
+            Some(u32::from_le_bytes(*b"gaid")),
+            "the first flsh record is the decoy diag"
+        );
+    }
+
+    /// A drive with no `osos` is `build`'s error, with the drive named, rather than a machine that
+    /// starts and executes zeros.
+    #[test]
+    fn a_drive_os_on_a_drive_with_no_firmware_directory_is_an_error() {
+        let dir = std::env::temp_dir().join(format!("ipod-driveos-{}-empty", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let disk = dir.join("os.img");
+        std::fs::write(&disk, vec![0u8; 63 * 512 + 0x5000]).unwrap();
+        let e = build(&Config::drive_os(disk), true).err().expect("no osos, no machine");
+        assert!(e.contains("no `!ATA` firmware directory"), "{e}");
+    }
 
     /// **A press has a duration, and the duration is the machine's, not the operator's.**
     ///

@@ -62,6 +62,13 @@ pub enum Cli {
         /// machine but of the *process* — a second way in, for whoever is not sitting in front of
         /// the window. `None` is a launch nothing outside can reach, which stays the default.
         control: Option<PathBuf>,
+        /// `--boot-osos-image=DISK`: start [`crate::emu::BootTarget::DriveOs`] on that drive as
+        /// soon as the window is up, instead of waiting for a device in the library to be pressed.
+        ///
+        /// **Not a [`Machine`] field, for `control`'s reason and one more.** `Machine` is `Copy`
+        /// and says how a *library device* is started; this names a drive that is in no library,
+        /// and a path cannot be `Copy`. `None` is the plain launch.
+        boot_osos: Option<PathBuf>,
     },
     /// Run N instructions with no window and print the fingerprint, then exit.
     ///
@@ -76,6 +83,9 @@ pub enum Cli {
         /// test can make with no display at all, so it is the one that most needs driving —
         /// and a driven run's fingerprint is not a boot's, which [`run`] says out loud.
         control: Option<PathBuf>,
+        /// `--boot-osos-image=DISK`: run that drive's own OS instead of the device the window last
+        /// used. See [`Cli::Window`].
+        boot_osos: Option<PathBuf>,
     },
     /// Print [`HELP`] and exit 0.
     Help,
@@ -255,6 +265,9 @@ pub const FLAGS: &[&str] = &[
     // that is not a person — which is a property of the process, so it rides beside [`Machine`]
     // on both verbs that start one rather than inside it.
     "--control=",
+    // **The seventh, and it names a drive rather than a device.** It says which machine the launch
+    // starts, so it rides beside [`Machine`] and `--control=` on the same two verbs.
+    "--boot-osos-image=",
 ];
 
 /// The flags the window before this one took, and why each is absent.
@@ -354,9 +367,16 @@ And these open the window as usual, and configure the machine it starts:
   --charger               plug the mains in — the only configuration in which there is a
                           charging screen to return to
 
-And one that configures no machine at all:
+And these name a drive and a socket instead of configuring a library device:
 
-  --control=PATH          bind a control socket at PATH, before the window opens and for as
+  --boot-osos-image=DISK  start the OS in DISK's firmware partition (its `osos` entry) in
+                          place of the library's device, the way trace's high-level cold
+                          boot from a drive does: a stub NOR with a `vmcs` image, no
+                          handoff block, no co-processor registry, the UART line status held
+                          at ready. The panel, wheel, buttons and hold switch are live. The
+                          drive is written to as the OS runs. Legal beside --headless=N
+                          too, which runs it with no window
+  --control=PATH         bind a control socket at PATH, before the window opens and for as
                           long as the process lives. A drawn window publishes no accessibility
                           elements, so this is the only way anything that is not a person can
                           scroll the wheel, press a button, read a word of memory or take a
@@ -400,6 +420,9 @@ pub fn parse(args: &[String]) -> Cli {
     // start a machine came out of the line, and beside anything else it would be a flag read by
     // nothing — which is refused below, exactly as `--cold` beside `--check-update` is.
     let mut control: Option<PathBuf> = None;
+    // The drive `--boot-osos-image=` names. Like the socket it is read by the two verbs that start
+    // a machine and by nothing else, which is refused below.
+    let mut boot_osos: Option<PathBuf> = None;
     let mut i = 0;
     while i < args.len() {
         let a = args[i].as_str();
@@ -421,6 +444,7 @@ pub fn parse(args: &[String]) -> Cli {
                         machine: Machine::default(),
                         budget,
                         control: None,
+                        boot_osos: None,
                     }),
                 }
             }
@@ -480,6 +504,17 @@ pub fn parse(args: &[String]) -> Cli {
                 );
             }
             control = Some(PathBuf::from(p));
+        } else if let Some(p) = a.strip_prefix("--boot-osos-image=") {
+            // Refused empty for `--control=`'s reason: `File::open("")` names a file nobody typed.
+            if p.is_empty() {
+                return Cli::Refused(
+                    "--boot-osos-image=: which drive to boot is not optional. \
+                     `--boot-osos-image=os.img`, a drive image whose firmware partition lists an \
+                     `osos` entry."
+                        .into(),
+                );
+            }
+            boot_osos = Some(PathBuf::from(p));
         } else if let Some(p) = a.strip_prefix("--flash=") {
             flash = Some(PathBuf::from(p));
         } else if let Some(p) = a.strip_prefix("--disk=") {
@@ -535,6 +570,15 @@ pub fn parse(args: &[String]) -> Cli {
                 name_of(v)
             ))
         }
+        // …and the drive, for the same reason and in the same position: `--check-images` has an
+        // arm of its own below, and `--check-update` would read the flag as nothing.
+        Some(ref v) if boot_osos.is_some() && !matches!(v, Cli::Headless { .. }) => {
+            Cli::Refused(format!(
+                "--boot-osos-image= starts a machine from a drive, and `{}` starts none. It goes \
+                 on a plain launch — the window — or beside --headless=N.",
+                name_of(v)
+            ))
+        }
         Some(Cli::CheckImages { .. }) if asked_for_machine => Cli::Refused(
             "--cold, --clock=, --second-core and --charger configure a machine, and \
              --check-images starts none: it parses two files and exits."
@@ -546,7 +590,7 @@ pub fn parse(args: &[String]) -> Cli {
         // different clock is a different number. `--control=` rides with them, for the reason its
         // own field says: it is the process's, and both of these verbs make a process with a
         // machine in it.
-        Some(Cli::Headless { budget, .. }) => Cli::Headless { machine, budget, control },
+        Some(Cli::Headless { budget, .. }) => Cli::Headless { machine, budget, control, boot_osos },
         // …and a machine flag beside a verb that starts nothing is an unread flag, which is the
         // whole defect this file exists to remove.
         Some(v) if asked_for_machine => Cli::Refused(format!(
@@ -567,7 +611,7 @@ pub fn parse(args: &[String]) -> Cli {
             }
         )),
         Some(v) => v,
-        None => Cli::Window { launch: machine, control },
+        None => Cli::Window { launch: machine, control, boot_osos },
     }
 }
 
@@ -662,23 +706,42 @@ pub fn run(cli: &Cli, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
         // machine out of the same library. `--flash=` and `--disk=` deliberately do not reach it —
         // they are `--check-images`'s operands, and a second way to name a machine's parts is the
         // thing this file exists to stop.
-        Cli::Headless { machine, budget, control } => {
-            let saved = Settings::load();
-            let Some(name) = saved.current.clone() else {
-                let _ = writeln!(
-                    err,
-                    "--headless: no device has been used yet, so there is nothing to run. Open \
-                     the window once and start one."
-                );
-                return 2;
-            };
-            let Some(mut cfg) = crate::machine_config(&saved, &name) else {
-                let _ = writeln!(
-                    err,
-                    "--headless: `{name}` names no drive this build can open. Open the window and \
-                     check it under Devices."
-                );
-                return 2;
+        Cli::Headless { machine, budget, control, boot_osos } => {
+            let (name, mut cfg) = match boot_osos {
+                // **A drive named on the line is the machine, and the library is not read.** The
+                // check is here and not in `emu::build` so that a mistyped path is an exit code 2
+                // and a sentence, not a `Stopped` phase on a run nobody is watching.
+                Some(disk) => {
+                    if !disk.is_file() {
+                        let _ = writeln!(
+                            err,
+                            "--boot-osos-image: {} is not a file.",
+                            disk.display()
+                        );
+                        return 2;
+                    }
+                    (disk.display().to_string(), crate::emu::Config::drive_os(disk.clone()))
+                }
+                None => {
+                    let saved = Settings::load();
+                    let Some(name) = saved.current.clone() else {
+                        let _ = writeln!(
+                            err,
+                            "--headless: no device has been used yet, so there is nothing to run. \
+                             Open the window once and start one."
+                        );
+                        return 2;
+                    };
+                    let Some(cfg) = crate::machine_config(&saved, &name) else {
+                        let _ = writeln!(
+                            err,
+                            "--headless: `{name}` names no drive this build can open. Open the \
+                             window and check it under Devices."
+                        );
+                        return 2;
+                    };
+                    (name, cfg)
+                }
             };
             cfg.headless = Some(*budget);
             // **Always a cold boot, and this is the line that makes it one.** §12.4's park writes
@@ -928,8 +991,8 @@ mod tests {
                 // to a window too, and a window with `control: None` is the flag having been read
                 // into nothing. That is precisely how `--control=` shipped — accepted by nobody,
                 // refused by `RETIRED`, and served by a `serve` with no caller.
-                Cli::Window { launch, control }
-                    if launch == Machine::default() && control.is_none() =>
+                Cli::Window { launch, control, boot_osos }
+                    if launch == Machine::default() && control.is_none() && boot_osos.is_none() =>
                 {
                     refused.push(format!("`{line}` -> opened a window and dropped the flag"))
                 }
@@ -948,7 +1011,7 @@ mod tests {
     fn no_arguments_opens_the_window() {
         assert_eq!(
             parse(&[]),
-            Cli::Window { launch: Machine::default(), control: None }
+            Cli::Window { launch: Machine::default(), control: None, boot_osos: None }
         );
     }
 
@@ -1062,6 +1125,7 @@ mod tests {
                 machine: Machine::default(),
                 budget: 200_000_000,
                 control: None,
+                boot_osos: None,
             }
         );
         // The four ride on `--headless=` too: a fingerprint taken at a different clock is a
@@ -1073,6 +1137,7 @@ mod tests {
                 machine: Machine { clock: Some(5), cores: Some(true), ..Machine::default() },
                 budget: 200_000_000,
                 control: None,
+                boot_osos: None,
             }
         );
     }
@@ -1089,6 +1154,7 @@ mod tests {
             Cli::Window {
                 launch: Machine::default(),
                 control: Some(PathBuf::from("/tmp/ipod.sock")),
+                boot_osos: None,
             }
         );
         // Beside the machine flags, which is the normal shape: a cold boot somebody wants to watch.
@@ -1097,6 +1163,7 @@ mod tests {
             Cli::Window {
                 launch: Machine { cold: true, clock: Some(5), ..Machine::default() },
                 control: Some(PathBuf::from("/tmp/ipod.sock")),
+                boot_osos: None,
             }
         );
         assert_eq!(
@@ -1105,6 +1172,7 @@ mod tests {
                 machine: Machine::default(),
                 budget: 200_000_000,
                 control: Some(PathBuf::from("/tmp/ipod.sock")),
+                boot_osos: None,
             }
         );
         // And it reaches no field of the machine, which is the half a test can get wrong by
@@ -1116,6 +1184,67 @@ mod tests {
         };
         launch.apply(&mut cfg);
         assert_eq!((cfg.cold, cfg.one_core, cfg.charger, cfg.clock, cfg.retune), before);
+    }
+
+    /// **`--boot-osos-image=` reaches the two verbs that start a machine, carries its path, and
+    /// leaves the machine flags alone.**
+    ///
+    /// Red if the arm is dropped (the word is refused), if the path is stored on [`Machine`]
+    /// instead (the `Machine::default()` comparisons fail), or if the `Headless` arm rebuilds
+    /// itself without the field (the second assertion reads `None`).
+    #[test]
+    fn the_boot_image_flag_rides_on_both_verbs_that_start_a_machine() {
+        let img = Some(PathBuf::from("/d/os.img"));
+        assert_eq!(
+            parse(&argv("--boot-osos-image=/d/os.img")),
+            Cli::Window { launch: Machine::default(), control: None, boot_osos: img.clone() }
+        );
+        assert_eq!(
+            parse(&argv("--headless=5 --boot-osos-image=/d/os.img --control=/tmp/c.sock")),
+            Cli::Headless {
+                machine: Machine::default(),
+                budget: 5,
+                control: Some(PathBuf::from("/tmp/c.sock")),
+                boot_osos: img.clone(),
+            }
+        );
+        assert_eq!(
+            parse(&argv("--clock=5 --boot-osos-image=/d/os.img")),
+            Cli::Window {
+                launch: Machine { clock: Some(5), ..Machine::default() },
+                control: None,
+                boot_osos: img,
+            }
+        );
+    }
+
+    /// **A drive named beside a verb that starts no machine is refused, as is an empty name.**
+    #[test]
+    fn the_boot_image_flag_is_refused_where_nothing_would_read_it() {
+        for line in [
+            "--boot-osos-image=",
+            "--check-update --boot-osos-image=/d/os.img",
+            "--check-images --boot-osos-image=/d/os.img",
+            "--make-app out --boot-osos-image=/d/os.img",
+            "--boot-osos-image /d/os.img",
+        ] {
+            assert!(
+                matches!(parse(&argv(line)), Cli::Refused(_)),
+                "`{line}` was accepted: {:?}",
+                parse(&argv(line))
+            );
+        }
+    }
+
+    /// **A headless run of a drive that is not a file exits 2 with a sentence and never reads the
+    /// library.** The path is one no other test or machine has, so a pass cannot come from a
+    /// leftover settings file.
+    #[test]
+    fn a_headless_run_of_a_missing_drive_is_refused() {
+        let cli = parse(&argv("--headless=5 --boot-osos-image=/nonexistent/os.img"));
+        let (code, _, err) = ran(&cli);
+        assert_eq!(code, 2);
+        assert!(err.contains("/nonexistent/os.img is not a file"), "{err}");
     }
 
     /// **`--control=` was refused as an instrument belonging to `trace`, and `trace` has never had

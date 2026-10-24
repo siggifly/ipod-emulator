@@ -350,7 +350,7 @@ fn main() -> Result<(), slint::PlatformError> {
     // `--cold`, `--clock=`, `--second-core` and `--charger` open the window as usual and configure
     // the machine it starts, and they reach `machine_config` by being handed to `wire`. A launch
     // flag read out of a global would be the one thing no test could see.
-    let args::Cli::Window { launch, control } = cli else {
+    let args::Cli::Window { launch, control, boot_osos } = cli else {
         let code = args::run(&cli, &mut std::io::stdout(), &mut std::io::stderr());
         std::process::exit(code);
     };
@@ -395,6 +395,16 @@ fn main() -> Result<(), slint::PlatformError> {
     // `wire(&window, …);` on its own would compile, run, register everything — and leave the first
     // run with nothing moving it, with no error anywhere. `_wiring` is what stops that.
     let _wiring = wire(&window, settings.clone(), launch, Rc::new(drops::Shell::Native));
+
+    // `--boot-osos-image=`: the machine starts with the window instead of waiting for a press. A
+    // failure is said and fatal for the same reason `--control=`'s is — a launch that named a drive
+    // and got an idle bench would look like a flag that did nothing.
+    if let Some(disk) = &boot_osos {
+        if let Err(why) = start_drive_os(&_wiring.live, disk, launch) {
+            eprintln!("--boot-osos-image: {}", why.said);
+            std::process::exit(2);
+        }
+    }
 
     // ── The fit: what size the iPod is drawn at, and whether it can be drawn at all ──
     //
@@ -4228,6 +4238,81 @@ fn start_title(
             pace: machine::Pace::default(),
             reached: machine::Reached::Nothing,
         }),
+        seq: Cell::new(0),
+        booted: Cell::new(None),
+        learned: Cell::new(false),
+        parking: Cell::new(false),
+        finger: RefCell::new(wheel::Finger::default()),
+        hold: Cell::new(false),
+        drawn: Cell::new(false),
+        buttons: Cell::new(0),
+        clicks: RefCell::new(click::Watch::default()),
+    });
+    Ok(())
+}
+
+/// Put the OS in a drive's firmware partition on the bench, for `--boot-osos-image=`.
+///
+/// The sibling of [`start_title`]: the drive is in no library, so there is no device to resolve and
+/// no restore point to pair, and the row the bench draws as the machine is [`NO_LIBRARY_ROW`]'s.
+/// What it shares with [`start_machine`] is `emu::run` on the `ipod-machine` thread and
+/// [`args::Machine::apply`], so `--clock=`, `--cold`, `--charger` and the core count reach this
+/// machine as they reach any other.
+///
+/// A drive that is not a file is refused here, before a thread exists; one that is a file with no
+/// `osos` in it is `emu::build`'s to say, and arrives as `Phase::Stopped` with the reason.
+fn start_drive_os(
+    live: &Rc<RefCell<Option<Live>>>,
+    disk: &std::path::Path,
+    launch: args::Machine,
+) -> Result<(), rail::Failure> {
+    *live.borrow_mut() = None;
+    if !disk.is_file() {
+        return Err(rail::Failure::saying(
+            rail::Class::Missing,
+            "starting a drive's OS",
+            format!("{} is not a file", disk.display()),
+        ));
+    }
+    let mut cfg = emu::Config::drive_os(disk.to_path_buf());
+    launch.apply(&mut cfg);
+
+    let link = emu::Link::new();
+    control::attach(&link);
+    let thread = {
+        let cfg = cfg.clone();
+        let link = link.clone();
+        std::thread::Builder::new()
+            .name("ipod-machine".into())
+            .spawn(move || emu::run(cfg, link))
+            .map_err(|e| {
+                rail::Failure::saying(
+                    rail::Class::Permission,
+                    "starting a drive's OS",
+                    format!("the machine thread could not be started: {e}"),
+                )
+            })?
+    };
+
+    let name = disk
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    *live.borrow_mut() = Some(Live {
+        link,
+        thread: Some(thread),
+        index: NO_LIBRARY_ROW,
+        device: Device { name, ..Device::default() },
+        absent: Vec::new(),
+        // No cold boot of this OS has been measured, so the bar has no denominator.
+        denominator: None,
+        life: RefCell::new(machine::Life::Booting {
+            target: cfg.boot.clone(),
+            progress: machine::Progress::read(0, None),
+            pace: machine::Pace::default(),
+            reached: machine::Reached::Nothing,
+        }),
+        cfg,
         seq: Cell::new(0),
         booted: Cell::new(None),
         learned: Cell::new(false),
@@ -12673,6 +12758,7 @@ pub(crate) mod tests {
                 machine: args::Machine::default(),
                 budget: 1_000,
                 control: None,
+                boot_osos: None,
             },
             &mut out,
             &mut err,

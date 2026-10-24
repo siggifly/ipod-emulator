@@ -109,6 +109,31 @@ hardware here is `0x0C` — the LBA form, equally legitimate — and `vfs.c` has
 `install-linux` refuses those drives rather than producing one that cannot boot. See
 [research/17](../research/17-the-boot-matrix.md).
 
+### Booting a third-party OS in the window
+
+`ipod-emulator --boot-osos-image=DISK` opens the window and starts the OS in DISK's firmware
+partition (its `osos` entry) at once, with no library device: the panel, click wheel, buttons and
+hold switch are live. It is `trace --osos-from-disk --boot-osos --cold-boot --bcm --no-bcm-registry`
+plus the UART line-status read at `0x70006014` held at `0x60`, with a stub NOR
+(`ipod_machine::nor::stub`: an `flsh` directory with a placeholder `vmcs`) in place of an iPod's
+identity ROM. No `sysinfo_t` handoff is written and the co-processor starts as it does out of reset.
+`--clock=`, `--cold`, `--charger` and `--second-core` apply as usual.
+
+The drive is written to as the OS runs and nothing is restored or parked, so keep a pristine copy.
+The machine has no UART model, so console output is not shown.
+
+With `--headless=N` the same flag runs the drive with no window, and `--control=PATH` accepts `wheel`,
+`press` and `shot` on it:
+
+```sh
+ipod-emulator --headless=3000000000 --boot-osos-image=os.img --control=/tmp/ipod.sock
+printf 'shot /tmp/panel.png\n' | nc -U /tmp/ipod.sock
+```
+
+A socket path must be shorter than the platform's `SUN_LEN` (about 100 bytes on macOS). `wheel N MS`
+sends N single steps MS apart in wall time. On a LVGL menu, 16 steps 16 ms apart moved the highlight
+one row and 8 steps 100 ms apart did not.
+
 ## Filming
 
 ```sh

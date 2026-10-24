@@ -177,6 +177,51 @@ pub fn synthesise(spec: &Spec) -> Vec<u8> {
     nor
 }
 
+/// Length of [`stub_vmcs`]. Not a multiple of four, so a driver that rounds the upload count up
+/// is exercised rather than handed a size it cannot get wrong.
+pub const STUB_VMCS_LEN: usize = 4099;
+/// Where [`stub`] puts the `vmcs` body.
+pub const STUB_VMCS_AT: usize = 0x1_0000;
+/// Where [`stub`] puts the body of its `diag` record.
+const STUB_DIAG_AT: usize = 0x4_0000;
+/// What [`stub`] says it is, at [`SYNTH_MARK_AT`]. Not [`SYNTH_MARK`]: [`is_synthetic`] selects the
+/// high-level boot of an iPod's own OS, and this image is for an OS that brings up the part itself.
+pub const STUB_MARK: &[u8] = b"ipod-emulator stub NOR v1\n";
+
+/// The `vmcs` payload of [`stub`]: [`STUB_VMCS_LEN`] bytes of a fixed pseudo-random sequence.
+pub fn stub_vmcs() -> Vec<u8> {
+    let mut x: u32 = 0x0123_4567;
+    (0..STUB_VMCS_LEN)
+        .map(|_| {
+            x = x.wrapping_mul(1_103_515_245).wrapping_add(12_345) & 0x7fff_ffff;
+            (x >> 16) as u8
+        })
+        .collect()
+}
+
+/// A NOR for booting an operating system that is not Apple's.
+///
+/// 1 MiB with an `flsh` directory of two records and nothing else: a `diag` whose body is text, and
+/// a `vmcs` whose body is [`stub_vmcs`]. An OS that drives the video co-processor itself finds the
+/// `vmcs` record in the directory and streams the body to the part; the emulator's co-processor
+/// model accepts the upload whatever the bytes are, so nothing Apple wrote is needed. The `diag`
+/// record comes first so that a driver which takes the first record without comparing the tag
+/// fails here as well as on a retail dump.
+///
+/// No `SysCfg` block and no [`SYNTH_MARK`]: this is not an iPod's identity, and the high-level
+/// boot that reads one is not used with it.
+pub fn stub() -> Vec<u8> {
+    let mut nor = vec![0u8; NOR_LEN as usize];
+    nor[SYNTH_MARK_AT..SYNTH_MARK_AT + STUB_MARK.len()].copy_from_slice(STUB_MARK);
+    let diag = b"stub".repeat(25);
+    nor[STUB_DIAG_AT..STUB_DIAG_AT + diag.len()].copy_from_slice(&diag);
+    write_image_record(&mut nor, 0, "diag", STUB_DIAG_AT as u32, &diag);
+    let vmcs = stub_vmcs();
+    nor[STUB_VMCS_AT..STUB_VMCS_AT + vmcs.len()].copy_from_slice(&vmcs);
+    write_image_record(&mut nor, 1, "vmcs", STUB_VMCS_AT as u32, &vmcs);
+    nor
+}
+
 /// One 40-byte `flsh` record, written into the directory at slot `slot`.
 ///
 /// The layout is [`crate::inspect::Entry`]'s, and the two fields left zero are left zero on
@@ -836,6 +881,29 @@ mod tests {
 
     fn model(num: &str) -> &'static Model {
         Model::lookup(num).expect("a known model")
+    }
+
+    /// **The stub carries a `vmcs` that a driver finds by tag, behind a record that is not it.**
+    ///
+    /// Red if `stub` writes `vmcs` into slot 0 (the tag list then reads `vmcs, diag`), drops the
+    /// record, or marks itself [`SYNTH_MARK`] (which would select the high-level boot of an iPod's
+    /// own OS).
+    #[test]
+    fn the_stub_nor_indexes_a_vmcs_behind_a_decoy() {
+        let nor = stub();
+        assert_eq!(nor.len(), NOR_LEN as usize);
+        assert!(!is_synthetic(&nor), "the stub must not select the iPod-OS boot");
+        let tags: Vec<String> = crate::inspect::nor_images(&nor)
+            .iter()
+            .map(|e| e.tag.clone())
+            .collect();
+        assert_eq!(tags, ["diag", "vmcs"]);
+        assert_eq!(
+            crate::inspect::nor_image(&nor, "vmcs").as_deref(),
+            Some(stub_vmcs().as_slice())
+        );
+        assert_eq!(stub_vmcs().len() % 4, 3, "an upload count that needs rounding");
+        assert!(stub_vmcs().iter().any(|&b| b != 0), "a zero payload proves no upload happened");
     }
 
     /// **Rebuild the handoff from the real dump and compare it to what the boot ROM actually
