@@ -580,6 +580,8 @@ pub struct Memory {
     /// Direct-mapped page-resolution cache for the 32-bit fast path. Boxed because it is large and
     /// only ever touched through indices.
     fast: Box<[FastPage]>,
+    /// Pages instruction fetch has recently been served from; see [`Memory::fetch32`].
+    fetch: [FetchPage; FETCH_SLOTS],
     /// Unmapped accesses, aggregated per 4 KB page rather than logged one by one.
     ///
     /// The flat log this replaces was capped at 4096 entries to survive a runaway loop, with the
@@ -1761,6 +1763,41 @@ struct FastPage {
     tag: u32,
     r: u32,
     w: u32,
+    /// Offset of the page's first byte inside the region that answers reads and writes. A page is
+    /// only cached when [`Memory::page_is_plain`] saw one uniform translation across it, so the
+    /// offset of any address in it is this plus the address's offset within the page.
+    r_off: u32,
+    w_off: u32,
+    /// The region holding the whole page for [`Memory::plain_word`], and where the page starts in
+    /// it. Unlike `r`, this does not require the page to be free of device windows: the word path
+    /// checks those per address and only needs to know where the backing bytes are. `u32::MAX` when
+    /// the translation is not uniform over the page or a region before the one that holds it
+    /// starts inside it, in which case the word path resolves the address itself.
+    p: u32,
+    p_off: u32,
+}
+
+/// Slots in the instruction-fetch cache. Code spends its time in a handful of pages (a loop, its
+/// callees, the interrupt vector), so a small direct-mapped array is enough.
+const FETCH_SLOTS: usize = 16;
+
+/// A page instruction fetch resolved once: the region that answers it and where the page starts
+/// inside that region.
+///
+/// **It holds a location and never the instruction.** The fetch reads the region's bytes each time,
+/// so a store to a code page (self-modifying code, a loader copying an image over its own tail, the
+/// flash updater) is seen by the next fetch with nothing to invalidate. What can go stale is the
+/// location, and that changes only where [`Memory::invalidate_fast`] is already called: a region
+/// added, an alias or MMAP window rebuilt, a NOR mode change.
+#[derive(Clone, Copy)]
+struct FetchPage {
+    tag: u32,
+    idx: u32,
+    off: u32,
+}
+
+impl FetchPage {
+    const EMPTY: FetchPage = FetchPage { tag: 1, idx: 0, off: 0 };
 }
 
 impl FastPage {
@@ -1769,6 +1806,10 @@ impl FastPage {
         tag: 1,
         r: u32::MAX,
         w: u32::MAX,
+        r_off: 0,
+        w_off: 0,
+        p: u32::MAX,
+        p_off: 0,
     };
 }
 
@@ -1949,89 +1990,105 @@ impl Memory {
         }
     }
 
+    #[inline]
     fn fast_region(&mut self, addr: u32, write: bool) -> Option<(usize, usize)> {
         let page = addr & !(PAGE - 1);
         let slot = ((page >> 12) as usize) & (FAST_SLOTS - 1);
-        let e = self.fast[slot];
-        let idx = if e.tag == page {
-            if write {
-                e.w
-            } else {
-                e.r
-            }
-        } else {
-            let (r, w) = if self.page_is_plain(page) {
-                let t = self.translate(page);
-                let contains = |r: &Region| (t.wrapping_sub(r.base) as usize) < r.data.len();
-                // Whichever region the SLOW path would choose is the only correct answer, so pick
-                // that one and then decide whether it is cacheable — never search past it for a
-                // region that happens to hold a whole page.
-                //
-                // Searching on was a silent data-corruption bug. Two regions share base 0 (the
-                // firmware image and SDRAM), and the image's last partial page — 0xba000..0xbaee4 —
-                // cannot hold a full 4 KB, so every read there fell through to SDRAM and returned
-                // **zeros instead of firmware**. Rockbox's `.init` copy is what exposed it: the copy
-                // stored faithfully, but the last 0xfb8 bytes it was handed were zeros, so the
-                // linker veneers at the end of `.init` never arrived and it executed into them.
-                // Nothing was ever reported unmapped, because the wrong region answered rather than
-                // no region at all.
-                let cacheable = |i: usize| {
-                    let r = &self.regions[i];
-                    let off = t.wrapping_sub(r.base) as usize;
-                    if r.data.len() - off >= PAGE as usize {
-                        i as u32
-                    } else {
-                        u32::MAX
-                    }
-                };
-                let rd = self
-                    .regions
-                    .iter()
-                    .position(contains)
-                    .map_or(u32::MAX, cacheable);
-                let wr = self
-                    .regions
-                    .iter()
-                    .position(|r| contains(r) && !self.readonly.contains(&r.name))
-                    .map_or(u32::MAX, cacheable);
-                (rd, wr)
-            } else {
-                (u32::MAX, u32::MAX)
-            };
-            self.fast[slot] = FastPage { tag: page, r, w };
-            if write {
-                w
-            } else {
-                r
-            }
-        };
-        // Agreement with the slow path is the invariant; check it rather than trust it.
+        let mut e = self.fast[slot];
+        if e.tag != page {
+            e = self.fill_fast(page, slot);
+        }
+        let (idx, off) = if write { (e.w, e.w_off) } else { (e.r, e.r_off) };
         if self.verify_memory && idx != u32::MAX {
-            let t = self.translate(addr);
-            let slow = if write {
-                self.regions.iter().position(|r| {
-                    (t.wrapping_sub(r.base) as usize) < r.data.len()
-                        && !self.readonly.contains(&r.name)
-                })
-            } else {
-                self.regions
-                    .iter()
-                    .position(|r| (t.wrapping_sub(r.base) as usize) < r.data.len())
-            };
-            if slow != Some(idx as usize) {
-                let fast_name = self.regions[idx as usize].name;
-                let slow_name = slow.map_or("(none)", |i| self.regions[i].name);
-                let pc = self.pc;
-                self.verify_mismatches
-                    .push((pc, addr, fast_name, slow_name));
-            }
+            self.verify_fast(addr, write, idx);
         }
         if idx == u32::MAX {
             return None;
         }
-        let base = self.regions[idx as usize].base;
-        let off = self.translate(addr).wrapping_sub(base) as usize;
-        Some((idx as usize, off))
+        Some((idx as usize, off as usize + (addr & (PAGE - 1)) as usize))
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn fill_fast(&mut self, page: u32, slot: usize) -> FastPage {
+        let mut n = FastPage { tag: page, ..FastPage::EMPTY };
+        let t = self.translate(page);
+        if self.translate(page.wrapping_add(PAGE - 1)) == t.wrapping_add(PAGE - 1) {
+            let holds = |r: &Region| (t.wrapping_sub(r.base) as usize) < r.data.len();
+            if let Some(i) = self.regions.iter().position(holds) {
+                let off = t.wrapping_sub(self.regions[i].base) as usize;
+                let before_overlaps = self.regions[..i].iter().any(|q| {
+                    (q.base as u64) < t as u64 + PAGE as u64
+                        && (t as u64) < q.base as u64 + q.data.len() as u64
+                });
+                if self.regions[i].data.len() - off >= PAGE as usize
+                    && off <= u32::MAX as usize
+                    && !before_overlaps
+                {
+                    (n.p, n.p_off) = (i as u32, off as u32);
+                }
+            }
+        }
+        if self.page_is_plain(page) {
+            let contains = |r: &Region| (t.wrapping_sub(r.base) as usize) < r.data.len();
+            // Whichever region the SLOW path would choose is the only correct answer, so pick
+            // that one and then decide whether it is cacheable — never search past it for a
+            // region that happens to hold a whole page.
+            //
+            // Searching on was a silent data-corruption bug. Two regions share base 0 (the
+            // firmware image and SDRAM), and the image's last partial page — 0xba000..0xbaee4 —
+            // cannot hold a full 4 KB, so every read there fell through to SDRAM and returned
+            // **zeros instead of firmware**. Rockbox's `.init` copy is what exposed it: the copy
+            // stored faithfully, but the last 0xfb8 bytes it was handed were zeros, so the
+            // linker veneers at the end of `.init` never arrived and it executed into them.
+            // Nothing was ever reported unmapped, because the wrong region answered rather than
+            // no region at all.
+            let cacheable = |i: usize| {
+                let r = &self.regions[i];
+                let off = t.wrapping_sub(r.base) as usize;
+                if r.data.len() - off >= PAGE as usize && off <= u32::MAX as usize {
+                    (i as u32, off as u32)
+                } else {
+                    (u32::MAX, 0)
+                }
+            };
+            (n.r, n.r_off) = self
+                .regions
+                .iter()
+                .position(contains)
+                .map_or((u32::MAX, 0), cacheable);
+            (n.w, n.w_off) = self
+                .regions
+                .iter()
+                .position(|r| contains(r) && !self.readonly.contains(&r.name))
+                .map_or((u32::MAX, 0), cacheable);
+        }
+        self.fast[slot] = n;
+        n
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn verify_fast(&mut self, addr: u32, write: bool, idx: u32) {
+    // Agreement with the slow path is the invariant; check it rather than trust it.
+        let t = self.translate(addr);
+        let slow = if write {
+            self.regions.iter().position(|r| {
+                (t.wrapping_sub(r.base) as usize) < r.data.len()
+                    && !self.readonly.contains(&r.name)
+            })
+        } else {
+            self.regions
+                .iter()
+                .position(|r| (t.wrapping_sub(r.base) as usize) < r.data.len())
+        };
+        if slow != Some(idx as usize) {
+            let fast_name = self.regions[idx as usize].name;
+            let slow_name = slow.map_or("(none)", |i| self.regions[i].name);
+            let pc = self.pc;
+            self.verify_mismatches
+                .push((pc, addr, fast_name, slow_name));
+        }
     }
 
     /// Recompute aliases from the MMAP windows. Called when the firmware programs one.
@@ -2158,6 +2215,24 @@ impl Memory {
         for e in self.fast.iter_mut() {
             *e = FastPage::EMPTY;
         }
+        self.fetch = [FetchPage::EMPTY; FETCH_SLOTS];
+    }
+
+    /// Whether instruction fetch already holds `addr`'s page, which makes it mapped.
+    #[inline]
+    fn fetch_hit(&self, addr: u32) -> bool {
+        let page = addr & !(PAGE - 1);
+        self.fetch[(page >> 12) as usize & (FETCH_SLOTS - 1)].tag == page
+    }
+
+    /// Whether the resolution cache already holds a readable region for `addr`'s page. Read-only
+    /// and side-effect free, so it can stand in for a walk over the regions where a hit is enough
+    /// to answer "is this mapped".
+    #[inline]
+    fn fast_hit(&self, addr: u32) -> bool {
+        let page = addr & !(PAGE - 1);
+        let e = &self.fast[((page >> 12) as usize) & (FAST_SLOTS - 1)];
+        e.tag == page && e.r != u32::MAX
     }
 
     fn locate(&mut self, addr: u32) -> Option<(&mut [u8], usize)> {
@@ -2602,6 +2677,9 @@ impl Bus for Memory {
     }
 
     fn read8(&mut self, addr: u32) -> u8 {
+        if let Some((idx, off)) = self.plain_read(addr) {
+            return self.regions[idx].data[off];
+        }
         // Account for the access before any device model can return early. Doing this further down
         // meant every modelled device — ATA, the BCM, the timers — was invisible to the device
         // report: `ide` showed 8 reads while the drive was handing over a megabyte, and the whole
@@ -2626,6 +2704,103 @@ impl Bus for Memory {
 
     fn write8(&mut self, addr: u32, val: u8) {
         self.write8_inner(addr, val)
+    }
+
+    fn fetch32(&mut self, addr: u32) -> u32 {
+        let a = addr & !3;
+        let e = self.fetch[(a >> 12) as usize & (FETCH_SLOTS - 1)];
+        if e.tag == a & !(PAGE - 1) && !self.reads_instrumented() {
+            let at = e.off as usize + (a & (PAGE - 1)) as usize;
+            if let Some(d) = self.regions[e.idx as usize].data.get(at..at + 4) {
+                return u32::from_le_bytes([d[0], d[1], d[2], d[3]]);
+            }
+        }
+        let v = self.read32(a);
+        self.fill_fetch(a);
+        v
+    }
+
+    fn fetch16(&mut self, addr: u32) -> u16 {
+        let a = addr & !1;
+        let e = self.fetch[(a >> 12) as usize & (FETCH_SLOTS - 1)];
+        if e.tag == a & !(PAGE - 1) && !self.reads_instrumented() {
+            let at = e.off as usize + (a & (PAGE - 1)) as usize;
+            if let Some(d) = self.regions[e.idx as usize].data.get(at..at + 2) {
+                return u16::from_le_bytes([d[0], d[1]]);
+            }
+        }
+        let v = self.read16(a);
+        self.fill_fetch(a);
+        v
+    }
+
+    /// Two byte reads in one resolution; see [`Memory::plain_read`] for when that is the same
+    /// thing. The default is `read8` twice, which is what every other case still does.
+    fn read16(&mut self, addr: u32) -> u16 {
+        let a = addr & !1;
+        if let Some((idx, off)) = self.plain_read(a) {
+            let d = &self.regions[idx].data[off..off + 2];
+            return u16::from_le_bytes([d[0], d[1]]);
+        }
+        u16::from_le_bytes([self.read8(a), self.read8(a.wrapping_add(1))])
+    }
+}
+
+impl Memory {
+    /// Whether a read has to be accounted: one of the instruments that need to see every read
+    /// address is armed. Every fast read path declines while it is.
+    #[inline]
+    fn reads_instrumented(&self) -> bool {
+        self.accounting
+            || self.page_log.is_some()
+            || !self.read_addrs.is_empty()
+            || self.input_probe.is_some()
+    }
+
+    /// Remember the page a fetch has just been served from, if the byte path would answer every
+    /// word of it from the region and nothing else.
+    ///
+    /// The two core registers sit in pages that are otherwise plain, and `core_register` answers
+    /// them ahead of the region, so those pages are never remembered. `verify_memory` is the
+    /// checking mode of the cache this one sits on; it is left to run its own comparison.
+    fn fill_fetch(&mut self, a: u32) {
+        let page = a & !(PAGE - 1);
+        if self.verify_memory
+            || self.reads_instrumented()
+            || page == PROC_ID
+            || (self.second_core && Core::Cop.ctrl() & !(PAGE - 1) == page)
+        {
+            return;
+        }
+        if let Some((idx, off)) = self.fast_region(a, false) {
+            self.fetch[(page >> 12) as usize & (FETCH_SLOTS - 1)] = FetchPage {
+                tag: page,
+                idx: idx as u32,
+                off: (off - (a & (PAGE - 1)) as usize) as u32,
+            };
+        }
+    }
+
+    /// The region and offset that answer a read of `addr` when nothing but the backing bytes could
+    /// matter, or `None` when the byte path has to run.
+    ///
+    /// **This is the byte path's own answer, found without walking it.** For a page
+    /// [`Memory::page_is_plain`] passed, `read8` does `count` (a no-op unless one of the four
+    /// instruments below is armed), `read8_inner` (no device window overlaps the page, which is
+    /// what `page_is_plain` established, so it falls through to `locate`) and a read of the first
+    /// region holding the address, which is the region [`Memory::fast_region`] caches. The two
+    /// word-granular core registers are the one thing `read8_inner` answers ahead of the windows,
+    /// so they are asked first, exactly as `read32_via` asks them. A halfword never straddles a
+    /// word, so one answer serves both of its bytes.
+    ///
+    /// Instruction fetch in Thumb state is a `read16` and a byte load is a `read8`; before this
+    /// each was a walk over the alias list, ten device windows and the region list, per byte.
+    #[inline]
+    fn plain_read(&mut self, addr: u32) -> Option<(usize, usize)> {
+        if self.reads_instrumented() || self.core_register(addr & !3).is_some() {
+            return None;
+        }
+        self.fast_region(addr, false)
     }
 }
 
@@ -2741,9 +2916,16 @@ impl Memory {
             || hits(self.piezo.base, Piezo::PAGE)
             || self.mmap_base.is_some_and(|b| hits(b, 0x40))
             || self.int_ack_on_read.iter().any(|&(at, _)| hits(at, 4))
-            || PP_DMA.iter().any(|c| hits(c.chans, 0x20 * c.n))
+            // The read-to-clear latch is skipped for the emulator's own reads, so for them the
+            // channel registers are plain words. `service_pp_dma` reads twelve of them a tick.
+            || (!self.internal && PP_DMA.iter().any(|c| hits(c.chans, 0x20 * c.n)))
         {
             return None;
+        }
+        let page = a & !(PAGE - 1);
+        let e = &self.fast[((page >> 12) as usize) & (FAST_SLOTS - 1)];
+        if e.tag == page && e.p != u32::MAX {
+            return Some((e.p as usize, e.p_off as usize + (a & (PAGE - 1)) as usize));
         }
         // One translation for the word — unless it straddles an alias edge, where each byte would
         // translate on its own.
@@ -4743,6 +4925,7 @@ impl Machine {
             page_counts: BTreeMap::new(),
             accounting: false,
             fast: vec![FastPage::EMPTY; FAST_SLOTS].into_boxed_slice(),
+            fetch: [FetchPage::EMPTY; FETCH_SLOTS],
             readonly: Vec::new(),
             internal: false,
             region_reads: Vec::new(),
@@ -9709,6 +9892,9 @@ pub fn install_game_stubs(&mut self, exe_stem: &str, o: GameStubs) -> bool {
     /// firmware jumps into the uncached view, so an alias that only worked for loads and stores
     /// would report code as unmapped and stop the run at the first such branch.
     fn is_mapped(&self, addr: u32) -> bool {
+        if self.mem.fetch_hit(addr) || self.mem.fast_hit(addr) {
+            return true;
+        }
         let addr = self.mem.translate(addr);
         self.mem
             .regions
@@ -13087,6 +13273,129 @@ mod word_path_tests {
         }
         for addr in [0x6000_5000, 0x6000_d030, 0x6000_7000, 0x7000_0000] {
             assert!(m.mem.plain_word(addr).is_some(), "{addr:#010x} is plain backing store");
+        }
+    }
+
+    /// `machine`, with the read instruments off, so the fetch cache is allowed to answer.
+    fn quiet_machine(cold: bool) -> Machine {
+        let mut m = machine(cold);
+        m.mem.accounting = false;
+        m.mem.input_probe = None;
+        m.mem.read_addrs.clear();
+        m.mem.set_store_addr_bounds();
+        m
+    }
+
+    /// A fetch is a read: the cache may only be a faster way to the same word, on every device page
+    /// as well as on RAM, and with the same side effects when it declines.
+    #[test]
+    fn a_fetch_returns_what_a_read_returns() {
+        for cold in [false, true] {
+            let (mut a, mut b) = (quiet_machine(cold), quiet_machine(cold));
+            a.mem.int_pending = 0xffff_ffff;
+            b.mem.int_pending = 0xffff_ffff;
+            let mut cached = 0;
+            // Twice, so the second pass is the one the cache serves.
+            for pass in 0..2 {
+                for (n, addr) in addresses().into_iter().enumerate() {
+                    let asked = addr | (n as u32 & 3);
+                    if pass == 1 && a.mem.fetch_hit(addr) {
+                        cached += 1;
+                    }
+                    assert_eq!(a.mem.fetch32(asked), b.mem.read32(asked), "cold={cold} {asked:#010x}");
+                    let half = addr | (n as u32 & 2);
+                    assert_eq!(a.mem.fetch16(half), b.mem.read16(half), "cold={cold} {half:#010x}");
+                }
+            }
+            assert!(cached > 1000, "the cache served only {cached} fetches; the test is not testing it");
+            assert_eq!(a.mem.int_pending, b.mem.int_pending, "cold={cold}");
+            for (ra, rb) in a.mem.regions.iter().zip(&b.mem.regions) {
+                assert!(ra.data == rb.data, "cold={cold}: {} differs", ra.name);
+            }
+            // The core registers answer ahead of their region and are never remembered.
+            assert!(!a.mem.fetch_hit(PROC_ID));
+        }
+    }
+
+    /// Self-modifying code and the loader that copies an image over its own tail: a store of any
+    /// width to a page the fetch cache holds is what the next fetch returns.
+    #[test]
+    fn a_store_to_a_fetched_page_is_the_next_fetch() {
+        let mut m = quiet_machine(false);
+        let at = 0x1000_2000;
+        let old = m.mem.fetch32(at);
+        assert!(m.mem.fetch_hit(at), "the first fetch should have filled the cache");
+        assert_eq!(m.mem.fetch32(at), old);
+        m.mem.write32(at, 0xe1a0_0000);
+        assert_eq!(m.mem.fetch32(at), 0xe1a0_0000);
+        m.mem.write8(at + 1, 0x5a);
+        assert_eq!(m.mem.fetch32(at), 0xe1a0_5a00);
+        m.mem.write16(at + 2, 0x4770);
+        assert_eq!(m.mem.fetch16(at + 2), 0x4770);
+        assert_eq!(m.mem.fetch32(at), 0x4770_5a00);
+        assert!(m.mem.fetch_hit(at));
+    }
+
+    /// Programming an MMAP window changes which memory an address reaches. A cached fetch location
+    /// is dropped with the rest of the page cache, so the next fetch comes from the new place.
+    #[test]
+    fn a_remap_changes_what_a_cached_fetch_returns() {
+        let mut m = quiet_machine(false);
+        let before = m.mem.fetch32(0x100);
+        assert!(m.mem.fetch_hit(0x100));
+        // The LCD window stands in for "some other memory": plain, and filled with its own pattern.
+        let other = m.mem.read32(0x3000_0100);
+        assert_ne!(before, other, "the pattern must tell the two views apart");
+        m.mem.mmap_regs[0] = 0x0000_3c00;
+        m.mem.mmap_regs[1] = 0x0000_0f84 | 0x3000_0000;
+        m.mem.rebuild_mmap_aliases();
+        assert!(!m.mem.fetch_hit(0x100), "a remap must drop the cached location");
+        assert_eq!(m.mem.fetch32(0x100), other);
+        assert_eq!(m.mem.fetch32(0x100), m.mem.read32(0x100));
+        assert!(m.mem.fetch_hit(0x100));
+    }
+
+    /// The page-level location the word path reads from the cache is the one it would have found
+    /// by walking the regions.
+    #[test]
+    fn the_word_path_finds_the_same_region_from_the_cache() {
+        for cold in [false, true] {
+            let mut m = quiet_machine(cold);
+            let mut cached = 0;
+            for addr in addresses() {
+                m.mem.invalidate_fast();
+                let walked = m.mem.plain_word(addr);
+                m.mem.fast_region(addr, false);
+                let from_cache = m.mem.plain_word(addr);
+                if m.mem.fast[((addr >> 12) as usize) & (FAST_SLOTS - 1)].p != u32::MAX {
+                    cached += 1;
+                }
+                assert_eq!(walked, from_cache, "cold={cold} {addr:#010x}");
+            }
+            assert!(cached > 1000, "only {cached} words came from the cache; the test is not testing it");
+        }
+    }
+
+    /// The emulator's own reads of a DMA channel (the service tick makes a dozen) skip the
+    /// read-to-clear latch, so they may take the word path; the firmware's may not.
+    #[test]
+    fn the_emulators_own_reads_of_a_dma_channel_take_the_word_path() {
+        for cold in [false, true] {
+            let (mut a, mut b) = (machine(cold), machine(cold));
+            a.mem.internal = true;
+            b.mem.internal = true;
+            for c in PP_DMA.iter() {
+                for off in (0..0x20 * c.n).step_by(4) {
+                    let addr = c.chans + off;
+                    assert!(a.mem.plain_word(addr).is_some(), "cold={cold} {addr:#010x}");
+                    assert_eq!(a.mem.read32(addr), b.mem.read32_via(addr, false), "cold={cold} {addr:#010x}");
+                }
+            }
+            for (ra, rb) in a.mem.regions.iter().zip(&b.mem.regions) {
+                assert!(ra.data == rb.data, "cold={cold}: {} differs", ra.name);
+            }
+            a.mem.internal = false;
+            assert!(a.mem.plain_word(PP_DMA[1].chans + DMA_STATUS).is_none());
         }
     }
 

@@ -349,12 +349,12 @@ impl Cpu {
         self.branched = false;
         if self.cpsr.thumb() {
             let addr = self.regs[15] & !1;
-            let instr = bus.read16(addr);
+            let instr = bus.fetch16(addr);
             self.regs[15] = addr.wrapping_add(2);
             thumb::execute(self, bus, instr);
         } else {
             let addr = self.regs[15] & !3;
-            let instr = bus.read32(addr);
+            let instr = bus.fetch32(addr);
             self.regs[15] = addr.wrapping_add(4);
             arm::execute(self, bus, instr);
         }

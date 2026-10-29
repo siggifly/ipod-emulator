@@ -42,6 +42,17 @@ pub trait Bus {
         }
     }
 
+    /// Instruction fetch. Defaults to the data read, which is right for any bus whose instruction
+    /// and data views agree; an implementor that can answer fetches from a cache overrides these,
+    /// and must return what `read32`/`read16` would.
+    fn fetch32(&mut self, addr: u32) -> u32 {
+        self.read32(addr)
+    }
+
+    fn fetch16(&mut self, addr: u32) -> u16 {
+        self.read16(addr)
+    }
+
     /// `LDR` from a misaligned address reads the aligned word then rotates it right by
     /// `8 * (addr & 3)`. This is architectural on ARM7TDMI, not undefined.
     fn read32_rotated(&mut self, addr: u32) -> u32 {
