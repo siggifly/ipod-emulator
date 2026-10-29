@@ -606,6 +606,104 @@ pub fn install_linux(
 mod tests {
     use super::*;
 
+    /// A 5.5G-shaped firmware partition: `osos` and `rsrc` with Apple's 0x800 header, `rsrc`'s FAT
+    /// boot sector 0x600 further in, checksums over `[devOffset + 0x800, + len)`, and non-zero
+    /// bytes in the last 0x600 bytes of `rsrc` and `aupd` (`osos` ends in zeros). No Apple data.
+    fn synthetic_5_5g_firmware() -> Vec<u8> {
+        const OSOS: u32 = 0x4800;
+        const OSOS_LEN: u32 = 0x2000;
+        const RSRC: u32 = OSOS + 0x800 + OSOS_LEN;
+        const RSRC_LEN: u32 = 0x3000;
+        const AUPD: u32 = RSRC + 0x800 + RSRC_LEN;
+        const AUPD_LEN: u32 = 0x1000;
+        let mut fw = vec![0u8; (AUPD + 0x800 + AUPD_LEN) as usize];
+
+        let osos_at = (OSOS + 0x800) as usize;
+        fw[osos_at + 3] = 0xea;
+        fw[osos_at + 7] = 0xea;
+        let rsrc_at = (RSRC + 0xe00) as usize;
+        fw[rsrc_at] = 0xeb;
+        fw[rsrc_at + 2] = 0x90;
+        fw[rsrc_at + 0x1fe] = 0x55;
+        fw[rsrc_at + 0x1ff] = 0xaa;
+        for (start, len) in [(RSRC, RSRC_LEN), (AUPD, AUPD_LEN)] {
+            let end = (start + 0x800 + len) as usize;
+            for (i, b) in fw[end - 0x600..end].iter_mut().enumerate() {
+                *b = 1 + (i % 7) as u8;
+            }
+        }
+
+        let sum = |fw: &[u8], start: u32, len: u32| {
+            fw[(start + 0x800) as usize..(start + 0x800 + len) as usize]
+                .iter()
+                .fold(0u32, |a, &b| a.wrapping_add(b as u32))
+        };
+        let entries = [
+            (
+                "osos",
+                OSOS,
+                OSOS_LEN,
+                0x1000_0000u32,
+                sum(&fw, OSOS, OSOS_LEN),
+            ),
+            ("rsrc", RSRC, RSRC_LEN, 0, sum(&fw, RSRC, RSRC_LEN)),
+            ("aupd", AUPD, AUPD_LEN, 0x1000_0000, 0x0b19_db1c),
+        ];
+        for (i, (tag, off, len, addr, chk)) in entries.iter().enumerate() {
+            let e = FW_DIRECTORY as usize + i * 40;
+            fw[e..e + 4].copy_from_slice(b"!ATA");
+            let t: Vec<u8> = tag.bytes().rev().collect();
+            fw[e + 4..e + 8].copy_from_slice(&t);
+            fw[e + 0x0c..e + 0x10].copy_from_slice(&off.to_le_bytes());
+            fw[e + 0x10..e + 0x14].copy_from_slice(&len.to_le_bytes());
+            fw[e + 0x14..e + 0x18].copy_from_slice(&addr.to_le_bytes());
+            fw[e + 0x1c..e + 0x20].copy_from_slice(&chk.to_le_bytes());
+        }
+        fw
+    }
+
+    /// A drive image holding `fw` at LBA 63, in a partition with 1 MiB of room after it.
+    fn drive_with(path: &Path, fw: &[u8]) {
+        let part_sectors = (fw.len() as u32 + (1 << 20)) / 512;
+        let mut img = vec![0u8; 63 * 512 + part_sectors as usize * 512];
+        img[446 + 8..446 + 12].copy_from_slice(&63u32.to_le_bytes());
+        img[446 + 12..446 + 16].copy_from_slice(&part_sectors.to_le_bytes());
+        img[510] = 0x55;
+        img[511] = 0xaa;
+        img[63 * 512..63 * 512 + fw.len()].copy_from_slice(fw);
+        std::fs::write(path, &img).unwrap();
+    }
+
+    /// `make-disk` rewrites the directory's offsets; the drive it produces has to pass the
+    /// checksum check `install_os` runs on it, and `rsrc` has to keep its last 0x600 bytes.
+    #[test]
+    fn install_os_accepts_a_5_5g_drive_after_its_image_offsets_are_normalised() {
+        let mut fw = synthetic_5_5g_firmware();
+        let rsrc_end = fw.len() - 0x800 - 0x1000;
+        let rsrc_tail = fw[rsrc_end - 0x600..rsrc_end].to_vec();
+        let moved = crate::ipsw::normalise_image_headers(&mut fw);
+        assert_eq!(moved.len(), 2, "{moved:?}");
+
+        let drive = tmp("5-5g-drive");
+        drive_with(&drive, &fw);
+        let os = tmp("5-5g-os");
+        std::fs::write(&os, [0u8; 64]).unwrap();
+        let out = tmp("5-5g-out");
+        install_os(&drive, &os, &out).unwrap();
+
+        let dir = &fw[FW_DIRECTORY as usize..];
+        let rsrc = &dir[40..80];
+        let (off, len) = (le(rsrc, 0x0c) as usize, le(rsrc, 0x10) as usize);
+        assert_eq!(
+            &fw[off + 0x200 + len - 0x600..off + 0x200 + len],
+            &rsrc_tail[..],
+            "the normalised `rsrc` no longer reaches the end of its content"
+        );
+        for p in [&drive, &os, &out] {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+
     /// A 512-byte MBR carrying `types` in its four partition entries, and nothing else true.
     ///
     /// Built here rather than taken from anything under `resources/` for the reason
