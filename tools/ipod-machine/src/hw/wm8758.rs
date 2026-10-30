@@ -152,14 +152,17 @@ impl Wm8758 {
     /// read, so a dispatcher compares `dev >> 1` against this.
     pub const ADDR: u8 = 0x1a;
 
-    /// `R0..R57` — the family map defines nothing above `R57`, and this repository holds no
-    /// datasheet to check that against.
+    /// `R0..R57` plus `R61`, the bias control register Rockbox writes at start-up. The array spans
+    /// `R0..R61`; [`Self::in_map`] says which of those the part has.
     ///
-    /// Nothing rests on the exact bound: the highest register any captured run touches is `0x37`,
-    /// so this only ever functions as the decode's sanity check. A part with a few more registers
-    /// would make the check slightly tighter than the hardware and would still never fire on real
-    /// traffic.
-    pub const N_REGS: usize = 0x3a;
+    /// Nothing rests on the exact bound: the highest register any Apple boot touches is `0x37`,
+    /// so this only ever functions as the decode's sanity check.
+    pub const N_REGS: usize = 0x3e;
+
+    /// `R58..R60` are not registers on the part.
+    pub fn in_map(reg: u8) -> bool {
+        reg <= 0x39 || reg == 0x3d
+    }
 
     /// `R0` — writing it resets the part.
     pub const RESET: u8 = 0x00;
@@ -206,7 +209,7 @@ impl Wm8758 {
         self.log.push((reg, val));
         // Counted before it is dropped. A register the part does not have is a statement about the
         // decode, and the one thing it must never do is disappear.
-        if reg as usize >= Self::N_REGS {
+        if !Self::in_map(reg) {
             self.out_of_map += 1;
             return;
         }
@@ -226,6 +229,66 @@ impl Wm8758 {
     ///
     /// **Labels, not measurements** — see the module note. Nothing in this emulator behaves
     /// differently because of a name; they exist so a report reads as audio.
+    /// The codec's master clock pin, Hz. The PP5022 drives it at 24 MHz once the external device
+    /// clock is switched, and every PLL setting the firmware uses assumes that.
+    pub const DEFAULT_MCLK_HZ: f64 = 24_000_000.0;
+
+    /// The nine rates the iPod's sound layer offers.
+    pub const RATES: [u32; 9] = [8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000];
+
+    const MCLKDIV: [f64; 8] = [1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0];
+
+    /// `SYSCLK`, the clock the converters run from, or `None` while the codec is not producing
+    /// one: it is the I2S slave (`MS` clear), it has been told to use the PLL with `PLLEN` clear,
+    /// or the PLL's integer part is outside what the part locks to.
+    ///
+    /// Registers that were never written read as zero here, not as the part's reset values, so a
+    /// guest that selects the PLL without programming `N` gets `None` rather than a default.
+    pub fn sysclk_hz(&self, mclk_hz: f64) -> Option<f64> {
+        let r = |n: usize| u32::from(self.regs[n]);
+        let (r1, r6) = (r(0x01), r(0x06));
+        if r6 & 1 == 0 {
+            return None;
+        }
+        let src = if r6 & 0x100 != 0 {
+            if r1 & 0x20 == 0 {
+                return None;
+            }
+            let r36 = r(0x24);
+            let n = r36 & 0xf;
+            if !(5..=13).contains(&n) {
+                return None;
+            }
+            let k = ((r(0x25) & 0x3f) << 18) | ((r(0x26) & 0x1ff) << 9) | (r(0x27) & 0x1ff);
+            let prescale = if r36 & 0x10 != 0 { 0.5 } else { 1.0 };
+            mclk_hz * prescale * (f64::from(n) + f64::from(k) / 16_777_216.0) / 4.0
+        } else {
+            mclk_hz
+        };
+        Some(src / Self::MCLKDIV[((r6 >> 5) & 7) as usize])
+    }
+
+    /// The frame rate on LRC: `SYSCLK / 256`, snapped to a standard rate when within 0.5% of one
+    /// (the PLL constants Rockbox uses land within 0.01%), otherwise rounded. `None` outside
+    /// 7 to 50 kHz, where the part is not specified to run.
+    pub fn sample_rate(&self, mclk_hz: f64) -> Option<u32> {
+        let fs = self.sysclk_hz(mclk_hz)? / 256.0;
+        if !(7_000.0..=50_000.0).contains(&fs) {
+            return None;
+        }
+        Self::RATES
+            .iter()
+            .copied()
+            .find(|&s| (fs - f64::from(s)).abs() <= f64::from(s) * 0.005)
+            .or(Some(fs.round() as u32))
+    }
+
+    /// `(DACENL, DACENR)` from `R3`.
+    pub fn dac_enabled(&self) -> (bool, bool) {
+        let r3 = self.regs[0x03];
+        (r3 & 1 != 0, r3 & 2 != 0)
+    }
+
     pub fn name(reg: u8) -> Option<&'static str> {
         Some(match reg {
             0x00 => "RESET",
@@ -282,6 +345,7 @@ impl Wm8758 {
             0x37 => "ROUT2VOL",
             0x38 => "OUT3MIX",
             0x39 => "OUT4MIX",
+            0x3d => "BIASCTRL",
             _ => return None,
         })
     }
@@ -334,9 +398,8 @@ impl Wm8758 {
         }
         if self.out_of_map > 0 {
             out.push(format!(
-                "  {} write(s) decoded past R{} — the register decode is wrong",
-                self.out_of_map,
-                Self::N_REGS - 1
+                "  {} write(s) decoded outside R0..R57 and R61 — the register decode is wrong",
+                self.out_of_map
             ));
         }
         if self.resets > 0 {
@@ -587,5 +650,120 @@ mod tests {
         assert!(text.contains("in order: 18"));
         // A silent run prints nothing at all.
         assert!(Wm8758::new().report().is_empty());
+    }
+    /// Write a register the way the firmware's helper does.
+    fn put(c: &mut Wm8758, reg: u8, val: u16) {
+        send(c, (reg << 1) | (val >> 8) as u8, val as u8);
+    }
+
+    /// Rockbox's per-rate PLL constants and R6 value, from `docs/hw/wm8758-i2s.md` section 4.
+    const RATE_TABLE: [(u32, [u16; 4], u16); 9] = {
+        const A: [u16; 4] = [0x017, 0x021, 0x161, 0x026];
+        const B: [u16; 4] = [0x018, 0x00c, 0x093, 0x0e9];
+        [
+            (48000, B, 0x145),
+            (44100, A, 0x145),
+            (32000, B, 0x165),
+            (24000, B, 0x185),
+            (22050, A, 0x185),
+            (16000, B, 0x1a5),
+            (12000, B, 0x1c5),
+            (11025, A, 0x1c5),
+            (8000, B, 0x1e5),
+        ]
+    };
+
+    fn bring_up(rate_regs: &[u16; 4], r6: u16) -> Wm8758 {
+        let mut c = Wm8758::new();
+        put(&mut c, 0x01, 0x02f);
+        put(&mut c, 0x06, 0x001);
+        for (i, v) in rate_regs.iter().enumerate() {
+            put(&mut c, 0x24 + i as u8, *v);
+        }
+        put(&mut c, 0x06, r6);
+        c
+    }
+
+    #[test]
+    fn every_rockbox_rate_decodes_from_its_pll_and_divider() {
+        for (rate, pll, r6) in RATE_TABLE {
+            let c = bring_up(&pll, r6);
+            assert_eq!(
+                c.sample_rate(Wm8758::DEFAULT_MCLK_HZ),
+                Some(rate),
+                "R6 {r6:#x}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_pll_constants_are_exact_to_a_hertz() {
+        let c = bring_up(&RATE_TABLE[1].1, 0x145);
+        let fs = c.sysclk_hz(Wm8758::DEFAULT_MCLK_HZ).unwrap() / 256.0;
+        assert!((fs - 44100.0).abs() < 1.0, "{fs}");
+        let c = bring_up(&RATE_TABLE[0].1, 0x145);
+        let fs = c.sysclk_hz(Wm8758::DEFAULT_MCLK_HZ).unwrap() / 256.0;
+        assert!((fs - 48000.0).abs() < 0.01, "{fs}");
+    }
+
+    #[test]
+    fn no_rate_until_the_codec_is_master_and_its_clock_is_running() {
+        let mut c = Wm8758::new();
+        assert_eq!(c.sample_rate(Wm8758::DEFAULT_MCLK_HZ), None, "reset");
+        // CLKSEL = PLL, MS clear.
+        put(&mut c, 0x06, 0x144);
+        assert_eq!(c.sample_rate(Wm8758::DEFAULT_MCLK_HZ), None, "slave");
+        put(&mut c, 0x06, 0x145);
+        assert_eq!(c.sample_rate(Wm8758::DEFAULT_MCLK_HZ), None, "PLLEN clear");
+        put(&mut c, 0x01, 0x020);
+        assert_eq!(
+            c.sample_rate(Wm8758::DEFAULT_MCLK_HZ),
+            None,
+            "PLL N is zero"
+        );
+        for (i, v) in RATE_TABLE[1].1.iter().enumerate() {
+            put(&mut c, 0x24 + i as u8, *v);
+        }
+        assert_eq!(c.sample_rate(Wm8758::DEFAULT_MCLK_HZ), Some(44100));
+        put(&mut c, 0x01, 0x000);
+        assert_eq!(
+            c.sample_rate(Wm8758::DEFAULT_MCLK_HZ),
+            None,
+            "PLLEN dropped"
+        );
+    }
+
+    #[test]
+    fn mclk_direct_decodes_without_the_pll() {
+        // 12.288 MHz on the pin, /1: SYSCLK 12.288 MHz, 48 kHz.
+        let mut c = Wm8758::new();
+        put(&mut c, 0x06, 0x001);
+        assert_eq!(c.sample_rate(12_288_000.0), Some(48000));
+        assert_eq!(c.sample_rate(11_289_600.0), Some(44100));
+        // Off the standard list: rounded, not snapped.
+        assert_eq!(c.sample_rate(10_240_000.0), Some(40000));
+        // Out of the part's range.
+        assert_eq!(c.sample_rate(24_000_000.0), None);
+    }
+
+    #[test]
+    fn dac_enables_come_from_r3() {
+        let mut c = Wm8758::new();
+        assert_eq!(c.dac_enabled(), (false, false));
+        put(&mut c, 0x03, 0x00f);
+        assert_eq!(c.dac_enabled(), (true, true));
+        put(&mut c, 0x03, 0x002);
+        assert_eq!(c.dac_enabled(), (false, true));
+    }
+    #[test]
+    fn r61_is_a_register_and_r58_to_r60_are_not() {
+        let mut c = Wm8758::new();
+        put(&mut c, 0x3d, 0x100);
+        assert_eq!((c.out_of_map, c.reg(0x3d)), (0, Some(0x100)));
+        for r in 0x3a..=0x3c {
+            put(&mut c, r, 1);
+        }
+        assert_eq!(c.out_of_map, 3);
+        assert!(c.report().iter().any(|l| l.contains("R0..R57 and R61")));
     }
 }

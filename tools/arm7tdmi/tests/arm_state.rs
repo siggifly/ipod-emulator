@@ -482,6 +482,25 @@ fn fiq_banks_r8_through_r12_as_well() {
 }
 
 #[test]
+fn fiq_is_refused_while_f_is_set_and_ignores_i() {
+    let mut cpu = Cpu::new();
+    cpu.set_mode(Mode::System);
+    cpu.regs[15] = CODE;
+    cpu.regs[8] = 5;
+    cpu.cpsr.set_fiq_disabled(true);
+    assert!(!cpu.fiq(), "F set: refused");
+    assert_eq!(cpu.cpsr.mode(), Mode::System);
+    cpu.cpsr.set_fiq_disabled(false);
+    cpu.cpsr.set_irq_disabled(true);
+    assert!(cpu.fiq(), "I does not mask FIQ");
+    assert_eq!(cpu.cpsr.mode(), Mode::Fiq);
+    assert_eq!(cpu.regs[15], 0x1C, "FIQ vector");
+    assert_ne!(cpu.regs[8], 5, "r8 is the FIQ bank's");
+    assert!(cpu.cpsr.fiq_disabled() && cpu.cpsr.irq_disabled());
+    assert!(!cpu.fiq(), "F is set on entry");
+}
+
+#[test]
 fn mrs_reads_cpsr() {
     let (cpu, _) = run(
         &[

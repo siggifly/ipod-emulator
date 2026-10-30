@@ -1,0 +1,120 @@
+@ audio-tone.s, assembled with arm-none-eabi-as -march=armv4t into the text form the tests read.
+@ One word per token, little-endian in memory, offsets from the image base. The disassembly beside
+@ each word is arm-none-eabi-objdump's. Regenerate with the commands in audio-tone.s.
+@ _start:
+ea000006   @ 000 b 20 <reset>
+eafffffe   @ 004 b 4 <P_END>
+eafffffe   @ 008 b 8 <P_SEG>
+eafffffe   @ 00c b c <P_CMD>
+eafffffe   @ 010 b 10 <P_COUNT>
+e1a00000   @ 014 nop
+eafffffe   @ 018 b 18 <P_DONE>
+ea00003f   @ 01c b 120 <fiq>
+@ reset:
+e321f0d3   @ 020 msr CPSR_c, #211
+e3a00206   @ 024 mov r0, #1610612736
+e5900000   @ 028 ldr r0, [r0]
+e20000ff   @ 02c and r0, r0, #255
+e35000aa   @ 030 cmp r0, #170
+1a000003   @ 034 bne 48 <cpu>
+e59f0140   @ 038 ldr r0, [pc, #320]
+e3a01102   @ 03c mov r1, #-2147483648
+e5801000   @ 040 str r1, [r0]
+@ park:
+eafffffe   @ 044 b 44 <park>
+@ cpu:
+e3a01b01   @ 048 mov r1, #1024
+e59f0130   @ 04c ldr r0, [pc, #304]
+e5912020   @ 050 ldr r2, [r1, #32]
+e3a03034   @ 054 mov r3, #52
+e5803004   @ 058 str r3, [r0, #4]
+@ next:
+e4923004   @ 05c ldr r3, [r2], #4
+e3730001   @ 060 cmn r3, #1
+0a00000a   @ 064 beq 94 <codec_done>
+e20340ff   @ 068 and r4, r3, #255
+e580400c   @ 06c str r4, [r0, #12]
+e1a04423   @ 070 lsr r4, r3, #8
+e20440ff   @ 074 and r4, r4, #255
+e5804010   @ 078 str r4, [r0, #16]
+e3a04082   @ 07c mov r4, #130
+e5804000   @ 080 str r4, [r0]
+@ busy:
+e590401c   @ 084 ldr r4, [r0, #28]
+e3140040   @ 088 tst r4, #64
+1afffffc   @ 08c bne 84 <busy>
+eafffff1   @ 090 b 5c <next>
+@ codec_done:
+e59f00ec   @ 094 ldr r0, [pc, #236]
+e59f40ec   @ 098 ldr r4, [pc, #236]
+e5804000   @ 09c str r4, [r0]
+e3a04001   @ 0a0 mov r4, #1
+e580400c   @ 0a4 str r4, [r0, #12]
+e59f00e0   @ 0a8 ldr r0, [pc, #224]
+e3a04102   @ 0ac mov r4, #-2147483648
+e5804000   @ 0b0 str r4, [r0]
+e59f00d8   @ 0b4 ldr r0, [pc, #216]
+e59f40d8   @ 0b8 ldr r4, [pc, #216]
+e5804018   @ 0bc str r4, [r0, #24]
+e59f40d4   @ 0c0 ldr r4, [pc, #212]
+e580401c   @ 0c4 str r4, [r0, #28]
+e3a04301   @ 0c8 mov r4, #67108864
+e5804014   @ 0cc str r4, [r0, #20]
+e59f00c8   @ 0d0 ldr r0, [pc, #200]
+e590402c   @ 0d4 ldr r4, [r0, #44]
+e3844301   @ 0d8 orr r4, r4, #67108864
+e580402c   @ 0dc str r4, [r0, #44]
+e3a04301   @ 0e0 mov r4, #67108864
+e5804024   @ 0e4 str r4, [r0, #36]
+e321f093   @ 0e8 msr CPSR_c, #147
+e59f00a0   @ 0ec ldr r0, [pc, #160]
+e5914014   @ 0f0 ldr r4, [r1, #20]
+e5804010   @ 0f4 str r4, [r0, #16]
+e591400c   @ 0f8 ldr r4, [r1, #12]
+e5804000   @ 0fc str r4, [r0]
+@ wait:
+e5914018   @ 100 ldr r4, [r1, #24]
+e3540000   @ 104 cmp r4, #0
+1a000003   @ 108 bne 11c <finished>
+e59f5090   @ 10c ldr r5, [pc, #144]
+e3a06102   @ 110 mov r6, #-2147483648
+e5856000   @ 114 str r6, [r5]
+eafffff8   @ 118 b 100 <wait>
+@ finished:
+eafffffe   @ 11c b 11c <finished>
+@ fiq:
+e59f806c   @ 120 ldr r8, [pc, #108]
+e598c004   @ 124 ldr ip, [r8, #4]
+e3a0cb01   @ 128 mov ip, #1024
+e59c901c   @ 12c ldr r9, [ip, #28]
+e2899001   @ 130 add r9, r9, #1
+e58c901c   @ 134 str r9, [ip, #28]
+e59c9010   @ 138 ldr r9, [ip, #16]
+e2599001   @ 13c subs r9, r9, #1
+e58c9010   @ 140 str r9, [ip, #16]
+0a00000a   @ 144 beq 174 <last>
+e59c9014   @ 148 ldr r9, [ip, #20]
+e59ca008   @ 14c ldr sl, [ip, #8]
+e089900a   @ 150 add r9, r9, sl
+e59ca004   @ 154 ldr sl, [ip, #4]
+e159000a   @ 158 cmp r9, sl
+059c9000   @ 15c ldreq r9, [ip]
+e58c9014   @ 160 str r9, [ip, #20]
+e5889010   @ 164 str r9, [r8, #16]
+e59ca00c   @ 168 ldr sl, [ip, #12]
+e588a000   @ 16c str sl, [r8]
+e25ef004   @ 170 subs pc, lr, #4
+@ last:
+e3a09001   @ 174 mov r9, #1
+e58c9018   @ 178 str r9, [ip, #24]
+e25ef004   @ 17c subs pc, lr, #4
+60007004   @ 180 .word 0x60007004
+7000c000   @ 184 .word 0x7000c000
+70002800   @ 188 .word 0x70002800
+20000070   @ 18c .word 0x20000070
+6000a000   @ 190 .word 0x6000a000
+6000b000   @ 194 .word 0x6000b000
+70002840   @ 198 .word 0x70002840
+20010000   @ 19c .word 0x20010000
+60004000   @ 1a0 .word 0x60004000
+60007000   @ 1a4 .word 0x60007000
