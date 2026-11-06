@@ -29,3 +29,5 @@ pub mod ata;
 pub mod cop;
 pub mod video;
 pub mod piezo;
+pub mod usb;
+pub mod usbbus;

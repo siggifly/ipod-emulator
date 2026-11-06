@@ -48,6 +48,7 @@ pub use hw::ata::{Ata, PpDmaCtl};
 pub use hw::cop::{Core};
 pub use hw::video::{Bcm, BcmOp};
 pub use hw::piezo::{Fire, Piezo, Tone};
+pub use hw::usb::Usb;
 pub mod compose;
 pub mod doom;
 pub mod fat;
@@ -663,6 +664,11 @@ pub struct Memory {
     pub int_pending_hi: u32,
     /// `(base, device)` of an attached ATA controller.
     pub ata: Option<(u32, Ata)>,
+    /// The USB device controller at `0xC5000000`, when `--usb` asks for it. Without it the window is
+    /// backing store, as it was before the model existed.
+    pub usb: Option<Box<Usb>>,
+    /// The cable state last written to GPIO L.
+    usb_cable_seen: bool,
     /// The video co-processor, when modelled rather than left as passive memory.
     pub bcm: Option<Bcm>,
     /// Base of the PP I²C controller, if transactions should be logged.
@@ -1938,6 +1944,12 @@ impl Memory {
             // **Fifth time this list has been the bug** — `read_or_masks`, `--watch-range`,
             // `--input-regs`, the part-identity words, and now this.
             || hits(0xc500_0000, 0x1000)
+            // With the controller modelled the whole 64 KB window is the device, and the SoC words
+            // its power-up touches have to reach `write8_inner`.
+            || (self.usb.is_some()
+                && (hits(hw::usb::BASE, hw::usb::WINDOW)
+                    || hits(0x6000_6000, 0x10)
+                    || hits(0x7000_0000, 0x80)))
             // The mailbox, and the **sixth** time this list has been the bug. Reading `CPU_QUEUE`
             // is what clears it and drops `MAILBOX_IRQ`; that clear lives in `read8_inner`, which
             // the fast path does not call. A word read took the message and left bit 29 set, so
@@ -2951,6 +2963,7 @@ impl Memory {
                     && n.windows.iter().any(|&(b, s)| hits(b, s))
             })
             || self.ata.as_ref().is_some_and(|(b, _)| hits(*b, 0x410))
+            || (self.usb.is_some() && hits(hw::usb::BASE, hw::usb::WINDOW))
             || self.i2c_base.is_some_and(|b| {
                 (self.pmu.is_some() || self.i2c_fill.is_some()) && hits(b + 0x0c, 0x10)
             })
@@ -3024,6 +3037,12 @@ impl Memory {
         // `ldr`, so both widths have to agree. See `core_register`.
         if let Some(word) = self.core_register(addr & !3) {
             return (word >> ((addr & 3) * 8)) as u8;
+        }
+        if addr.wrapping_sub(hw::usb::BASE) < hw::usb::WINDOW {
+            let usec = self.usec;
+            if let Some(u) = self.usb.as_mut() {
+                return u.read8(addr.wrapping_sub(hw::usb::BASE) & 0x1ff, usec);
+            }
         }
         // **Reading `CPU_QUEUE` is what clears it** — Rockbox's `pp5020.h` says so in as many
         // words, and it is the whole of the handshake: the COP posts, the CPU is interrupted, the
@@ -3319,8 +3338,25 @@ impl Memory {
     }
 
     fn write8_inner(&mut self, addr: u32, val: u8) {
+        self.write8_dev(addr, val);
+        if self.usb.is_some() {
+            self.usb_after_store(addr, val);
+        }
+    }
+
+    fn write8_dev(&mut self, addr: u32, val: u8) {
         self.note_store_pc(addr, val as u32);
         self.count(addr, true, val);
+        // The USB controller, when modelled, answers its whole window and nothing falls through to
+        // the backing store.
+        if self.usb.is_some() && addr.wrapping_sub(hw::usb::BASE) < hw::usb::WINDOW {
+            let mut u = self.usb.take().unwrap();
+            let usec = self.usec;
+            u.write8(addr.wrapping_sub(hw::usb::BASE) & 0x1ff, val, usec, self);
+            self.usb = Some(u);
+            self.usb_sync_irq();
+            return;
+        }
         // The interrupt controller's set/clear ports, applied AT THE STORE — see [`int_ctl_port`]
         // for why the deferred version could not be right. Ahead of every device below it because
         // none of them answer in either of the two windows it claims, and the test is an AND and a
@@ -4935,6 +4971,8 @@ impl Machine {
             int_pending: 0,
             int_pending_hi: 0,
             ata: None,
+            usb: None,
+            usb_cable_seen: false,
             bcm: None,
             i2c_base: None,
             i2c_log: Capped::new(4096),
@@ -7548,6 +7586,7 @@ pub fn install_game_stubs(&mut self, exe_stem: &str, o: GameStubs) -> bool {
         // Before the `pending_hi` snapshot below, or a packet posted this tick would not reach
         // CPU_HI_INT_STAT until the next one.
         self.mem.service_clickwheel();
+        self.mem.service_usb();
 
         let now = self.mem.usec;
         for (i, &cfg_addr) in TIMER_CFG.iter().enumerate() {
@@ -7995,6 +8034,9 @@ pub fn install_game_stubs(&mut self, exe_stem: &str, o: GameStubs) -> bool {
                     if self.mem.usec >= u {
                         return Stop::TimeReached(self.mem.usec);
                     }
+                }
+                if self.mem.usb.as_ref().is_some_and(|u| u.quit_requested()) {
+                    return Stop::Exited;
                 }
             }
             // **The other core's turn.** Interleaved rather than threaded: one interpreter, two
@@ -10357,6 +10399,111 @@ pub const GPIO_IRQ_HI: u32 = 0;
 /// switch is modelled in the frame and not in the line `button_hold()` reads.
 pub const GPIOA_INPUT_VAL: u32 = 0x6000_d030;
 pub const GPIOA_HOLD: u32 = 0x20;
+
+impl hw::usb::Dma for Memory {
+    fn dma_read(&mut self, addr: u32, out: &mut [u8]) -> bool {
+        let mut i = 0;
+        while i < out.len() {
+            let Some((buf, off)) = self.locate(addr.wrapping_add(i as u32)) else {
+                return false;
+            };
+            let n = (out.len() - i).min(buf.len() - off);
+            out[i..i + n].copy_from_slice(&buf[off..off + n]);
+            i += n;
+        }
+        true
+    }
+
+    fn dma_write(&mut self, addr: u32, data: &[u8]) -> bool {
+        let mut i = 0;
+        while i < data.len() {
+            let Some((buf, off)) = self.locate_write(addr.wrapping_add(i as u32)) else {
+                return false;
+            };
+            let n = (data.len() - i).min(buf.len() - off);
+            buf[off..off + n].copy_from_slice(&data[i..i + n]);
+            i += n;
+        }
+        true
+    }
+}
+
+impl Memory {
+    fn word_at(&mut self, addr: u32) -> u32 {
+        self.peek32(addr).unwrap_or(0)
+    }
+
+    fn set_word(&mut self, addr: u32, v: u32) {
+        for (i, b) in v.to_le_bytes().iter().enumerate() {
+            if let Some((buf, j)) = self.locate_write(addr + i as u32) {
+                buf[j] = *b;
+            }
+        }
+    }
+
+    /// Drive the controller's interrupt line from its status and enable registers.
+    fn usb_sync_irq(&mut self) {
+        let Some(u) = &self.usb else { return };
+        if u.irq_line() {
+            self.int_pending |= 1 << hw::usb::IRQ;
+        } else {
+            self.int_pending &= !(1 << hw::usb::IRQ);
+        }
+    }
+
+    /// The SoC words the driver's power-up touches, and GPIO L, which carries the cable.
+    fn usb_after_store(&mut self, addr: u32, val: u8) {
+        use hw::usb as u;
+        match addr & !3 {
+            u::DEV_RS | u::DEV_EN | u::DEV_INIT2 | u::R28 | u::R2C | u::R60 => {
+                let w = self.word_at(addr & !3);
+                if let Some(usb) = self.usb.as_mut() {
+                    usb.glue_lane(addr & !3, addr & 3, val, w);
+                }
+                self.usb_sync_irq();
+            }
+            u::GPIOL_INT_EN | u::GPIOL_INT_LEV => self.gpiol_sync(0),
+            u::GPIOL_INT_CLR => self.gpiol_sync((val as u32) << ((addr & 3) * 8)),
+            _ => {}
+        }
+    }
+
+    /// GPIO L bit 4 follows the cable. The interrupt is a level that latches in the status word
+    /// until it is cleared, and re-asserts if the level still matches.
+    fn gpiol_sync(&mut self, cleared: u32) {
+        use hw::usb as u;
+        let Some(cable) = self.usb.as_ref().map(|x| x.cable()) else {
+            return;
+        };
+        let mut input = self.word_at(u::GPIOL_INPUT_VAL);
+        input = if cable { input | u::GPIOL_VBUS } else { input & !u::GPIOL_VBUS };
+        self.set_word(u::GPIOL_INPUT_VAL, input);
+        let en = self.word_at(u::GPIOL_INT_EN);
+        let lev = self.word_at(u::GPIOL_INT_LEV);
+        let mut stat = self.word_at(u::GPIOL_INT_STAT) & !cleared;
+        stat |= en & !(input ^ lev) & u::GPIOL_VBUS;
+        self.set_word(u::GPIOL_INT_STAT, stat);
+        if stat != 0 {
+            self.int_pending_hi |= 1 << u::GPIO2_IRQ_HI;
+        } else {
+            self.int_pending_hi &= !(1 << u::GPIO2_IRQ_HI);
+        }
+    }
+
+    /// One service tick of the USB model: the host's frames, the bus reset timer, the cable.
+    fn service_usb(&mut self) {
+        let Some(mut u) = self.usb.take() else { return };
+        let usec = self.usec;
+        u.service(usec, self);
+        let cable = u.cable();
+        self.usb = Some(u);
+        self.usb_sync_irq();
+        if cable != self.usb_cable_seen {
+            self.usb_cable_seen = cable;
+            self.gpiol_sync(0);
+        }
+    }
+}
 
 impl Memory {
     /// Fire whatever the script is due to fire, and hold the interrupt line.
