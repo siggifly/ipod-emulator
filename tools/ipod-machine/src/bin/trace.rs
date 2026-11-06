@@ -1211,6 +1211,45 @@ fn main() {
                 Err(e) => println!("  disk {path}: {e}"),
             }
         }
+        // --usb[=N] : model the USB device controller at 0xC5000000 with N endpoints (3, 4 or 6;
+        // default 4). --usb-socket=PATH puts the host end of the bus on a Unix socket and implies
+        // --usb. --usb-full-speed forces the link to full speed; --usb-strict-phy keeps the port
+        // disconnected until the PP5022 PHY sequence has run. Without one of these the window is
+        // backing store, as before.
+        {
+            let socket = args.iter().find_map(|a| a.strip_prefix("--usb-socket="));
+            let plain = args.iter().find(|a| *a == "--usb" || a.starts_with("--usb="));
+            if socket.is_some() || plain.is_some() {
+                let endpoints = args
+                    .iter()
+                    .find_map(|a| a.strip_prefix("--usb=").or_else(|| a.strip_prefix("--usb-endpoints=")))
+                    .and_then(|v| v.parse::<u8>().ok())
+                    .unwrap_or(4);
+                if ![3, 4, 6].contains(&endpoints) {
+                    eprintln!("--usb: endpoints must be 3, 4 or 6, not {endpoints}");
+                    std::process::exit(2);
+                }
+                let mut u = ipod_machine::hw::usb::Usb::new(ipod_machine::hw::usb::Config {
+                    endpoints,
+                    full_speed: args.iter().any(|a| a == "--usb-full-speed"),
+                    strict_phy: args.iter().any(|a| a == "--usb-strict-phy"),
+                });
+                if let Some(path) = socket {
+                    match ipod_machine::hw::usbbus::Link::listen(std::path::Path::new(path)) {
+                        Ok(l) => u.attach_socket(l),
+                        Err(e) => {
+                            eprintln!("--usb-socket={path}: {e}");
+                            std::process::exit(2);
+                        }
+                    }
+                }
+                println!(
+                    "  usb: device controller with {endpoints} endpoints{}",
+                    socket.map(|p| format!(", host socket {p}")).unwrap_or_default()
+                );
+                m.mem.usb = Some(Box::new(u));
+            }
+        }
         // --audio-wav=FILE : collect what the firmware plays through the I2S FIFO and write it as
         // 16-bit stereo WAV at the rate the codec's registers decode to. Implies `--i2c`, since the
         // rate comes from codec writes. --audio-mclk=HZ overrides the 24 MHz codec clock pin.
@@ -1660,6 +1699,16 @@ fn main() {
             }
         }
         println!("  -> {stop:?} after {} instructions", m.executed);
+        if let Some(u) = &m.mem.usb {
+            for l in u.report() {
+                println!("  {l}");
+            }
+            if args.iter().any(|a| a == "--usb-log") {
+                for l in &u.log {
+                    println!("  usb log: {l}");
+                }
+            }
+        }
         // `Idle` names a novelty stall, not a quiet machine, and the bare line above was read as
         // the second for a whole day. Say which it was: a machine that is waiting asks the core to
         // sleep, so zero sleeps across the trailing window means it was busy in a loop over code it
