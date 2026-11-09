@@ -147,6 +147,9 @@ pub struct Config {
     /// its last packet has passed, so the device's software runs between the packets of a transfer
     /// (the descriptors of a chain retire one packet at a time, over time).
     pub slow_us: u32,
+    /// The Nth transfer primed on endpoint 1 IN (pipe 3) is never answered: every IN token of it
+    /// times out until the pipe is flushed, the controller reset or the bus reset. Zero is off.
+    pub deaf: u32,
 }
 
 impl Default for Config {
@@ -156,6 +159,7 @@ impl Default for Config {
             full_speed: false,
             strict_phy: false,
             slow_us: 0,
+            deaf: 0,
         }
     }
 }
@@ -224,6 +228,8 @@ pub struct Usb {
     pipes: [Pipe; 32],
     /// The time at which a pipe may carry its next packet (`Config::slow_us`).
     ready_at: [u32; 32],
+    in_primes: u32,
+    deaf: bool,
     cable: bool,
     present: bool,
     speed: u8,
@@ -274,6 +280,8 @@ impl Usb {
             tog: [[false; 2]; 16],
             pipes: [Pipe::default(); 32],
             ready_at: [0; 32],
+            in_primes: 0,
+            deaf: false,
             cable: false,
             present: false,
             speed: 2,
@@ -348,6 +356,7 @@ impl Usb {
         self.complete = 0;
         self.nak = 0;
         self.nak_en = 0;
+        self.deaf = false;
         self.ctrl = [0; 16];
         self.ctrl[0] = EP0_RESET;
         self.tog = [[false; 2]; 16];
@@ -363,6 +372,7 @@ impl Usb {
         self.setupstat = 0;
         self.stat = 0;
         self.complete = 0;
+        self.deaf = false;
         self.tog = [[false; 2]; 16];
         self.pipes = [Pipe::default(); 32];
     }
@@ -589,6 +599,12 @@ impl Usb {
                         self.stats.primes += 1;
                         if !self.prime_pipe(dma, pipe) {
                             self.stats.prime_refused += 1;
+                        } else if pipe == 3 {
+                            self.in_primes += 1;
+                            if self.cfg.deaf != 0 && self.in_primes == self.cfg.deaf {
+                                self.note("endpoint 1 IN: deaf from this prime".into());
+                                self.deaf = true;
+                            }
                         }
                     }
                 }
@@ -598,6 +614,9 @@ impl Usb {
                 for pipe in 0..(2 * self.cfg.endpoints as usize) {
                     if v & bit_of(pipe) != 0 {
                         self.stat &= !bit_of(pipe);
+                        if pipe == 3 {
+                            self.deaf = false;
+                        }
                     }
                 }
             }
@@ -992,6 +1011,10 @@ impl Usb {
             return self.result(f.ep, usbbus::STALL);
         }
         let pipe = 2 * ep + 1;
+        if self.deaf && pipe == 3 && self.stat & bit_of(pipe) != 0 {
+            self.stats.timeouts += 1;
+            return self.result(f.ep, usbbus::TIMEOUT);
+        }
         if self.stat & bit_of(pipe) == 0 || self.pipe_busy(pipe) {
             self.stats.in_nak += 1;
             self.note_nak(ep, 1);
@@ -1411,6 +1434,40 @@ mod tests {
         assert_eq!((r.aux, r.data.len()), (usbbus::ACK, 0));
         assert_eq!(r32(&mut u, ENDPTSTAT), 0);
         assert_eq!(r32(&mut u, USBSTS) & STS_UI, STS_UI);
+    }
+
+    #[test]
+    fn a_deaf_prime_times_out_until_the_pipe_is_flushed_and_primed_again() {
+        let mut u = Usb::new(Config {
+            deaf: 2,
+            ..Config::default()
+        });
+        let mut ram = Ram(vec![0; 0x10000]);
+        u.glue(DEV_EN, DEV_USB0);
+        u.glue(DEV_INIT2, INIT_USB);
+        w32(&mut u, &mut ram, USBCMD, CMD_RST);
+        w32(&mut u, &mut ram, USBMODE, 2);
+        w32(&mut u, &mut ram, ENDPOINTLISTADDR, 0x800);
+        w32(&mut u, &mut ram, USBCMD, CMD_RS);
+        u.set_cable(true);
+        reset_host(&mut u, &mut ram);
+        enable(&mut u, &mut ram, 1, false, true);
+        set_qh(&mut ram, 0x800 + 3 * 64, 512, 0x1000);
+        let mut inf = Frame::new(usbbus::IN);
+        inf.ep = 0x81;
+        for prime in 1..=3u32 {
+            put_td(&mut ram, 0x1000, 1, 8, true, 0x2000);
+            ram.0[(0x800 + 3 * 64 + 8) as usize..][..4].copy_from_slice(&0x1000u32.to_le_bytes());
+            w32(&mut u, &mut ram, ENDPTPRIME, 1 << 17);
+            let r = u.handle(&mut ram, inf.clone()).unwrap();
+            if prime == 2 {
+                assert_eq!(r.aux, usbbus::TIMEOUT, "the second prime is deaf");
+                assert_eq!(u.handle(&mut ram, inf.clone()).unwrap().aux, usbbus::TIMEOUT);
+                w32(&mut u, &mut ram, ENDPTFLUSH, 1 << 17);
+            } else {
+                assert_eq!((r.aux, r.data.len()), (usbbus::ACK, 8), "prime {prime}");
+            }
+        }
     }
 
     #[test]

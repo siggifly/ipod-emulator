@@ -1216,8 +1216,9 @@ fn main() {
         // --usb. --usb-full-speed forces the link to full speed; --usb-strict-phy keeps the port
         // disconnected until the PP5022 PHY sequence has run. --usb-slow=N makes every packet on a
         // pipe take N simulated microseconds (the pipe answers NAK in between), so transfers
-        // complete one packet at a time over time. Without one of these the window is backing
-        // store, as before.
+        // complete one packet at a time over time. --usb-deaf=N never answers the Nth transfer
+        // primed on endpoint 1 IN (its IN tokens time out until the pipe is flushed or the bus
+        // reset). Without one of these the window is backing store, as before.
         {
             let socket = args.iter().find_map(|a| a.strip_prefix("--usb-socket="));
             let plain = args.iter().find(|a| *a == "--usb" || a.starts_with("--usb="));
@@ -1238,6 +1239,11 @@ fn main() {
                     slow_us: args
                         .iter()
                         .find_map(|a| a.strip_prefix("--usb-slow="))
+                        .and_then(|v| v.parse::<u32>().ok())
+                        .unwrap_or(0),
+                    deaf: args
+                        .iter()
+                        .find_map(|a| a.strip_prefix("--usb-deaf="))
                         .and_then(|v| v.parse::<u32>().ok())
                         .unwrap_or(0),
                 });
