@@ -142,6 +142,11 @@ pub struct Config {
     pub full_speed: bool,
     /// The port stays disconnected until the PP5022 PHY sequence has been seen.
     pub strict_phy: bool,
+    /// Simulated microseconds one bulk or control packet takes on a pipe. Zero completes a
+    /// packet whenever the host asks; with a value, a pipe answers NAK until the interval since
+    /// its last packet has passed, so the device's software runs between the packets of a transfer
+    /// (the descriptors of a chain retire one packet at a time, over time).
+    pub slow_us: u32,
 }
 
 impl Default for Config {
@@ -150,6 +155,7 @@ impl Default for Config {
             endpoints: 4,
             full_speed: false,
             strict_phy: false,
+            slow_us: 0,
         }
     }
 }
@@ -216,6 +222,8 @@ pub struct Usb {
     ctrl: [u32; 16],
     tog: [[bool; 2]; 16],
     pipes: [Pipe; 32],
+    /// The time at which a pipe may carry its next packet (`Config::slow_us`).
+    ready_at: [u32; 32],
     cable: bool,
     present: bool,
     speed: u8,
@@ -265,6 +273,7 @@ impl Usb {
             ctrl: [0; 16],
             tog: [[false; 2]; 16],
             pipes: [Pipe::default(); 32],
+            ready_at: [0; 32],
             cable: false,
             present: false,
             speed: 2,
@@ -858,6 +867,17 @@ impl Usb {
 
     // ---------------------------------------------------------------- the bus
 
+    /// A pipe that carried a packet less than `slow_us` ago is not ready for another.
+    fn pipe_busy(&self, pipe: usize) -> bool {
+        self.cfg.slow_us != 0 && self.now.wrapping_sub(self.ready_at[pipe]) >= 0x8000_0000
+    }
+
+    fn packet_sent(&mut self, pipe: usize) {
+        if self.cfg.slow_us != 0 {
+            self.ready_at[pipe] = self.now.wrapping_add(self.cfg.slow_us);
+        }
+    }
+
     fn note_nak(&mut self, ep: usize, dir: usize) {
         let st = self.stat;
         self.note(format!("nak ep {ep} dir {dir} stat {st:#x}"));
@@ -919,7 +939,7 @@ impl Usb {
             return self.result(f.ep, usbbus::STALL);
         }
         let pipe = 2 * ep;
-        if self.stat & bit_of(pipe) == 0 {
+        if self.stat & bit_of(pipe) == 0 || self.pipe_busy(pipe) {
             self.stats.out_nak += 1;
             self.note_nak(ep, 0);
             return self.result(f.ep, usbbus::NAK);
@@ -947,6 +967,7 @@ impl Usb {
             return self.result(f.ep, usbbus::ACK);
         }
         self.tog[ep][0] = !self.tog[ep][0];
+        self.packet_sent(pipe);
         let pp = &mut self.pipes[pipe];
         pp.done += len;
         pp.rem -= len;
@@ -971,7 +992,7 @@ impl Usb {
             return self.result(f.ep, usbbus::STALL);
         }
         let pipe = 2 * ep + 1;
-        if self.stat & bit_of(pipe) == 0 {
+        if self.stat & bit_of(pipe) == 0 || self.pipe_busy(pipe) {
             self.stats.in_nak += 1;
             self.note_nak(ep, 1);
             return self.result(f.ep, usbbus::NAK);
@@ -1000,6 +1021,7 @@ impl Usb {
         };
         let toggle = self.tog[ep][1];
         self.tog[ep][1] = !toggle;
+        self.packet_sent(pipe);
         let pp = &mut self.pipes[pipe];
         pp.done += n;
         pp.rem -= n;
@@ -1344,6 +1366,51 @@ mod tests {
         assert_eq!(tok >> 16 & 0x7fff, 0);
         inf.flags = 0;
         assert_eq!(u.handle(&mut ram, inf).unwrap().aux, usbbus::NAK);
+    }
+
+    #[test]
+    fn slow_mode_carries_one_packet_per_interval_and_the_tripwire_clears_on_a_retire() {
+        let mut u = Usb::new(Config {
+            slow_us: 100,
+            ..Config::default()
+        });
+        let mut ram = Ram(vec![0; 0x10000]);
+        u.glue(DEV_EN, DEV_USB0);
+        u.glue(DEV_INIT2, INIT_USB);
+        w32(&mut u, &mut ram, USBCMD, CMD_RST);
+        w32(&mut u, &mut ram, USBMODE, 2);
+        w32(&mut u, &mut ram, ENDPOINTLISTADDR, 0x800);
+        w32(&mut u, &mut ram, USBCMD, CMD_RS);
+        u.set_cable(true);
+        reset_host(&mut u, &mut ram);
+        enable(&mut u, &mut ram, 1, false, true);
+        // pipe 3 (endpoint 1 IN): 512 bytes without IOC, then a zero-length descriptor with IOC
+        set_qh(&mut ram, 0x800 + 3 * 64, 512, 0x1000);
+        put_td(&mut ram, 0x1000, 0x1020, 512, false, 0x2000);
+        put_td(&mut ram, 0x1020, 1, 0, true, 0x3000);
+        w32(&mut u, &mut ram, ENDPTPRIME, 1 << 17);
+        assert_eq!(r32(&mut u, ENDPTSTAT), 1 << 17);
+        w32(&mut u, &mut ram, USBCMD, CMD_RS | CMD_ATDTW);
+        assert_eq!(r32(&mut u, USBCMD) & CMD_ATDTW, CMD_ATDTW);
+
+        u.service(20_000, &mut ram);
+        let mut inf = Frame::new(usbbus::IN);
+        inf.ep = 0x81;
+        let r = u.handle(&mut ram, inf.clone()).unwrap();
+        assert_eq!((r.aux, r.data.len()), (usbbus::ACK, 512));
+        assert_eq!(r32(&mut u, ENDPTCOMPLETE), 1 << 17, "the first descriptor sets the bit without IOC");
+        assert_eq!(r32(&mut u, USBSTS) & STS_UI, 0);
+        assert_eq!(r32(&mut u, USBCMD) & CMD_ATDTW, 0, "the next descriptor was loaded");
+        assert_eq!(r32(&mut u, ENDPTSTAT), 1 << 17);
+        assert_eq!(u.handle(&mut ram, inf.clone()).unwrap().aux, usbbus::NAK, "one packet per interval");
+
+        u.service(20_099, &mut ram);
+        assert_eq!(u.handle(&mut ram, inf.clone()).unwrap().aux, usbbus::NAK);
+        u.service(20_100, &mut ram);
+        let r = u.handle(&mut ram, inf).unwrap();
+        assert_eq!((r.aux, r.data.len()), (usbbus::ACK, 0));
+        assert_eq!(r32(&mut u, ENDPTSTAT), 0);
+        assert_eq!(r32(&mut u, USBSTS) & STS_UI, STS_UI);
     }
 
     #[test]

@@ -1214,8 +1214,10 @@ fn main() {
         // --usb[=N] : model the USB device controller at 0xC5000000 with N endpoints (3, 4 or 6;
         // default 4). --usb-socket=PATH puts the host end of the bus on a Unix socket and implies
         // --usb. --usb-full-speed forces the link to full speed; --usb-strict-phy keeps the port
-        // disconnected until the PP5022 PHY sequence has run. Without one of these the window is
-        // backing store, as before.
+        // disconnected until the PP5022 PHY sequence has run. --usb-slow=N makes every packet on a
+        // pipe take N simulated microseconds (the pipe answers NAK in between), so transfers
+        // complete one packet at a time over time. Without one of these the window is backing
+        // store, as before.
         {
             let socket = args.iter().find_map(|a| a.strip_prefix("--usb-socket="));
             let plain = args.iter().find(|a| *a == "--usb" || a.starts_with("--usb="));
@@ -1233,6 +1235,11 @@ fn main() {
                     endpoints,
                     full_speed: args.iter().any(|a| a == "--usb-full-speed"),
                     strict_phy: args.iter().any(|a| a == "--usb-strict-phy"),
+                    slow_us: args
+                        .iter()
+                        .find_map(|a| a.strip_prefix("--usb-slow="))
+                        .and_then(|v| v.parse::<u32>().ok())
+                        .unwrap_or(0),
                 });
                 if let Some(path) = socket {
                     match ipod_machine::hw::usbbus::Link::listen(std::path::Path::new(path)) {
