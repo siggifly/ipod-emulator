@@ -24,6 +24,7 @@ pub mod mailbox;
 pub mod flash;
 pub mod pmu;
 pub mod wm8758;
+pub mod audio;
 pub mod ata;
 pub mod cop;
 pub mod video;

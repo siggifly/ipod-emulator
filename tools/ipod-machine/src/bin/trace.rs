@@ -1211,7 +1211,21 @@ fn main() {
                 Err(e) => println!("  disk {path}: {e}"),
             }
         }
-        if args.iter().any(|a| a == "--i2c")
+        // --audio-wav=FILE : collect what the firmware plays through the I2S FIFO and write it as
+        // 16-bit stereo WAV at the rate the codec's registers decode to. Implies `--i2c`, since the
+        // rate comes from codec writes. --audio-mclk=HZ overrides the 24 MHz codec clock pin.
+        let audio_wav = args.iter().find_map(|a| a.strip_prefix("--audio-wav="));
+        if let Some(path) = audio_wav {
+            let mclk = args
+                .iter()
+                .find_map(|a| a.strip_prefix("--audio-mclk="))
+                .and_then(|v| v.parse::<f64>().ok())
+                .unwrap_or(ipod_machine::Wm8758::DEFAULT_MCLK_HZ);
+            m.mem.enable_audio(path, mclk);
+            println!("  audio: I2S sink -> {path} (codec MCLK {mclk} Hz), FIQ routing on");
+        }
+        if audio_wav.is_some()
+            || args.iter().any(|a| a == "--i2c")
             || args.iter().any(|a| a.starts_with("--i2c-fill="))
             || args.iter().any(|a| a == "--pmu")
         {
@@ -2358,6 +2372,16 @@ fn main() {
         // never addressed the part.
         for line in m.mem.wm8758.report() {
             println!("{line}");
+        }
+        // After the codec's own report, since the rate it prints is decoded from those writes.
+        if let Some(a) = &mut m.mem.audio {
+            if let Err(e) = a.finish() {
+                eprintln!("audio: cannot write WAV: {e}");
+            }
+            for line in a.report() {
+                println!("{line}");
+            }
+            println!("  fiqs taken: {}", m.fiqs_taken);
         }
         // Every number here is checkable against something. `commands` should equal the transmits
         // RetailOS's `0x00283fa0` starts; `data reads` should equal the loads at `0x00281364` plus

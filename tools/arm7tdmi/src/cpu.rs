@@ -342,6 +342,15 @@ impl Cpu {
         true
     }
 
+    /// Deliver an FIQ if not masked. Returns whether it was taken.
+    pub fn fiq(&mut self) -> bool {
+        if self.cpsr.fiq_disabled() {
+            return false;
+        }
+        self.raise(Exception::Fiq);
+        true
+    }
+
     // ---------------------------------------------------------------- execution
 
     /// Fetch, decode and execute one instruction.
