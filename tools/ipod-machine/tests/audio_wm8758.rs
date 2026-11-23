@@ -1,7 +1,11 @@
-//! End to end for the WM8758 and I2S sink: a bare-metal guest (`snippets/audio-tone.s`) programs
-//! the codec over I2C, starts a DMA ring of a 1 kHz tone and restarts it from the FIQ handler, and
-//! the WAV that comes out has to be the stream the guest played, at the rate the guest's own PLL
-//! writes decode to, for as long as the guest played it.
+//! End to end for the WM8758 and I2S sink: a bare-metal guest
+//! (`tests/fixtures/audio-tone/audio-tone.s`) programs the codec over I2C, starts a DMA ring of a
+//! 1 kHz tone and restarts it from the FIQ handler, and the WAV that comes out has to be the stream
+//! the guest played, at the rate the guest's own PLL writes decode to, for as long as the guest
+//! played it.
+//!
+//! It lives under `tests/fixtures/`, not `snippets/`: the snippet suite runs every `snippets/*.s` as
+//! a snippet-runner program, and this guest brings its own vector table and is not one.
 //!
 //! The guest is real ARM code run on the interpreter; nothing here calls the sink directly except
 //! the two tests that say so.
@@ -12,7 +16,7 @@ use ipod_machine::snippet::parse_words;
 use ipod_machine::{map_hardware, EApp, Machine, Wm8758};
 use std::path::PathBuf;
 
-const CODE: &str = include_str!("../snippets/audio-tone.words");
+const CODE: &str = include_str!("fixtures/audio-tone/audio-tone.words");
 
 const PARAMS: u32 = 0x400;
 const TABLE: u32 = 0x500;
