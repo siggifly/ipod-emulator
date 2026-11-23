@@ -4887,8 +4887,8 @@ mod offline_worker_tests {
         assert_eq!(
             moved,
             vec![
-                ("osos".to_string(), 0x8600, 0x3A00),
-                ("rsrc".to_string(), 0xCC00, 0x1400),
+                ("osos".to_string(), 0x8600, 0x4000),
+                ("rsrc".to_string(), 0xCC00, 0x1A00),
                 // Untouched, and that is symmetric with the real bundle: neither signature finds
                 // `aupd`'s content on a 5G or a 5.5G, so nothing here knows where it begins.
                 ("aupd".to_string(), 0xE000, 0x1000),

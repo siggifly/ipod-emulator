@@ -548,8 +548,14 @@ fn fat_header(window: &[u8]) -> Option<usize> {
 /// run. `research/10`'s opening paragraph describes that loop; this is why the font was missing.
 ///
 /// **Offsets are corrected, bytes are never moved.** Shifting five megabytes of payload could
-/// overrun the next image; rewriting `devOffset` and `len` cannot. `content_len` shrinks by exactly
-/// what `devOffset` gains, so an image still ends where it ended.
+/// overrun the next image; rewriting `devOffset` and `len` cannot.
+///
+/// **`len` is counted from the bundle's own header, not from `devOffset`.** Apple's `len` runs from
+/// `devOffset` plus the header `osos` is found at (`0x800` on 25.1.3), so each image ends at
+/// `devOffset + header + len` and the next one starts there. Moving `devOffset` on by the whole
+/// shift and taking the same amount off `len` ended `rsrc` `0x600` short of its content and made
+/// its recorded checksum unreproducible, which `install-os` reports. `len` here changes only by
+/// the difference between the bundle's header and the image's own.
 ///
 /// **`aupd` is deliberately left alone.** Neither signature finds its content, on *either* bundle —
 /// so it is not that the 5.5G's is unusual, it is that this function cannot see inside it. Leaving
@@ -560,23 +566,33 @@ fn fat_header(window: &[u8]) -> Option<usize> {
 /// A no-op on any bundle already in this layout, which is every 5G one: the 5G's headers are
 /// `0x200` and the loop below skips them.
 pub fn normalise_image_headers(fw: &mut [u8]) -> Vec<(String, u32, u32)> {
-    let mut moved = Vec::new();
-    for (i, img) in images(fw).iter().enumerate() {
+    let imgs = images(fw);
+    let header_of = |fw: &[u8], img: &Image, fat: bool| {
         let at = img.offset as usize;
-        let window = match fw.get(at..at + (img.len as usize).min(0x2000)) {
-            Some(w) => w,
-            None => continue,
-        };
-        let Some(h) = image_header(window).or_else(|| fat_header(window)) else {
+        let window = fw.get(at..at + (img.len as usize).min(0x2000))?;
+        image_header(window).or_else(|| if fat { fat_header(window) } else { None })
+    };
+    let bundle = imgs
+        .iter()
+        .find(|i| i.tag == "osos")
+        .and_then(|i| header_of(fw, i, false))
+        .unwrap_or(HEADER);
+
+    let mut moved = Vec::new();
+    for (i, img) in imgs.iter().enumerate() {
+        let Some(h) = header_of(fw, img, true) else {
             continue;
         };
         if h <= HEADER {
             continue;
         }
         let shift = (h - HEADER) as u32;
+        let Some(len) = (img.len + bundle as u32).checked_sub(h as u32) else {
+            continue;
+        };
         let e = DIRECTORY_AT + i * 40;
         fw[e + 0x0c..e + 0x10].copy_from_slice(&(img.offset + shift).to_le_bytes());
-        fw[e + 0x10..e + 0x14].copy_from_slice(&(img.len - shift).to_le_bytes());
+        fw[e + 0x10..e + 0x14].copy_from_slice(&len.to_le_bytes());
         moved.push((img.tag.clone(), h as u32, shift));
     }
     moved
@@ -1652,6 +1668,51 @@ mod build_split_tests {
             off + len,
             rsrc_at as u32 + 0x4000,
             "the image no longer ends where it ended, so it now overruns its neighbour"
+        );
+    }
+
+    /// **The corrected directory must end each image where Apple's did.** Apple's `len` is counted
+    /// from `devOffset` plus the bundle's header (`0x800` on 25.1.3), so `osos` and `rsrc` end at
+    /// `devOffset + 0x800 + len` and `rsrc`'s `0x600` bytes of leading padding are inside that
+    /// span. Taking the whole `0xc00` shift off `rsrc`'s `len` cut its last `0x600` bytes.
+    #[test]
+    fn a_5_5g_images_content_still_ends_where_apples_directory_put_its_end() {
+        let mut fw = firmware();
+        let (osos_at, osos_len) = (0x8000usize, 0x4000u32);
+        let rsrc_at = osos_at + 0x800 + osos_len as usize;
+        let rsrc_len = 0x3000u32;
+        put(&mut fw, 0, osos_at as u32, osos_len);
+        vector_table(&mut fw, osos_at + 0x800);
+        put(&mut fw, 1, rsrc_at as u32, rsrc_len);
+        boot_sector(&mut fw, rsrc_at + 0xe00);
+
+        let end_of = |fw: &[u8], i: usize, header: usize| {
+            let e = DIRECTORY_AT + i * 40;
+            let off = u32::from_le_bytes(fw[e + 0x0c..e + 0x10].try_into().unwrap()) as usize;
+            let len = u32::from_le_bytes(fw[e + 0x10..e + 0x14].try_into().unwrap()) as usize;
+            (off + header + len, off, len)
+        };
+        let before = [end_of(&fw, 0, 0x800).0, end_of(&fw, 1, 0x800).0];
+
+        let moved = normalise_image_headers(&mut fw);
+        assert_eq!(
+            moved,
+            vec![
+                ("osos".to_string(), 0x800, 0x600),
+                ("rsrc".to_string(), 0xe00, 0xc00)
+            ]
+        );
+        for (i, want) in before.iter().enumerate() {
+            let (end, off, len) = end_of(&fw, i, HEADER);
+            assert_eq!(
+                end, *want,
+                "image {i} (devOffset {off:#x}, len {len:#x}) ends elsewhere"
+            );
+        }
+        assert_eq!(
+            end_of(&fw, 0, HEADER).0,
+            rsrc_at,
+            "`osos` no longer abuts `rsrc`"
         );
     }
 
