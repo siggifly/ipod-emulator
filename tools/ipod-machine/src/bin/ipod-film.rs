@@ -160,6 +160,48 @@ fn concat(dir: &Path) -> Result<f64, String> {
     concat_paced(dir, Pace::NATURAL)
 }
 
+/// The index of the first of `names` in a `frames.tsv`'s `# index\tfile\t…` header.
+fn column(manifest: &str, names: &[&str]) -> Result<usize, String> {
+    let header: Vec<&str> = manifest
+        .lines()
+        .find_map(|l| l.strip_prefix("# ").filter(|h| h.starts_with("index\t")))
+        .ok_or("frames.tsv has no `# index\tfile\t…` column header")?
+        .split('\t')
+        .map(str::trim)
+        .collect();
+    names
+        .iter()
+        .find_map(|n| header.iter().position(|h| h == n))
+        .ok_or_else(|| format!("frames.tsv has no `{}` column: {header:?}", names[0]))
+}
+
+/// The file of the longest-held frame whose non-black count is `nonblack` — the screen once it has
+/// settled, not one of the half-drawn pictures a fine cadence catches on the way to it.
+///
+/// **By the picture, not by index.** The stills were fixed frame indices, and a frame index is a
+/// fact about one cadence on one machine: at 2 M on the faithful clock the boot film catches the
+/// redraws between screens, and `frame-00004.png` — "the Language picker" — became a blank white
+/// panel. The counts are the ones the comments beside the calls have always given as the check.
+fn settled_frame(dir: &Path, nonblack: u32) -> Result<Option<String>, String> {
+    let tsv = dir.join("frames.tsv");
+    let text = std::fs::read_to_string(&tsv).map_err(|e| format!("{}: {e}", tsv.display()))?;
+    let (f, s, n) = (
+        column(&text, &["file"])?,
+        column(&text, &["samples"])?,
+        column(&text, &["nonblack"])?,
+    );
+    Ok(text
+        .lines()
+        .filter(|l| !l.starts_with('#'))
+        .map(|l| l.split('\t').collect::<Vec<_>>())
+        .filter(|r| r.get(n).and_then(|v| v.trim().parse::<u32>().ok()) == Some(nonblack))
+        .filter_map(|r| Some((r.get(s)?.trim().parse::<u64>().ok()?, r.get(f)?.to_string())))
+        // `max_by_key` keeps the last of equals; reversing keeps the first.
+        .rev()
+        .max_by_key(|(samples, _)| *samples)
+        .map(|(_, file)| file))
+}
+
 fn concat_paced(dir: &Path, pace: Pace) -> Result<f64, String> {
     let tsv = dir.join("frames.tsv");
     let text = std::fs::read_to_string(&tsv).map_err(|e| format!("{}: {e}", tsv.display()))?;
@@ -174,6 +216,15 @@ fn concat_paced(dir: &Path, pace: Pace) -> Result<f64, String> {
         .and_then(|s| s.parse::<f64>().ok())
         .ok_or("frames.tsv has no `sampled every N instructions` header to scale durations by")?;
 
+    // The columns are found **by name**, from the `# index\tfile\t…` header. They were a fixed
+    // index once, and when the writer gained `first_usec` (4fdec71) the index went on reading the
+    // neighbouring column — `samples`, a count of 1 to a few hundred — as a duration in
+    // instructions, so every film came out 0.00 s long while this file's own test, still holding
+    // the old layout, passed. A manifest without the column is an error, not a guess.
+    let file_col = column(&text, &["file"])?;
+    // `held` is the same column under the name it had before 4fdec71, so an old film still concats.
+    let held_col = column(&text, &["held_instr", "held"])?;
+
     let mut out = String::new();
     let mut total = 0.0f64;
     let mut last: Option<String> = None;
@@ -182,17 +233,17 @@ fn concat_paced(dir: &Path, pace: Pace) -> Result<f64, String> {
             continue;
         }
         let f: Vec<&str> = l.split('\t').collect();
-        if f.len() < 7 {
-            continue;
-        }
-        let held: f64 = f[6]
+        let (Some(file), Some(held)) = (f.get(file_col), f.get(held_col)) else {
+            return Err(format!("frames.tsv row is shorter than its header: {l:?}"));
+        };
+        let held: f64 = held
             .trim()
             .parse()
-            .map_err(|_| format!("bad held_instr: {}", f[6]))?;
+            .map_err(|_| format!("bad held_instr: {held}"))?;
         let d = pace.of(held, rate);
-        out.push_str(&format!("file '{}'\nduration {d:.4}\n", f[1]));
+        out.push_str(&format!("file '{file}'\nduration {d:.4}\n"));
         total += d;
-        last = Some(f[1].to_string());
+        last = Some(file.to_string());
     }
     if let Some(l) = last {
         out.push_str(&format!("file '{l}'\n"));
@@ -296,21 +347,13 @@ fn run(args: &[String]) -> Result<(), String> {
         format!("scale=iw*{scale}:ih*{scale}:flags=neighbor,fps={fps}")
     };
     let gif = out.join("film.gif");
-    ffmpeg(&[
-        "-f",
-        "concat",
-        "-safe",
-        "0",
-        "-i",
-        &out.join("frames.concat").display().to_string(),
-        "-t",
-        &format!("{total:.4}"),
-        "-vf",
-        &format!("{vf},split[a][b];[a]palettegen=stats_mode=full[p];[b][p]paletteuse=dither=none"),
-        "-loop",
-        "0",
-        &gif.display().to_string(),
-    ])?;
+    let vf =
+        format!("{vf},split[a][b];[a]palettegen=stats_mode=full[p];[b][p]paletteuse=dither=none");
+    let concat = out.join("frames.concat").display().to_string();
+    let total_s = format!("{total:.4}");
+    let args =
+        ["-f", "concat", "-safe", "0", "-i", &concat, "-t", &total_s, "-vf", &vf, "-loop", "0"];
+    ffmpeg_gif(&args, &gif.display().to_string())?;
     println!("film -> {} ({total:.2}s)", gif.display());
     Ok(())
 }
@@ -326,6 +369,28 @@ fn ffmpeg(args: &[&str]) -> Result<(), String> {
     } else {
         Err("ffmpeg failed".into())
     }
+}
+
+/// Every gif this program writes goes through here, so no encode can forget the flag below.
+fn ffmpeg_gif(args: &[&str], gif: &str) -> Result<(), String> {
+    ffmpeg(&gif_argv(args, gif))
+}
+
+/// **`-gifflags -transdiff`**: ffmpeg's gif muxer defaults to `+transdiff`, which stores each frame
+/// as a difference against the previous one and punches a transparent index into every pixel it
+/// judges unchanged. With disposal 1 those holes show the *earlier* frame through, and the result
+/// is pixels no frame of the machine ever produced: `ipod-15-rockbox-wheel.gif` carried yellow
+/// ticks at a 24 px period on row 23 — the keyframe's selection bar showing through 26 holes — in a
+/// film whose raw frames read one clean run of 320 px on that row. KNOWN-BUGS, *"The gif encode
+/// invents pixels the panel never showed"*. Off, every frame is opaque and is exactly its own
+/// picture; `tests/shipped_gifs.rs` holds every gif in `docs/media/` to that.
+const GIF_FLAGS: [&str; 2] = ["-gifflags", "-transdiff"];
+
+fn gif_argv<'a>(args: &[&'a str], gif: &'a str) -> Vec<&'a str> {
+    let mut v = args.to_vec();
+    v.extend(GIF_FLAGS);
+    v.push(gif);
+    v
 }
 
 /// How a film's frames become a gif. The two published films want opposite answers and the reason
@@ -381,7 +446,7 @@ fn publish(dir: &Path, name: &str, fps: u32, mode: Palette, post: &Path) -> Resu
                       [a]palettegen=stats_mode=single:reserve_transparent=0[p];\
                       [b][p]paletteuse=dither=none:new=1";
             let fd = final_delay(dir)?;
-            ffmpeg(&[
+            let args = [
                 "-f",
                 "concat",
                 "-safe",
@@ -398,18 +463,18 @@ fn publish(dir: &Path, name: &str, fps: u32, mode: Palette, post: &Path) -> Resu
                 &fd,
                 "-loop",
                 "0",
-                &gif,
-            ])?;
+            ];
+            ffmpeg_gif(&args, &gif)?;
         }
         Palette::Resampled => {
             let vf = format!(
                 "scale=iw*2:ih*2:flags=neighbor,fps={fps},split[a][b];\
                  [a]palettegen=stats_mode=full[p];[b][p]paletteuse=dither=none"
             );
-            ffmpeg(&[
-                "-f", "concat", "-safe", "0", "-i", &cp, "-t", &total, "-vf", &vf, "-loop", "0",
+            ffmpeg_gif(
+                &["-f", "concat", "-safe", "0", "-i", &cp, "-t", &total, "-vf", &vf, "-loop", "0"],
                 &gif,
-            ])?;
+            )?;
         }
     }
     println!("  -> {gif}   (640x480, {total}s, {fps} fps)");
@@ -564,11 +629,15 @@ fn to_brick() -> String {
     // **The unit is right and the calibration is not**, and those are different bugs: re-basing
     // this on simulated time was a real fix and is not being undone. research/18 §2 carries a
     // descent measured at this clock that lands all nine of its gestures, and its §4 the two-arm
-    // control that says it played. This is left as it stands rather than being edited to match,
-    // because `do_gameplay` below it cannot run at all (its own anchors are still instruction
-    // counts, and `parse_wheel_script` refuses the mixed script — confirmed by running it,
-    // 2026-09-07) and re-basing the pair means re-reading a rally off its own run at HEAD, which is
-    // research/13 §10.4a's rule and a piece of work of its own. NEXT.md 0b tracks all three.
+    // control that says it played.
+    //
+    // ✅ **On the drive this recipe actually uses it lands — measured 2026-10-07.** The 4.8 s and
+    // 58.3 s above are research/18's fresh IPSW-built drive. `ipod-film` boots the repository's
+    // `drives/ipod8g-retail.img`, whose picker draws at **10.53 s** and which answers every gesture
+    // here inside 0.1-0.9 s, with no first-boot wait. This descent, unchanged, fired 106 of 106
+    // steps and walked Language (75 267) -> main menu (75 791) -> Extras (75 565) -> Games
+    // (74 160) -> Brick's playfield (76 763, digest `0x14854c1e…`, research/18's own) at
+    // **108.0 s**, with `--rtc`/`--battery` pinned.
     //
     // **`down=`/`up=` rather than `press=`**, for the reason `diag_tour` gives at length: `press=`
     // expands to a down/up pair one click apart, and a firmware that polls cannot see it.
@@ -586,61 +655,155 @@ fn do_boot(film: &Path, post: &Path) -> Result<(), String> {
     println!("== boot to Brick ==");
     let dir = film.join("boot-to-brick");
     let w = to_brick();
+    // Brick's playfield is up 0.85 s after the launch (108.0 s, measured 2026-10-07 on the
+    // repository's drive); three seconds holds it. The recipe's own 150 M budget is two seconds at
+    // the faithful clock and the idle stop fires in the quiet before the first gesture, so both are
+    // moved out of `--until`'s way.
+    let until = launch_ms(&w)? + 3000;
+    std::env::set_var("BUDGET", "40000000000");
+    std::env::set_var("IDLE", "40000000000");
     run(&[
         format!("--out={}", dir.display()),
         "--every=2M".into(),
         "--fps=30".into(),
+        // One sample per second of video was 75 minutes of film at this clock; the firmware's own
+        // pace, with the 70 s wait at the Language picker capped the way `diag`'s holds are.
+        "--realtime".into(),
+        "--cap=2.5".into(),
         "--".into(),
+        "--rtc=2026-01-01T12:00:00".into(),
+        "--battery=100".into(),
+        format!("--until={until}ms"),
         "--clickwheel".into(),
         format!("--wheel={w}"),
     ])?;
     // `held`: 24 distinct screens, none under the muxer's 4 cs delay floor, and a 548-colour union
     // one palette cannot hold. This is the film the wrong-colour report was about.
     publish(&dir, "ipod-01-boot-to-brick", 30, Palette::Held, post)?;
-    // Frame indices, not instruction counts, because the film's dedup assigns them. `frames.tsv` is
-    // the check: the non-black counts are 75267 / 75791 / 75565 / 74160 / 76763 / 2916, and three of
-    // these indices were stale once — publishing three stills of the wrong screen from a script that
-    // looked like it worked.
-    for (f, n) in [
-        ("frame-00004.png", "ipod-02-language"),
-        ("frame-00006.png", "ipod-03-main-menu"),
-        ("frame-00011.png", "ipod-04-extras"),
-        ("frame-00015.png", "ipod-05-games-list"),
-        ("frame-00023.png", "ipod-06-brick"),
-        ("frame-00002.png", "ipod-07-apple-logo"),
+    // Chosen by non-black count — 75267 / 75791 / 75565 / 74160 / 76763 / 2916 — not by frame
+    // index. Three indices were stale once, publishing three stills of the wrong screen from a
+    // script that looked like it worked, and at this clock every one of them was: see
+    // `settled_frame`.
+    for (count, n) in [
+        (75267, "ipod-02-language"),
+        (75791, "ipod-03-main-menu"),
+        (75565, "ipod-04-extras"),
+        (74160, "ipod-05-games-list"),
+        (76763, "ipod-06-brick"),
+        (2916, "ipod-07-apple-logo"),
     ] {
-        still(&dir, f, n, post)?;
+        match settled_frame(&dir, count)? {
+            Some(f) => still(&dir, &f, n, post)?,
+            None => println!("  (no frame with {count} non-black pixels — skipping {n})"),
+        }
     }
     Ok(())
+}
+
+/// The clock the rally was scripted against: research/13 §10, 2026-08-14, `--clock=5`. Its anchors
+/// are instruction counts **at that clock**, so this is the rate that turns them into the simulated
+/// time the game's timer actually ran on. Dividing them by today's 75 instead would replay the
+/// rally fifteen times faster than the ball it was aimed at.
+const RALLY_CLOCK: u64 = 5;
+
+/// Where the old descent's last Select went down, in those same clock-5 instructions — the moment
+/// Brick was launched. `@1500M` plus the old `to_brick()`'s gaps, worked through step by step
+/// (`press=` was down at +2M and up one 20 k click later; `rotate=+8` ends 140 k after it starts).
+/// Every rally step is placed at its distance from this instant, so the rally keeps its timing
+/// against both the launch and the serve.
+const RALLY_LAUNCH_INSTR: u64 = 2_437_320_000;
+
+/// `--bcm-film-from`, in **executed** instructions — the one unit the film's start is compared in.
+/// It is half a second before the serve, which is where the clock-5 film started (`--from=2574M`,
+/// 524 ms before the serve's touch), read off the `first_instr`/`first_usec` columns of this
+/// recipe's own runs on 2026-10-07, which sampled 1 008 022 925 @ 134.34 s and 1 008 711 152 @
+/// 135.02 s; 134.488 s is interpolated between them. Brick sits mostly halted before the serve —
+/// about one million executed instructions per simulated second — so this number moves whenever the
+/// machine's idling does, and the film's first `first_usec` is the check.
+const RALLY_FILM_FROM: u64 = 1_008_170_000;
+
+/// The simulated millisecond `to_brick()`'s last Select goes down — Brick's launch.
+fn launch_ms(descent: &str) -> Result<u64, String> {
+    let clock = ipod_machine::CLOCK as u64;
+    let steps = ipod_machine::parse_wheel_script(
+        descent,
+        ipod_machine::pace::wheel_click_gap(clock as usize),
+        clock,
+    )?;
+    steps
+        .iter()
+        .rev()
+        .find(|s| {
+            s.in_usec
+                && s.event == ipod_machine::WheelEvent::Button(ipod_machine::WHEEL_SELECT, true)
+        })
+        .map(|s| s.at / 1000)
+        .ok_or_else(|| "to_brick() has no Select to launch Brick with".into())
+}
+
+/// The rally, as wheel steps in simulated milliseconds after a launch at `launch` ms, and the
+/// millisecond the run should end.
+///
+/// **These are the 2026-08-14 steps, unchanged, re-expressed in the clock the game runs on.** They
+/// were instruction counts — `@2502340000`, `+2M`, `+200k` — and `parse_wheel_script` refuses a
+/// script that mixes those with `to_brick()`'s seconds (NEXT.md 0b). Each is converted at
+/// [`RALLY_CLOCK`], the clock they were measured at, and anchored to the launch: what the ball and
+/// the paddle do is driven by the firmware's timer, so the same moments in simulated time are the
+/// same rally. The click gap needs no conversion — it tracks the clock, and is 4 ms at both.
+fn rally(launch: u64) -> (String, u64) {
+    let ms = |instr: u64| instr / (RALLY_CLOCK * 1000);
+    let at = |instr: u64| launch + ms(instr - RALLY_LAUNCH_INSTR);
+    // The centre button serves. The ball moves (+-8,+-10) px per tick and every bounce flips exactly
+    // one sign — where it lands on the paddle does not steer it. The paddle is 57 px wide, travels
+    // [4,262], and moves in 24 px QUANTA.
+    let (g2m, g5m, g200k) = (ms(2_000_000), ms(5_000_000), ms(200_000));
+    let mut w = String::new();
+    for t in [2_502_340_000, 2_539_480_000] {
+        let t = at(t);
+        w.push_str(&format!(",@{t}ms:touch,+{g2m}ms:rotate=+8,+{g5m}ms:release"));
+    }
+    w.push_str(&format!(",@{}ms:touch,+{g2m}ms:press=select", at(2_576_620_000)));
+    // Two sweeps, and only two, because the ball tells you where to be. 200 k (40 ms) apart is
+    // calibration, not tidiness: 400 k apart moved the paddle 29 px per million instructions and
+    // 200 k apart moved it 150, because the wheel accelerator is rate-sensitive.
+    for (t, n, d) in [(2_581_600_000u64, 10, 8i32), (2_601_500_000, 5, -8)] {
+        w.push_str(&format!(",@{}ms:rotate={d:+}", at(t)));
+        for _ in 1..n {
+            w.push_str(&format!(",+{g200k}ms:rotate={d:+}"));
+        }
+    }
+    w.push_str(&format!(",+{g2m}ms:release"));
+    // The clock-5 run ended at 2630 M, a little after the second ball.
+    (w, at(2_630_000_000))
 }
 
 fn do_gameplay(film: &Path, post: &Path) -> Result<(), String> {
     println!("== Brick, played ==");
     let dir = film.join("brick-gameplay");
-    // The centre button serves. The ball moves (+-8,+-10) px per tick and every bounce flips exactly
-    // one sign — where it lands on the paddle does not steer it. The paddle is 57 px wide, travels
-    // [4,262], and moves in 24 px QUANTA, acted on about 750 k instructions later.
-    let mut w = String::from(",@2502340000:touch,+2M:rotate=+8,+5M:release");
-    w.push_str(",@2539480000:touch,+2M:rotate=+8,+5M:release");
-    w.push_str(",@2576620000:touch,+2M:press=select");
-    // Two sweeps, and only two, because the ball tells you where to be. 200 k apart is calibration,
-    // not tidiness: the same steps 400 k apart move the paddle 29 px per million instructions and
-    // 200 k apart move it 150, because the wheel accelerator is rate-sensitive.
-    for (at, n, d) in [(2581600000u64, 10, 8i32), (2601500000, 5, -8)] {
-        w.push_str(&format!(",@{at}:rotate={d:+}"));
-        for _ in 1..n {
-            w.push_str(&format!(",+200k:rotate={d:+}"));
-        }
-    }
-    w.push_str(",+2M:release");
+    let descent = to_brick();
+    let (w, until_ms) = rally(launch_ms(&descent)?);
+    // The run's length is `--until`, in the clock the script is in. BUDGET and IDLE only have to be
+    // out of its way: the recipe's own 150 M budget is two seconds at the faithful clock, and the
+    // idle stop would end the run in the quiet between two gestures of the descent.
+    std::env::set_var("BUDGET", "40000000000");
+    std::env::set_var("IDLE", "40000000000");
     run(&[
         format!("--out={}", dir.display()),
-        "--every=100k".into(),
-        "--from=2574M".into(),
+        // 1.5 M at 75 instructions per microsecond is 20 ms, the 100 k-at-clock-5 cadence the film
+        // was shot at, and `--realtime` plays it back at the firmware's own pace — the 5 M/s
+        // `--rate` it was published at, which was one second of video per simulated second.
+        "--every=1500k".into(),
+        format!("--from={RALLY_FILM_FROM}"),
         "--fps=50".into(),
+        "--realtime".into(),
         "--".into(),
+        // Pinned, because a rally is a count of byte-identical frames and the two inputs from
+        // outside the machine move it: research/18 §4.3a.
+        "--rtc=2026-01-01T12:00:00".into(),
+        "--battery=100".into(),
+        format!("--until={until_ms}ms"),
         "--clickwheel".into(),
-        format!("--wheel={}{w}", to_brick()),
+        format!("--wheel={descent}{w}"),
     ])?;
     // `resampled`, deliberately, and it is the worse option on colour: 93 of this film's 253 screens
     // are held 0.02 s, under the gif muxer's 4 cs floor, so encoding it held merges 38 of them away
@@ -655,6 +818,25 @@ fn do_gameplay(film: &Path, post: &Path) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    /// The gif-palette bug's guard on the encoder side: transdiff is off on every gif, and the flag
+    /// sits before the output path, where ffmpeg reads it as an output option.
+    #[test]
+    fn every_gif_is_encoded_without_transparent_differences() {
+        let v = gif_argv(&["-i", "in", "-loop", "0"], "out.gif");
+        assert_eq!(v.last(), Some(&"out.gif"));
+        let at = v.iter().position(|a| *a == "-gifflags").expect("-gifflags missing");
+        assert_eq!(v[at + 1], "-transdiff");
+        assert!(at + 1 < v.len() - 1, "the flag must precede the output");
+        // And nothing in this file calls the raw `ffmpeg` with a `.gif` output behind its back.
+        let src = include_str!("ipod-film.rs");
+        let raw_gif_calls = src
+            .split("ffmpeg(&[")
+            .skip(1)
+            .filter(|call| call.split("])").next().unwrap_or("").contains("&gif"))
+            .count();
+        assert_eq!(raw_gif_calls, 0, "a gif encode bypasses ffmpeg_gif");
+    }
+
     #[test]
     fn suffixed_counts_parse() {
         assert_eq!(count("2M").unwrap(), 2_000_000);
@@ -666,19 +848,34 @@ mod tests {
     /// The concat list is built from the manifest, and the last file is listed **twice** — the
     /// demuxer will not honour the final entry's duration otherwise. Asserted rather than trusted,
     /// because that repeat is the reason `-t TOTAL` exists at the call site.
+    ///
+    /// **The manifest is written by the emulator's own writer**, [`Film::finish`], not typed out
+    /// here. A hand-written copy is what let this test pass for a month while every film came out
+    /// 0.00 s: the writer gained a column, the copy did not, and the reader's fixed index was only
+    /// ever checked against the copy.
     #[test]
     fn the_concat_list_repeats_its_last_frame_and_totals_the_durations() {
+        use ipod_machine::film::{Film, Frame};
         let d = std::env::temp_dir().join(format!("ipod-film-test-{}", std::process::id()));
-        std::fs::create_dir_all(&d).unwrap();
-        std::fs::write(
-            d.join("frames.tsv"),
-            "# film of 0x000e0000, 320x240, sampled every 1000000 instructions\n\
-             # 3 samples collapsed to 2 frames\n\
-             # index\tfile\trepeat_of\tfirst\tlast\tsamples\theld\tnonblack\tdigest\n\
-             0\tframe-00000.png\t-\t0\t0\t1\t1000000\t5\t0xaa\n\
-             1\tframe-00001.png\t-\t1000000\t2000000\t2\t2000000\t7\t0xbb\n",
-        )
-        .unwrap();
+        let mut film = Film::parse(&format!("0xE0000:140:F0:1M:{}", d.display())).unwrap();
+        // 1 sample then 2: held 1 M and 2 M instructions, so 1 s + 2 s at the natural pace. The
+        // sample counts differ from the held counts on purpose — reading the wrong one shows.
+        for (index, samples) in [(0usize, 1u64), (1, 2)] {
+            film.frames.push(Frame {
+                index,
+                file: format!("frame-{index:05}.png"),
+                repeat_of: None,
+                first_at: index as u64 * 1_000_000,
+                last_at: (index as u64 + samples - 1) * 1_000_000,
+                first_usec: index as u64 * 13_333,
+                last_usec: (index as u64 + samples - 1) * 13_333,
+                samples,
+                nonblack: 5,
+                digest: index as u64,
+            });
+        }
+        film.samples = 3;
+        film.finish();
         let total = concat(&d).unwrap();
         let c = std::fs::read_to_string(d.join("frames.concat")).unwrap();
         assert_eq!(
@@ -693,6 +890,78 @@ mod tests {
         assert!(std::fs::read_to_string(d.join("frames.total"))
             .unwrap()
             .starts_with("3.0"));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// `asset gameplay`'s whole script parses — the descent and the rally in one unit, which is
+    /// the refusal that kept it from running at all — and the rally keeps its clock-5 spacing:
+    /// the serve 27.86 s after the launch, the first sweep 996 ms after the serve.
+    #[test]
+    fn the_gameplay_script_is_in_one_unit_and_keeps_the_rally_timing() {
+        let descent = to_brick();
+        let launch = launch_ms(&descent).unwrap();
+        assert_eq!(launch, 107_152, "to_brick()'s last Select");
+        let (w, until) = rally(launch);
+        let clock = ipod_machine::CLOCK as u64;
+        let gap = ipod_machine::pace::wheel_click_gap(clock as usize);
+        let steps = ipod_machine::parse_wheel_script(&format!("{descent}{w}"), gap, clock)
+            .expect("the gameplay script must parse");
+        assert!(steps.iter().all(|s| s.in_usec));
+        let serve = steps
+            .iter()
+            .filter(|s| {
+                s.event == ipod_machine::WheelEvent::Button(ipod_machine::WHEEL_SELECT, true)
+            })
+            .last()
+            .unwrap()
+            .at;
+        assert_eq!(serve, (launch + 27_860 + 400) * 1000);
+        assert!(w.contains(&format!(",@{}ms:rotate=+8", launch + 27_860 + 996)), "{w}");
+        assert_eq!(until, launch + 38_536);
+    }
+
+    /// A still is the settled screen with its count — the longest-held frame, not the first.
+    #[test]
+    fn a_still_is_the_longest_held_frame_with_its_count() {
+        use ipod_machine::film::{Film, Frame};
+        let d = std::env::temp_dir().join(format!("ipod-film-still-{}", std::process::id()));
+        let mut film = Film::parse(&format!("0xE0000:140:F0:1M:{}", d.display())).unwrap();
+        let frames = [(0usize, 1u64, 76800u32), (1, 2, 75267), (2, 40, 75267)];
+        for (index, samples, nonblack) in frames {
+            film.frames.push(Frame {
+                index,
+                file: format!("frame-{index:05}.png"),
+                repeat_of: None,
+                first_at: 0,
+                last_at: 0,
+                first_usec: 0,
+                last_usec: 0,
+                samples,
+                nonblack,
+                digest: index as u64,
+            });
+        }
+        film.finish();
+        assert_eq!(settled_frame(&d, 75267).unwrap().as_deref(), Some("frame-00002.png"));
+        assert_eq!(settled_frame(&d, 2916).unwrap(), None);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A manifest without a `held_instr` column is refused, not read at whatever index it used to
+    /// be at — a film 0.00 s long is the failure this exists to make loud.
+    #[test]
+    fn a_manifest_without_the_held_column_is_an_error() {
+        let d = std::env::temp_dir().join(format!("ipod-film-nohold-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(
+            d.join("frames.tsv"),
+            "# film of 0x000e0000, 320x240, sampled every 1000000 instructions\n\
+             # index\tfile\trepeat_of\tfirst_instr\tsamples\tnonblack\n\
+             0\tframe-00000.png\t-\t0\t1\t5\n",
+        )
+        .unwrap();
+        let e = concat(&d).unwrap_err();
+        assert!(e.contains("held_instr"), "{e}");
         let _ = std::fs::remove_dir_all(&d);
     }
 }

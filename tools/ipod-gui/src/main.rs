@@ -3237,7 +3237,7 @@ fn wire(
     // a sound the part cannot make, because on real hardware the click comes out of a piezo that
     // firmware drives. `Live::sample` asks instead, off `Piezo::fires`, and it therefore asks for
     // every route into the wheel rather than for this one.
-    let trackpad = {
+    let trackpad: Option<trackpad::Handle> = {
         let live = live.clone();
         let weak = window.as_weak();
         let act: Rc<dyn Fn(trackpad::Act)> = Rc::new(move |a| {

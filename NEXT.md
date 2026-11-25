@@ -367,6 +367,15 @@ not.
 > every particular. **Still not fixed** — re-basing `do_gameplay` means re-reading a rally off its
 > own run at HEAD, which is count 1's work.
 >
+> **✅ ~~Count 2~~ SETTLED 2026-10-07 — `c45d5f4`, gif `8f70cb6`.** `do_gameplay`'s steps are the
+> 2026-08-14 ones converted at the clock they were scripted at (5) and anchored to `to_brick()`'s
+> launch; the run is bounded by `--until` and pinned (`--rtc`/`--battery`). 250 of 250 steps fired,
+> and the film shows a rally: serve, sweep, returns, bricks, a lost ball, the self-served next one —
+> **score 4, not 8**, so it is the same script but not the same rally, which is count 1's point.
+> Also found: the Rust port had dropped the shell recipe's BUDGET/IDLE (the retail recipe's 150 M is
+> 2 s at clock 75) and `concat` had read the wrong column since `4fdec71` (`e3b40d5`), so every film
+> came out 0.00 s.
+>
 > **⚠️ And a third, found while confirming the second: `to_brick()`'s own calibration is stale
 > too.** Its comment states *"the language picker draws at 73.2 s simulated … on the retail ROM and
 > a drive built from `iPod_20.1.3`"*, measured 2026-09-01. Same ROM, same IPSW, measured
@@ -374,6 +383,10 @@ not.
 > after the screen it aims at, and every gap after it is scaled to a clock the machine no longer
 > keeps. It is anchored in the right *unit* — that fix was real — and calibrated against the wrong
 > machine.
+>
+> **✅ ~~Count 3~~ SETTLED 2026-10-07, for the drive `ipod-film` uses.** The 4.8 s is research/18's
+> fresh IPSW drive. On `drives/ipod8g-retail.img` the picker draws at 10.53 s, every gesture lands in
+> under a second, and `to_brick()` unchanged fires 106 of 106 and reaches the playfield at 108.0 s.
 >
 > **Count 1 is untouched and stays SUSPECT.** [research/18](research/18-brick-is-playable.md)
 > measures the descent, the paddle and the serve at `--clock=75` on the shipping build, with a
