@@ -19,6 +19,12 @@ NAME=${2:?usage: package.sh <rust-target> <name>}
 export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$PWD=. --remap-path-prefix=$HOME=~"
 export CARGO_INCREMENTAL=0
 
+# Linux: a binary needs at least the glibc of the machine it was built on (the script prints the
+# floor at the end). Build on the OLDEST distribution you want to support — an Ubuntu 22.04
+# runner or container is the reference. Built on NixOS, the loader and library paths point into
+# /nix/store; with `patchelf` on PATH the script repoints them at the standard loader, and the
+# result runs on any distribution whose glibc is at least the printed floor.
+# (cargo-zigbuild does not work here: Skia's prebuilt library needs libstdc++, zig links libc++.)
 cargo build --release --locked --target "$TARGET" --workspace --bins
 
 EXE=""
@@ -68,6 +74,22 @@ then go to System Settings -> Privacy & Security, where a button offers to open 
 On Windows, SmartScreen shows "More info" -> "Run anyway". Built from source, neither happens.
 EOF
 
+case "$TARGET" in
+  *linux*)
+    for f in "dist/$DIR/ipod-emulator" "dist/$DIR"/tools/*; do
+      [ -f "$f" ] && [ -x "$f" ] || continue
+      if readelf -l "$f" | grep -q '/nix/store'; then
+        if command -v patchelf >/dev/null; then
+          case "$TARGET" in aarch64*) LD=/lib/ld-linux-aarch64.so.1 ;; *) LD=/lib64/ld-linux-x86-64.so.2 ;; esac
+          patchelf --set-interpreter "$LD" --remove-rpath "$f"
+        else
+          echo "WARNING: $f loads from /nix/store and patchelf is not on PATH; it runs on NixOS only" >&2
+        fi
+      fi
+    done
+    ;;
+esac
+
 cd dist
 case "$TARGET" in
   *windows*) 7z a "$DIR.zip" "$DIR" >/dev/null ;;
@@ -78,6 +100,12 @@ esac
 # These must all be dated today.
 ls -la --time-style=long-iso "$DIR/ipod-emulator$EXE" "$DIR"/tools/* 2>/dev/null \
   || ls -laT "$DIR/ipod-emulator$EXE" "$DIR"/tools/*
+case "$TARGET" in
+  *linux*)
+    readelf -V "$DIR/ipod-emulator" "$DIR/tools/trace" 2>/dev/null | grep -oE 'GLIBC_[0-9.]+' \
+      | sort -uV | tail -1 | sed 's/^/glibc floor (runs on distributions with at least): /' || true
+    ;;
+esac
 if strings "$DIR/ipod-emulator$EXE" | grep -qE '/Users/|/home/'; then
   echo "WARNING: a home directory path is embedded in ipod-emulator$EXE" >&2
 fi
