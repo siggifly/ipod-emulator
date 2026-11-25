@@ -1200,12 +1200,39 @@ fn main() {
                 std::path::Path::new(path),
                 args.iter().any(|a| a == "--disk-writable"),
             ) {
-                Ok(d) => {
+                Ok(mut d) => {
                     println!(
                         "  disk {path} — {} sectors ({} MB)",
                         d.sectors,
                         d.sectors / 2048
                     );
+                    // --ata-model=TEXT, --ata-word=N:V (repeatable, decimal or 0x hex) and
+                    // --ata-standby change what the drive says about itself and let it enter
+                    // standby, so one image can be run against a hard disk and a flash adapter.
+                    d.id_model = args
+                        .iter()
+                        .find_map(|a| a.strip_prefix("--ata-model="))
+                        .map(|v| v.to_string());
+                    for a in args.iter().filter_map(|a| a.strip_prefix("--ata-word=")) {
+                        let parsed = a.split_once(':').and_then(|(n, v)| {
+                            let num = |t: &str| match t.strip_prefix("0x") {
+                                Some(h) => u32::from_str_radix(h, 16).ok(),
+                                None => t.parse::<u32>().ok(),
+                            };
+                            Some((num(n)? as usize, num(v)? as u16))
+                        });
+                        match parsed {
+                            Some(w) => d.id_words.push(w),
+                            None => println!("  --ata-word={a}: expected N:V, ignored"),
+                        }
+                    }
+                    d.standby_model = args.iter().any(|a| a == "--ata-standby");
+                    if d.id_model.is_some() || !d.id_words.is_empty() || d.standby_model {
+                        println!(
+                            "  ata identity: model {:?}, words {:?}, standby {}",
+                            d.id_model, d.id_words, d.standby_model
+                        );
+                    }
                     m.mem.ata = Some((0xc300_0000, d));
                 }
                 Err(e) => println!("  disk {path}: {e}"),

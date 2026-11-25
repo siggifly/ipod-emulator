@@ -121,6 +121,14 @@ pub struct Ata {
     pub sectors_written: u64,
     /// A PIO WRITE is in progress and the data register is inbound.
     write_pio: bool,
+    /// `--ata-model`: replaces the model string (words 27..46) in the IDENTIFY response.
+    pub id_model: Option<String>,
+    /// `--ata-word=N:V`: replaces word N of the IDENTIFY response, applied after the model.
+    pub id_words: Vec<(usize, u16)>,
+    /// `--ata-standby`: STANDBY IMMEDIATE is accepted and CHECK POWER MODE reports standby (0x00)
+    /// until the next command that touches the medium. Without it the drive aborts the command.
+    pub standby_model: bool,
+    in_standby: bool,
     /// `(source LBA, destination, bytes)` per completed transfer. The LBA is in the log because
     /// destination alone cannot show whether the driver is walking the image contiguously.
     pub dma_transfers: Vec<(u64, u32, u32)>,
@@ -250,17 +258,34 @@ impl Ata {
             dma_fetch: None,
             sectors_written: 0,
             write_pio: false,
+            id_model: None,
+            id_words: Vec::new(),
+            standby_model: false,
+            in_standby: false,
         })
     }
 
     /// The 512-byte IDENTIFY DEVICE response for this drive.
     fn identify(&self) -> Vec<u8> {
-        Ata::identify_sector_with(
+        let mut out = Ata::identify_sector_with(
             self.sectors,
             self.mwdma_selected,
             self.udma_selected,
             self.current_geometry,
-        )
+        );
+        if let Some(model) = &self.id_model {
+            let mut w = [0u16; 20];
+            put_ata_str(&mut w, model);
+            for (i, x) in w.iter().enumerate() {
+                out[(27 + i) * 2..(28 + i) * 2].copy_from_slice(&x.to_le_bytes());
+            }
+        }
+        for &(n, v) in &self.id_words {
+            if n < 256 {
+                out[n * 2..n * 2 + 2].copy_from_slice(&v.to_le_bytes());
+            }
+        }
+        out
     }
 
     /// The 512-byte IDENTIFY DEVICE response. Only the fields a driver actually consults are
@@ -477,7 +502,16 @@ impl Ata {
         }
         *self.cmd_census.entry(cmd).or_default() += 1;
         self.error = 0;
+        if !matches!(cmd, 0xe0 | 0xe5 | 0xe7 | 0xea | 0xec) {
+            self.in_standby = false;
+        }
         match cmd {
+            0xe0 if self.standby_model => {
+                // STANDBY IMMEDIATE
+                self.in_standby = true;
+                self.status = ATA_DRDY | ATA_DSC;
+                self.irq_pending = true;
+            }
             0xec => {
                 // IDENTIFY DEVICE
                 self.buf = self.identify();
@@ -595,7 +629,7 @@ impl Ata {
                 self.irq_pending = true;
             }
             0xe5 => {
-                self.nsector = 0xff;
+                self.nsector = if self.in_standby { 0x00 } else { 0xff };
                 self.status = ATA_DRDY | ATA_DSC;
                 self.irq_pending = true;
             }
