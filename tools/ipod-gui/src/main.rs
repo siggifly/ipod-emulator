@@ -350,7 +350,7 @@ fn main() -> Result<(), slint::PlatformError> {
     // `--cold`, `--clock=`, `--second-core` and `--charger` open the window as usual and configure
     // the machine it starts, and they reach `machine_config` by being handed to `wire`. A launch
     // flag read out of a global would be the one thing no test could see.
-    let args::Cli::Window { launch, control } = cli else {
+    let args::Cli::Window { launch, control, boot_osos } = cli else {
         let code = args::run(&cli, &mut std::io::stdout(), &mut std::io::stderr());
         std::process::exit(code);
     };
@@ -371,6 +371,18 @@ fn main() -> Result<(), slint::PlatformError> {
 
     opaque_window()?;
 
+    // **`--boot-osos-image=` runs on a library of its own**, one device deep, unless the operator
+    // pointed `IPOD_EMULATOR_DATA` somewhere already. The drive is filed as a device so the bench
+    // can draw it (see `register_drive_os`), and a device filed into the operator's real library
+    // would still be there at the next plain launch.
+    let drive_os_data = boot_osos
+        .as_ref()
+        .filter(|_| std::env::var_os("IPOD_EMULATOR_DATA").is_none())
+        .map(|_| std::env::temp_dir().join(format!("ipod-emulator-boot-osos-{}", std::process::id())));
+    if let Some(dir) = &drive_os_data {
+        unsafe { std::env::set_var("IPOD_EMULATOR_DATA", dir) };
+    }
+
     // **Before the first read, and it had zero callers until now** (§20 item 13). `migrate_legacy`
     // declines the moment a settings file exists in the new directory, and `load_and_seed` writes
     // one back whenever seeding changed something — so a carry-forward that runs second never runs
@@ -381,7 +393,19 @@ fn main() -> Result<(), slint::PlatformError> {
     // the one entitled to persist what seeding produced — without which the marker that makes a
     // removal stick never reaches the file. `Settings::load` stays a pure read for `ipod-boot`,
     // where a save on a path as incidental as `--print` rewrote the operator's own file.
-    let settings = Rc::new(RefCell::new(Settings::load_and_seed()));
+    let mut loaded = Settings::load_and_seed();
+    // `--boot-osos-image=`: filed before `wire`, which builds the bench from the library once.
+    let drive_os_row = match &boot_osos {
+        Some(disk) => match register_drive_os(&mut loaded, disk) {
+            Ok(i) => Some(i),
+            Err(why) => {
+                eprintln!("--boot-osos-image: {why}");
+                std::process::exit(2);
+            }
+        },
+        None => None,
+    };
+    let settings = Rc::new(RefCell::new(loaded));
     let window = MainWindow::new()?;
 
     // **Everything a test can reach is in `wire`, and that is not tidiness.** The one defect this
@@ -395,6 +419,18 @@ fn main() -> Result<(), slint::PlatformError> {
     // `wire(&window, …);` on its own would compile, run, register everything — and leave the first
     // run with nothing moving it, with no error anywhere. `_wiring` is what stops that.
     let _wiring = wire(&window, settings.clone(), launch, Rc::new(drops::Shell::Native));
+
+    // `--boot-osos-image=`: the machine starts with the window instead of waiting for a press. A
+    // failure is said and fatal for the same reason `--control=`'s is — a launch that named a drive
+    // and got an idle bench would look like a flag that did nothing.
+    if let (Some(disk), Some(row)) = (&boot_osos, drive_os_row) {
+        let device = settings.borrow().devices[row].clone();
+        window.set_selected(i32::try_from(row).unwrap_or(0));
+        if let Err(why) = start_drive_os(&_wiring.live, disk, launch, row, device) {
+            eprintln!("--boot-osos-image: {}", why.said);
+            std::process::exit(2);
+        }
+    }
 
     // ── The fit: what size the iPod is drawn at, and whether it can be drawn at all ──
     //
@@ -4241,6 +4277,131 @@ fn start_title(
     Ok(())
 }
 
+/// The library name of the device `--boot-osos-image=` files. [`start_machine`] reads it to start
+/// that device as [`emu::BootTarget::DriveOs`] again after it has stopped, since a library device's
+/// own start is the Apple boot.
+const DRIVE_OS_DEVICE: &str = "Drive OS";
+
+/// File the drive as a device and make it the current one, for `--boot-osos-image=`.
+///
+/// The bench draws a device, its panel and its wheel only for a row of `Settings::devices`, and
+/// draws the empty-library ghost otherwise. The ROM is a synthesised 5.5G (black) so that the
+/// chassis and the caption have an iPod to describe; `emu::build` does not read it for
+/// [`emu::BootTarget::DriveOs`], which boots a stub NOR. Returns the device's index.
+///
+/// The caller points the data directory at a scratch one first, so this entry never reaches the
+/// operator's own library file.
+fn register_drive_os(s: &mut Settings, disk: &std::path::Path) -> Result<usize, String> {
+    use ipod_machine::settings::{Disk, Resource};
+    s.devices.retain(|d| d.name != DRIVE_OS_DEVICE);
+    s.disks.retain(|d| d.name != DRIVE_OS_DEVICE);
+    let rom = s.file_away(
+        Resource::Firmware(ipod_machine::nor::Source::Synthetic {
+            model: "A446".into(),
+            seed: 1,
+            serial: None,
+            guid: None,
+            splash: None,
+        }),
+        "Drive OS target",
+        None,
+    );
+    s.disks.push(Disk {
+        name: DRIVE_OS_DEVICE.into(),
+        path: disk.to_path_buf(),
+        built_from: None,
+        installed: Vec::new(),
+    });
+    s.devices.push(Device {
+        name: DRIVE_OS_DEVICE.into(),
+        firmware: rom,
+        disk: Some(DRIVE_OS_DEVICE.into()),
+        // The machine writes to the image it was given; saying so keeps the caption from
+        // promising a copy.
+        work_on_copy: Some(false),
+        ..Device::default()
+    });
+    if !s.run_device(DRIVE_OS_DEVICE) {
+        return Err(format!("{} could not be filed as a device", disk.display()));
+    }
+    Ok(s.devices.len() - 1)
+}
+
+/// Put the OS in a drive's firmware partition on the bench, for `--boot-osos-image=`.
+///
+/// The sibling of [`start_title`] for a drive that has a device in the library —
+/// [`register_drive_os`] files it, and `index` and `device` are that row. The window draws the
+/// device (chassis, panel, wheel) only for a library row; a machine with none leaves the bench on
+/// the empty-library ghost, which says "There is no iPod yet" over a running machine. No restore
+/// point is paired: `cfg.snapshot` is `None`.
+/// What it shares with [`start_machine`] is `emu::run` on the `ipod-machine` thread and
+/// [`args::Machine::apply`], so `--clock=`, `--cold`, `--charger` and the core count reach this
+/// machine as they reach any other.
+///
+/// A drive that is not a file is refused here, before a thread exists; one that is a file with no
+/// `osos` in it is `emu::build`'s to say, and arrives as `Phase::Stopped` with the reason.
+fn start_drive_os(
+    live: &Rc<RefCell<Option<Live>>>,
+    disk: &std::path::Path,
+    launch: args::Machine,
+    index: usize,
+    device: Device,
+) -> Result<(), rail::Failure> {
+    *live.borrow_mut() = None;
+    if !disk.is_file() {
+        return Err(rail::Failure::saying(
+            rail::Class::Missing,
+            "starting a drive's OS",
+            format!("{} is not a file", disk.display()),
+        ));
+    }
+    let mut cfg = emu::Config::drive_os(disk.to_path_buf());
+    launch.apply(&mut cfg);
+
+    let link = emu::Link::new();
+    control::attach(&link);
+    let thread = {
+        let cfg = cfg.clone();
+        let link = link.clone();
+        std::thread::Builder::new()
+            .name("ipod-machine".into())
+            .spawn(move || emu::run(cfg, link))
+            .map_err(|e| {
+                rail::Failure::saying(
+                    rail::Class::Permission,
+                    "starting a drive's OS",
+                    format!("the machine thread could not be started: {e}"),
+                )
+            })?
+    };
+    *live.borrow_mut() = Some(Live {
+        link,
+        thread: Some(thread),
+        index,
+        device,
+        absent: Vec::new(),
+        // No cold boot of this OS has been measured, so the bar has no denominator.
+        denominator: None,
+        life: RefCell::new(machine::Life::Booting {
+            target: cfg.boot.clone(),
+            progress: machine::Progress::read(0, None),
+            pace: machine::Pace::default(),
+            reached: machine::Reached::Nothing,
+        }),
+        cfg,
+        seq: Cell::new(0),
+        booted: Cell::new(None),
+        learned: Cell::new(false),
+        parking: Cell::new(false),
+        finger: RefCell::new(wheel::Finger::default()),
+        hold: Cell::new(false),
+        drawn: Cell::new(false),
+        buttons: Cell::new(0),
+        clicks: RefCell::new(click::Watch::default()),
+    });
+    Ok(())
+}
+
 /// Put a machine on the bench, on the thread `emu.rs` already has.
 ///
 /// **The old machine is dropped first and the drop waits for it** — see `Live::drop`. Two
@@ -4293,6 +4454,13 @@ fn start_machine(
     // made. `machine_config` writes `BootTarget::Os` and `Machine::apply` does not touch the
     // field, so this is the one writer of it.
     cfg.boot = boot;
+    // **The device `--boot-osos-image=` filed starts the way it was first started.** Its library
+    // row names a synthesised Apple ROM so the bench has an iPod to draw, and the Apple boot of
+    // that ROM is not what this drive was asked to be booted with.
+    if d.name == DRIVE_OS_DEVICE && cfg.boot.is_os() {
+        cfg.boot = emu::BootTarget::DriveOs;
+        cfg.snapshot = None;
+    }
 
     // ── §12.3's denominator, asked of the launch this press is actually making ──────────────────
     //
@@ -10954,6 +11122,135 @@ pub(crate) mod tests {
         (w, wiring, dir)
     }
 
+    /// **`--boot-osos-image=` files a device, so the bench draws an iPod and not the empty-library
+    /// ghost.** The launch put a running machine on a library of no devices and the window said
+    /// "There is no iPod yet" over it.
+    ///
+    /// Red if `register_drive_os` is not called (no device, `ghost` set), if it files the device
+    /// without making it current (`Settings::current`/`disk` stay empty), or if
+    /// `start_machine` stops mapping the device back to `DriveOs`.
+    #[test]
+    fn a_boot_osos_image_is_a_device_the_bench_draws() {
+        let _held = use_a_scratch_data_dir();
+        let dir = temp_dir("drive-os-device");
+        let img = dir.join("os.img");
+        std::fs::write(&img, b"not really a drive").unwrap();
+
+        let mut s = Settings::default();
+        let row = register_drive_os(&mut s, &img).expect("an empty library takes the device");
+        assert_eq!((row, s.devices.len()), (0, 1));
+        assert_eq!(s.current.as_deref(), Some(DRIVE_OS_DEVICE));
+        assert_eq!(s.disk.as_deref(), Some(img.as_path()), "the drive the machine will open");
+        let d = s.devices[row].clone();
+        assert!(s.missing(&d).is_empty(), "the device names a part that is not there");
+        // Filing twice is one device.
+        register_drive_os(&mut s, &img).unwrap();
+        assert_eq!(s.devices.len(), 1);
+
+        let settings = Rc::new(RefCell::new(s));
+        let w = a_window();
+        let wiring = wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
+        w.show().expect("the headless backend shows a window");
+        w.window().set_size(slint::LogicalSize::new(
+            geometry::PREF_WIDTH as f32,
+            geometry::PREF_HEIGHT as f32,
+        ));
+        w.set_selected(row as i32);
+        let mut live = a_running_machine(&d);
+        live.index = row;
+        live.cfg.boot = emu::BootTarget::DriveOs;
+        *wiring.live.borrow_mut() = Some(live);
+        (wiring.machine_tick)();
+
+        assert!(!w.get_ghost(), "a device is filed and the bench still draws the ghost");
+        assert_eq!(w.get_selected(), row as i32);
+        assert!(
+            machine::Life::read(
+                &wiring.live.borrow().as_ref().unwrap().link.out.lock().unwrap(),
+                &emu::BootTarget::DriveOs,
+                None
+            )
+            .alive(),
+            "the machine on the bench is not running"
+        );
+        let screen = w.get_screen_source();
+        assert_eq!(
+            (screen.size().width, screen.size().height),
+            (emu::FB_W as u32, emu::FB_H as u32),
+            "the panel is not the machine's framebuffer"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **The window with a third-party OS's UI in it.** Skipped loudly without `IPOD_OSOS_IMAGE`, a
+    /// drive built by a third-party OS's tooling that nothing in this repository carries. With it,
+    /// the machine really boots on its own thread, the window is ticked until the panel has the
+    /// picture, and the window is rasterized to `IPOD_OSOS_SHOT` (a PNG path) if that is set.
+    #[test]
+    fn a_boot_osos_image_boots_into_the_drawn_window() {
+        let Some(img) = std::env::var_os("IPOD_OSOS_IMAGE").map(std::path::PathBuf::from) else {
+            println!("SKIPPED: IPOD_OSOS_IMAGE is not set");
+            return;
+        };
+        let _held = use_a_scratch_data_dir();
+        let mut s = Settings::default();
+        let row = register_drive_os(&mut s, &img).expect("the drive is filed");
+        let d = s.devices[row].clone();
+        let w = a_window();
+        let wiring = wire(
+            &w,
+            Rc::new(RefCell::new(s)),
+            args::Machine::default(),
+            Rc::new(drops::Shell::Native),
+        );
+        w.show().expect("the headless backend shows a window");
+        w.window().set_size(slint::LogicalSize::new(
+            geometry::PREF_WIDTH as f32,
+            geometry::PREF_HEIGHT as f32,
+        ));
+        w.set_selected(row as i32);
+        start_drive_os(&wiring.live, &img, args::Machine::default(), row, d)
+            .expect("the machine starts");
+        let began = std::time::Instant::now();
+        let lit = loop {
+            (wiring.machine_tick)();
+            let nonzero = wiring
+                .live
+                .borrow()
+                .as_ref()
+                .map_or(0, |l| l.link.out.lock().unwrap().fb_nonzero);
+            if nonzero > 70_000 || began.elapsed().as_secs() > 120 {
+                break nonzero;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        };
+        assert!(lit > 70_000, "the panel had {lit} lit pixels after {:?}", began.elapsed());
+        assert!(!w.get_ghost());
+        // **The boot phase ends.** `Phase::Booting` ends when the core goes quiet with the drive
+        // answered, which a menu waiting on the wheel does, so the caption stops saying "booting".
+        let running = || {
+            wiring.live.borrow().as_ref().is_some_and(|l| {
+                matches!(l.link.out.lock().unwrap().phase, emu::Phase::Running)
+            })
+        };
+        let began = std::time::Instant::now();
+        while !running() && began.elapsed().as_secs() < 120 {
+            (wiring.machine_tick)();
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let phase_after = began.elapsed();
+        assert!(running(), "the machine was still booting {phase_after:?} after the panel lit");
+        println!("running {phase_after:?} after the panel lit");
+        (wiring.machine_tick)();
+        if let Some(path) = std::env::var_os("IPOD_OSOS_SHOT") {
+            let px = w.window().take_snapshot().expect("the testing backend rasterizes");
+            let rgb: Vec<u8> = px.as_slice().iter().flat_map(|p| [p.r, p.g, p.b]).collect();
+            std::fs::write(path, png::encode(&rgb, px.width() as usize, px.height() as usize))
+                .unwrap();
+        }
+        *wiring.live.borrow_mut() = None;
+    }
+
     /// **Where the drawn wheel's centre is on the shown window**, in logical pixels.
     ///
     /// Derived from `geometry`'s own constants — the ones `build.rs` renders into the markup — and
@@ -12673,6 +12970,7 @@ pub(crate) mod tests {
                 machine: args::Machine::default(),
                 budget: 1_000,
                 control: None,
+                boot_osos: None,
             },
             &mut out,
             &mut err,
