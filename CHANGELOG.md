@@ -449,6 +449,29 @@ well as used, and the list fills itself the first time from whatever you already
 
 Settings → About carries the repository link.
 
+### About twice as fast, and nothing it computes moved
+
+**A cold boot of Apple's software to the main menu takes less than half the time it did.** A
+profile put the cost in finding where an address lives, not in executing the instruction: every
+byte read, every Thumb fetch and every interrupt check walked the device windows and the memory
+regions again. The machine now remembers where recently used pages are — where, never what, so a
+store to a code page is seen by the very next fetch. Measured on a RetailOS cold boot to the main
+menu, 343 M instructions: **20.6 s before, 9.1 s after** (2.27×); resting at the menu, 2.13×. The
+executed instruction count, the panel digest and the menu and idle pictures are identical before
+and after. This is the first step on [#33](https://github.com/siggifly/ipod-emulator/issues/33),
+not the whole of it. *(Andrew Yong, PR #50.)*
+
+### The first sound: the codec is modelled, and what it is sent can be heard
+
+The Wolfson WM8758 used to be a recorder of register writes, and everything a firmware played was
+thrown away. Now the codec's own registers are decoded into the sample rate they set, audio DMA is
+paced at that rate, the audio DMA interrupt is delivered as the FIQ Apple and Rockbox route it as,
+and `trace --audio-wav=FILE` writes what reached the codec as a 16-bit stereo WAV. A bare-metal test
+program plays a 1 kHz tone at all nine rates and the WAV is checked frame for frame. RetailOS now
+gets through the FIQ path — with the audio sink on it reaches the main menu and a track's position
+advances — but its PLL settings do not yet decode to a sample rate, so **Apple's own music is not
+in the WAV yet**. Nothing changes unless `--audio-wav` is given. *(Andrew Yong, PR #49.)*
+
 ### Fixed
 
 - **Press Start on an iPod you had just made, and it died before the drive answered.** The
@@ -493,6 +516,11 @@ Settings → About carries the repository link.
   branch requires copy mode to be on.
 - `--ipsw=` builds the drive, as dropping the bundle would. It used to fill a field and wait for a
   button that no longer exists.
+- **A 5.5G drive built from Apple's `.ipsw` could not have an OS installed on it.** `ipod-boot
+  install-os` refused every such drive: `rsrc: the checksum in the directory is … but its bytes sum
+  to …`. Moving each image's header into place shortened `rsrc` by 0x600 bytes too many, cutting off
+  the end of the volume. Every image now ends where Apple's directory says it ends.
+  *(Andrew Yong, PR #47; fixes #43 and #23.)*
 
 ### For people working on this
 
