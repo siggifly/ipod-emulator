@@ -229,6 +229,21 @@ impl Pcf50605 {
         }
     }
 
+    /// The interrupt output, which the board wires to GPIO A bit 6: asserted (low on the pin)
+    /// while INT1..INT3 hold a bit whose mask bit in INT1M..INT3M is clear. Reading the three
+    /// registers is what releases it.
+    pub fn irq_line(&self) -> bool {
+        (0..3).any(|i| self.regs[0x02 + i] & !self.regs[0x05 + i] != 0)
+    }
+
+    /// Latch event bits into one of INT1..INT3 (`reg` 2..=4), as the part does when an event
+    /// occurs. Nothing in this model produces events by itself; a test or an instrument does.
+    pub fn raise(&mut self, reg: usize, bits: u8) {
+        if (0x02..=0x04).contains(&reg) {
+            self.regs[reg] |= bits;
+        }
+    }
+
     /// The byte the controller would present at data register `i`.
     pub fn data_byte(&self, i: usize) -> u8 {
         self.data[i.min(3)]
