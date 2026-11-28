@@ -3241,11 +3241,54 @@ impl Memory {
             return;
         }
         self.write32(GPIOA_INPUT_VAL, v);
-        let fire = (old ^ v) & self.read32(GPIOA_INT_EN) & !(v ^ self.read32(GPIOA_INT_LEV));
-        if fire != 0 {
-            let stat = self.read32(GPIOA_INT_STAT) | fire;
-            self.write32(GPIOA_INT_STAT, stat);
+        self.gpioa_sync(0);
+    }
+
+    /// Bring port A's interrupt status and the line of ports A..D up to date, after an input pin
+    /// moved or the firmware stored to `INT_EN`, `INT_LEV` or `INT_CLR` (`cleared` is the bits
+    /// written to `INT_CLR`).
+    ///
+    /// The status is a latch fed by a level, as [`gpiol_sync`](Self::gpiol_sync) already has it for
+    /// port L: a pin that is enabled and sits at its `INT_LEV` level sets its bit, and sets it
+    /// again at once when the bit is cleared while both still hold. `INT_EN` gates what goes into
+    /// the latch and not what comes out of it — a bit that is already latched keeps the line up
+    /// after its enable is cleared. Measured on a 5.5G with the PMU's interrupt output held low on
+    /// bit 6: a handler that clears the status and then the enable never gets out of the
+    /// interrupt, and one that clears the enable and then the status does.
+    ///
+    /// Bit 6 follows the PMU when one is modelled: low while it has an unmasked event latched.
+    fn gpioa_sync(&mut self, cleared: u32) {
+        let mut input = self.peek32(GPIOA_INPUT_VAL).unwrap_or(0);
+        if let Some(pmu) = &self.pmu {
+            input = if pmu.irq_line() { input & !GPIOA_PMU_IRQ } else { input | GPIOA_PMU_IRQ };
+            self.gpioa_store(GPIOA_INPUT_VAL, input);
+        }
+        let en = self.peek32(GPIOA_INT_EN).unwrap_or(0);
+        let lev = self.peek32(GPIOA_INT_LEV).unwrap_or(0);
+        let mut stat = self.peek32(GPIOA_INT_STAT).unwrap_or(0) & !cleared;
+        stat |= en & !(input ^ lev) & 0xff;
+        self.gpioa_store(GPIOA_INT_STAT, stat);
+        if stat != 0 {
             self.int_pending_hi |= 1 << GPIO_IRQ_HI;
+        } else {
+            self.int_pending_hi &= !(1 << GPIO_IRQ_HI);
+        }
+    }
+
+    /// Store a port A register word in the backing store, past the device hooks of a guest store.
+    fn gpioa_store(&mut self, addr: u32, val: u32) {
+        for (i, b) in val.to_le_bytes().iter().enumerate() {
+            if let Some((buf, j)) = self.locate_write(addr + i as u32) {
+                buf[j] = *b;
+            }
+        }
+    }
+
+    /// Latch event bits into the PMU's INT1..INT3 (`reg` 2..=4) and move its interrupt pin.
+    pub fn pmu_raise(&mut self, reg: usize, bits: u8) {
+        if let Some(pmu) = self.pmu.as_mut() {
+            pmu.raise(reg, bits);
+            self.gpioa_sync(0);
         }
     }
 
@@ -3319,6 +3362,18 @@ impl Memory {
     }
 
     fn write8_inner(&mut self, addr: u32, val: u8) {
+        self.write8_dev(addr, val);
+        // Writing a bit to GPIOA_INT_CLR retires that pin's interrupt, and the shared port line
+        // drops only when no pin is left asserting. Ports A..D are one interrupt, so a handler
+        // clearing hold must not silence a wheel edge that arrived while it ran.
+        match addr & !3 {
+            GPIOA_INT_EN | GPIOA_INT_LEV => self.gpioa_sync(0),
+            GPIOA_INT_CLR => self.gpioa_sync((val as u32) << ((addr & 3) * 8)),
+            _ => {}
+        }
+    }
+
+    fn write8_dev(&mut self, addr: u32, val: u8) {
         self.note_store_pc(addr, val as u32);
         self.count(addr, true, val);
         // The interrupt controller's set/clear ports, applied AT THE STORE — see [`int_ctl_port`]
@@ -3406,9 +3461,6 @@ impl Memory {
         // the bit the driver reads back. Apple's bootloader polls the latch with IRQs masked, so
         // it never needed this; RetailOS's handler writes the same bits with the line live, and
         // without it a held line would survive the very ack that was meant to clear it.
-        // Writing a bit to GPIOA_INT_CLR retires that pin's interrupt, and the shared port line
-        // drops only when no pin is left asserting. Ports A..D are one interrupt, so a handler
-        // clearing hold must not silence a wheel edge that arrived while it ran.
         // The backlight dimmer counts pulses on this pin; nothing reads the level back, so if the
         // emulator does not count them with the firmware, the level exists nowhere at all.
         if addr & !3 == BACKLIGHT_PORT {
@@ -3417,14 +3469,6 @@ impl Memory {
                 (self.read32(BACKLIGHT_PORT) & !(0xffu32 << shift)) | ((val as u32) << shift);
             let usec = self.usec;
             self.backlight.port_written(word, usec);
-        }
-        if addr & !3 == GPIOA_INT_CLR {
-            let shift = (addr & 3) * 8;
-            let stat = self.read32(GPIOA_INT_STAT) & !((val as u32) << shift);
-            self.write32(GPIOA_INT_STAT, stat);
-            if stat == 0 {
-                self.int_pending_hi &= !(1 << GPIO_IRQ_HI);
-            }
         }
         if let Some((base, _)) = &self.ata {
             if addr.wrapping_sub(*base) == 0x28 && val & 0x30 != 0 && !self.ide_cfg_ack_off {
@@ -3580,6 +3624,9 @@ impl Memory {
                         }
                         self.i2c_last_reply = (base + 0x0c, seen, len);
                     }
+                    // A read of INT1..INT3 releases the interrupt pin and a write of the masks can
+                    // move it either way.
+                    self.gpioa_sync(0);
                 }
                 // SEND is self-clearing: the controller raises it to start a transfer and drops it
                 // when the transfer finishes. Leaving it latched means a driver that waits for it
@@ -10357,6 +10404,8 @@ pub const GPIO_IRQ_HI: u32 = 0;
 /// switch is modelled in the frame and not in the line `button_hold()` reads.
 pub const GPIOA_INPUT_VAL: u32 = 0x6000_d030;
 pub const GPIOA_HOLD: u32 = 0x20;
+/// The PMU's interrupt output on the same port: active low, released by reading INT1..INT3.
+pub const GPIOA_PMU_IRQ: u32 = 0x40;
 
 impl Memory {
     /// Fire whatever the script is due to fire, and hold the interrupt line.
@@ -12581,6 +12630,76 @@ mod peek_tests {
         assert_eq!(other.frame_reason, None);
         assert_eq!(other.budget, None);
         assert_eq!(other.ctx_seed, 5, "the documented default seed");
+    }
+
+    /// The PMU holds bit 6 low until INT1..INT3 are read, which a handler cannot do from interrupt
+    /// context. The order of its two stores decides whether it ever leaves the interrupt.
+    #[test]
+    fn a_gpio_level_latches_again_while_its_enable_is_set() {
+        let mut m = Machine::new(&EApp::none(), 0x1100_0000, 0x0100_0000);
+        map_hardware(&mut m, false);
+        m.mem.pmu = Some(Pcf50605::new());
+        let line = |m: &Machine| m.mem.int_pending_hi & (1 << GPIO_IRQ_HI) != 0;
+
+        // Armed for a low level with the pin idle high: nothing to report.
+        m.mem.write32(GPIOA_INT_LEV, 0);
+        m.mem.write32(GPIOA_INT_CLR, GPIOA_PMU_IRQ);
+        m.mem.write32(GPIOA_INT_EN, GPIOA_PMU_IRQ);
+        assert_ne!(m.mem.read32(GPIOA_INPUT_VAL) & GPIOA_PMU_IRQ, 0, "the pin idles high");
+        assert!(!line(&m));
+
+        m.mem.pmu_raise(2, 0x01);
+        assert_eq!(m.mem.read32(GPIOA_INPUT_VAL) & GPIOA_PMU_IRQ, 0, "an event pulls the pin low");
+        assert_eq!(m.mem.read32(GPIOA_INT_STAT), GPIOA_PMU_IRQ);
+        assert!(line(&m));
+
+        // Status first: the level is still there and still enabled, so the bit comes straight
+        // back, and clearing the enable afterwards does not take it out of the latch.
+        m.mem.write32(GPIOA_INT_CLR, GPIOA_PMU_IRQ);
+        assert_eq!(m.mem.read32(GPIOA_INT_STAT), GPIOA_PMU_IRQ, "cleared under a live level");
+        m.mem.write32(GPIOA_INT_EN, 0);
+        assert!(line(&m), "a latched bit outlives its enable");
+
+        // Enable first (it is clear now): the status stays cleared and the line drops.
+        m.mem.write32(GPIOA_INT_CLR, GPIOA_PMU_IRQ);
+        assert_eq!(m.mem.read32(GPIOA_INT_STAT), 0);
+        assert!(!line(&m));
+
+        // Enabled again with the event unread, it fires again; read, it does not.
+        m.mem.write32(GPIOA_INT_EN, GPIOA_PMU_IRQ);
+        assert!(line(&m));
+        m.mem.write32(GPIOA_INT_EN, 0);
+        m.mem.write32(GPIOA_INT_CLR, GPIOA_PMU_IRQ);
+        m.mem.pmu.as_mut().unwrap().transfer(0x00, [0x02, 0, 0, 0]);
+        m.mem.pmu.as_mut().unwrap().transfer(0x20 | (2 << 1), [0; 4]);
+        m.mem.write32(GPIOA_INT_EN, GPIOA_PMU_IRQ);
+        assert_ne!(m.mem.read32(GPIOA_INPUT_VAL) & GPIOA_PMU_IRQ, 0, "reading INT1..3 releases it");
+        assert!(!line(&m));
+    }
+
+    /// The hold switch is armed for the opposite of what was last read, so each movement fires
+    /// once and the handler's flip-then-clear leaves nothing latched.
+    #[test]
+    fn the_hold_switch_fires_once_per_movement() {
+        let mut m = Machine::new(&EApp::none(), 0x1100_0000, 0x0100_0000);
+        map_hardware(&mut m, false);
+        let line = |m: &Machine| m.mem.int_pending_hi & (1 << GPIO_IRQ_HI) != 0;
+
+        let v = m.mem.read32(GPIOA_INPUT_VAL);
+        m.mem.write32(GPIOA_INT_LEV, !v & GPIOA_HOLD);
+        m.mem.write32(GPIOA_INT_CLR, GPIOA_HOLD);
+        m.mem.write32(GPIOA_INT_EN, GPIOA_HOLD);
+        assert!(!line(&m));
+
+        m.mem.set_gpioa_input(v ^ GPIOA_HOLD);
+        assert_eq!(m.mem.read32(GPIOA_INT_STAT), GPIOA_HOLD);
+        assert!(line(&m));
+
+        let v = m.mem.read32(GPIOA_INPUT_VAL);
+        m.mem.write32(GPIOA_INT_LEV, !v & GPIOA_HOLD);
+        m.mem.write32(GPIOA_INT_CLR, GPIOA_HOLD);
+        assert_eq!(m.mem.read32(GPIOA_INT_STAT), 0);
+        assert!(!line(&m));
     }
 
     #[test]
